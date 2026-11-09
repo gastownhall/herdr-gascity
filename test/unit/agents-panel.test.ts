@@ -4,7 +4,7 @@
 // agents → sessions from the shared snapshot, opens a detail, shows errors
 // and staleness, writes the probe, and on close starts nothing.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { findById, loadMod, textOf } from "../harness.ts";
 import { BASE, gc, running, text } from "./panel-fixture.ts";
 
@@ -107,6 +107,27 @@ describe("diagnostics and the probe", () => {
     mod.click("gascity-diagnostics-toggle");
     const drawer = text(mod.render(), "gascity-diagnostics-drawer") ?? "";
     expect(drawer).toContain("rigs: gc answered 500: rigs broke");
+  });
+
+  test("a failure written to herdr's log is cleaned: no escape or control character from gc's city name or error reaches the log", async () => {
+    const base = gc();
+    const name = "scr\u001b]0;pwned\u0007at\u202ech";
+    const logged: string[] = [];
+    const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => { logged.push(args.map(String).join(" ")); });
+    try {
+      await running({
+        route: (url) => {
+          const p = new URL(url).pathname;
+          if (p === "/v0/cities") return { status: 200, body: { items: [{ name, path: "/c", running: true }], total: 1 } };
+          if (p.endsWith("/rigs")) return { status: 500, body: { detail: "rigs\u001b[31m broke\u2028again" } };
+          return base(url);
+        },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    const line = logged.find((l) => l.includes(": rigs: "));
+    expect(line).toBe("gascity: scratch: rigs: gc answered 500: rigs broke again");
   });
 
   test("with shared gascity.probe on, the copy writes the probe under the app home", async () => {

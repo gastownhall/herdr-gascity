@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:2d9fa00ff035a0fd65fc7dfefcf4ea841a576cedcb744cd3761f38bdcb7a30fd over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:2a5616293812b6b9e6f6145b03f1e02186915bc294cf88704fe9e37d9dff15bf over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2684,6 +2684,17 @@ function layoutModNames(layout2) {
   return [...out];
 }
 
+// src/vm/sanitize.ts
+var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
+var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]|\udb40[\udc00-\udc7f]/g;
+var BREAKS = /\r\n?|[\u2028\u2029]/g;
+function cleanText(text) {
+  return text.replace(BREAKS, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
+}
+function cleanLine(text) {
+  return cleanText(text).replace(/[\n\t]+/g, " ");
+}
+
 // src/host.ts
 var REQUIRED_HOST_EXPORTS = [
   "theme",
@@ -2819,7 +2830,7 @@ async function execGcStatus(gcBin) {
 }
 function logError(line) {
   const c = globalThis.console;
-  if (c !== void 0 && typeof c.error === "function") c.error(line);
+  if (c !== void 0 && typeof c.error === "function") c.error(cleanLine(line));
 }
 var HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 function isColor(value) {
@@ -3372,16 +3383,6 @@ function targetText(t) {
     default:
       return `${t.kind} ${t.name}`;
   }
-}
-
-// src/vm/sanitize.ts
-var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
-var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
-function cleanText(text) {
-  return text.replace(/\r\n?/g, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
-}
-function cleanLine(text) {
-  return cleanText(text).replace(/[\n\t]+/g, " ");
 }
 
 // src/vm/errorText.ts

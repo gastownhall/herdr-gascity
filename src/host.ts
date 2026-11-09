@@ -13,6 +13,7 @@ import { decodeFocused, decodePanes, layoutModNames, type HostDecodeError } from
 import type { ProbeIo } from "./probe.ts";
 import type { VisibilityInput } from "./sync/visibility.ts";
 import type { ExecRecord } from "./vm/probe.ts";
+import { cleanLine } from "./vm/sanitize.ts";
 
 /** The herdr exports and script globals this build calls. */
 export const REQUIRED_HOST_EXPORTS = [
@@ -187,10 +188,14 @@ export async function execGcStatus(gcBin: string): Promise<Result<string, GcErro
 /** The script console, when the engine provides one (herdr-app writes it to its log). */
 type ScriptConsole = { error(...data: unknown[]): void };
 
-/** Writes one line to herdr-app's log; nothing when the engine has no console. */
+/**
+ * Writes one line to herdr-app's log; nothing when the engine has no console.
+ * The line is cleaned first (vm/sanitize.ts): it carries gc-supplied text (a
+ * city name, a bead id, an error) that must not put escapes into the log.
+ */
 export function logError(line: string): void {
   const c = (globalThis as { console?: ScriptConsole }).console;
-  if (c !== undefined && typeof c.error === "function") c.error(line);
+  if (c !== undefined && typeof c.error === "function") c.error(cleanLine(line));
 }
 
 /** The theme colours the panel uses. */
