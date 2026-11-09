@@ -21,11 +21,17 @@ const RELEASES = "https://github.com/gastownhall/herdr-gascity/releases/download
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
 /** herdr-app's `ls`, pretty-printed as herdr prints it. */
-function lsReply(spaces: { id: string; machine: string | null; active: boolean }[]): string {
+type LsTab = { id: string; name: string; terminals: number };
+const SHELL_TAB = (id: string): LsTab => ({ id: `tb-${id}`, name: "1", terminals: 1 });
+
+function lsReply(spaces: { id: string; machine: string | null; active: boolean; tabs?: LsTab[] }[]): string {
   return JSON.stringify({
     spaces: spaces.map((s) => ({
       id: s.id, name: `space ${s.id}`, folder: `/home/p/${s.id} "x", {y}`, machine: s.machine, active: s.active,
-      tabs: [{ id: `tb-${s.id}`, name: "1", active: true, settled: false, terminals: [{ terminal: "t1", pane: "p1", status: "idle", app: null, name: null, sub_agents: [] }] }],
+      tabs: (s.tabs ?? [SHELL_TAB(s.id)]).map((t) => ({
+        id: t.id, name: t.name, active: true, settled: false,
+        terminals: Array.from({ length: t.terminals }, (_, i) => ({ terminal: `t${i}`, pane: `p${i}`, status: "idle", app: null, name: null, sub_agents: [] })),
+      })),
     })),
     recent: [{ id: "recent-1", machine: null, active: true }],
   }, null, 2);
@@ -524,6 +530,128 @@ describe("arguments", () => {
     expect(await readdir(join(xdg, "herdr-app", "mods", "gascity"))).toContain("main.js");
     expect((await run(["--from", fixture, "--gc-bin", "gc"], { env: { HERDR_APP_HOME: undefined } })).code).toBe(0);
     expect(await readdir(join(home, ".config", "herdr-app", "mods", "gascity"))).toContain("main.js");
+  });
+});
+
+describe("a reinstall with the Gas City tab already open", () => {
+  test("selects that tab instead of opening another", async () => {
+    await appRunning();
+    await reply("ls", `0\n${lsReply([{ id: "pa", machine: null, active: true, tabs: [SHELL_TAB("pa"), { id: "tb-gc", name: "Gas City", terminals: 0 }] }])}\n`);
+    const r = await run(["--from", fixture, "--gc-bin", "gc"]);
+    expect(r.code).toBe(0);
+    expect(r.dos).toEqual([["tab.select", "--id", "tb-gc"], ["gascity.set-gc-bin:gc"]]);
+  });
+
+  test("a tab named Gas City that holds a terminal, or one on another machine, is not the mod's", async () => {
+    await appRunning();
+    await reply("ls", `0\n${lsReply([
+      { id: "box/pr", machine: "box", active: true, tabs: [{ id: "box/tb-gc", name: "Gas City", terminals: 0 }] },
+      { id: "pa", machine: null, active: false, tabs: [{ id: "tb-sh", name: "Gas City", terminals: 1 }] },
+    ])}\n`);
+    const r = await run(["--from", fixture, "--gc-bin", "gc"]);
+    expect(r.code).toBe(0);
+    expect(r.dos[0]).toEqual(["tab.new", "--mod", "gascity", "--name", "Gas City", "--space", "pa"]);
+  });
+});
+
+describe("hostile tarballs", () => {
+  /** A tarball with the mod's files plus one hostile member, written by Python's tarfile. */
+  async function hostile(kind: string): Promise<string> {
+    const out = join(base, `hostile-${kind}.tar.gz`);
+    const script = `
+import io, sys, tarfile
+out, kind = sys.argv[1], sys.argv[2]
+def add(t, name, data=b"x", **kw):
+    i = tarfile.TarInfo(name); i.size = len(data)
+    for k, v in kw.items(): setattr(i, k, v)
+    t.addfile(i, io.BytesIO(data) if i.isreg() else None)
+with tarfile.open(out, "w:gz") as t:
+    add(t, "gascity/main.js", b"// x\\n"); add(t, "gascity/mod.json", b"{}\\n")
+    if kind == "symlink": add(t, "gascity/extra.js", b"", type=tarfile.SYMTYPE, linkname="/etc/hostname")
+    if kind == "hardlink": add(t, "gascity/extra.js", b"", type=tarfile.LNKTYPE, linkname="gascity/main.js")
+    if kind == "device": add(t, "gascity/tty", b"", type=tarfile.CHRTYPE, devmajor=5, devminor=0)
+    if kind == "fifo": add(t, "gascity/pipe", b"", type=tarfile.FIFOTYPE)
+    if kind == "absolute": add(t, "/tmp/gascity-hostile-absolute", b"x")
+    if kind == "dotdot": add(t, "gascity/../../gascity-hostile-dotdot", b"x")
+`;
+    const p = Bun.spawnSync(["python3", "-I", "-c", script, out, kind]);
+    if (p.exitCode !== 0) throw new Error(p.stderr.toString());
+    return out;
+  }
+
+  for (const kind of ["symlink", "hardlink", "device", "fifo", "absolute", "dotdot"]) {
+    test(`a ${kind} member is refused before anything is unpacked or installed`, async () => {
+      await appRunning();
+      const r = await run(["--from", await hostile(kind), "--gc-bin", "gc"]);
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain("refused");
+      expect(r.calls).toEqual([]);
+      expect(await readdir(join(appHome, "mods")).catch(() => [])).toEqual([]);
+      expect(await readdir(base)).not.toContain("gascity-hostile-dotdot");
+    });
+  }
+
+  test("the same tarball without the hostile member installs (the check is not the cause)", async () => {
+    await appRunning();
+    const r = await run(["--from", await hostile("none"), "--gc-bin", "gc"]);
+    expect(r.code).toBe(0);
+  });
+});
+
+describe("a failed swap", () => {
+  test("puts the earlier install back and exits non-zero", async () => {
+    await appRunning();
+    await mkdir(join(appHome, "mods", "gascity"), { recursive: true });
+    await writeFile(join(appHome, "mods", "gascity", "main.js"), "// old build\n");
+    // mv fails only when it moves the staged build into place.
+    await rm(join(bin, "mv"));
+    await writeFile(join(bin, "mv"), `#!/bin/sh\ncase $1 in *.gascity-install.*) echo "mv: cannot move" >&2; exit 1 ;; esac\nexec ${Bun.which("mv")} "$@"\n`);
+    await chmod(join(bin, "mv"), 0o755);
+    const r = await run(["--from", fixture, "--gc-bin", "gc"]);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("cannot move the new build");
+    expect(await readFile(join(appHome, "mods", "gascity", "main.js"), "utf8")).toBe("// old build\n");
+    expect(await modsDir()).toEqual(["gascity"]);
+    expect(await readdir(join(appHome, "mod-backups"))).toEqual([]);
+    expect(r.dos).toEqual([]);
+  });
+});
+
+describe("a truncated download of install.sh (curl | sh cut short)", () => {
+  test("runs nothing: the body is one function called on the last line", async () => {
+    const text = await readFile(INSTALL, "utf8");
+    const lines = text.trimEnd().split("\n");
+    expect(lines.at(-1)).toBe('main "$@"');
+    await appRunning();
+    await mkdir(join(appHome, "mods", "gascity"), { recursive: true });
+    await writeFile(join(appHome, "mods", "gascity", "main.js"), "// old build\n");
+    for (const share of [0.3, 0.5, 0.7, 0.9]) {
+      const cut = join(base, `cut-${share}.sh`);
+      await writeFile(cut, lines.slice(0, Math.floor(lines.length * share)).join("\n") + "\n");
+      const r = await run(["--from", fixture, "--gc-bin", "gc"], { script: cut });
+      expect(r.calls).toEqual([]);
+      expect(await modsDir()).toEqual(["gascity"]);
+      expect(await readFile(join(appHome, "mods", "gascity", "main.js"), "utf8")).toBe("// old build\n");
+      expect(await readdir(join(appHome, "mod-backups")).catch(() => [])).toEqual([]);
+    }
+    // Everything but the last line: defines main and stops.
+    const all = join(base, "cut-last.sh");
+    await writeFile(all, lines.slice(0, -1).join("\n") + "\n");
+    const r = await run(["--from", fixture, "--gc-bin", "gc"], { script: all });
+    expect(r.code).toBe(0);
+    expect(r.calls).toEqual([]);
+  });
+});
+
+describe("no sha256 tool", () => {
+  test("names the missing tools instead of reporting a checksum mismatch", async () => {
+    await rm(join(bin, "sha256sum"));
+    await writeFile(`${fixture}.sha256`, `${sha256(await readFile(fixture))}  x\n`);
+    const r = await run(["--from", fixture, "--gc-bin", "gc"]);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("needs sha256sum or shasum");
+    expect(r.stderr).not.toContain("mismatch");
+    expect(r.calls).toEqual([]);
   });
 });
 

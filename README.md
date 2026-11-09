@@ -30,10 +30,16 @@ curl -fsSL https://github.com/gastownhall/herdr-gascity/releases/latest/download
 
 A release's `install.sh` carries its version and the sha256 of its
 `gascity-mod-<version>.tar.gz`; it downloads that tarball, refuses any other
-bytes, and runs `herdr-app check` on it before it replaces anything. An
-earlier install is moved to `<app home>/mod-backups/gascity-<time>/`
-(outside `mods/`, where herdr would load it as a second mod). With Herdr
-open it opens a "Gas City" tab in a space on this computer (`space.new`
+bytes. It refuses a tarball holding anything but plain files and folders
+inside its own tree (links, devices, absolute paths, `..`), unpacks it
+without the archive's owners, and runs `herdr-app check` on it before it
+replaces anything. An earlier install is moved to
+`<app home>/mod-backups/gascity-<time>/` (outside `mods/`, where herdr
+would load it as a second mod), and moved back if the new build cannot be
+put in place. The whole script runs from `main "$@"` on its last line, so
+a download cut short runs nothing. With Herdr open it shows the Gas City
+tab already open in a local space, or opens one in a space on this
+computer (`space.new`
 first when there is none, or when herdr answers "no space yet"; retried
 while herdr has not yet noticed the new folder), shows it,
 and sends `gascity.set-gc-bin:<gc>` until the new copy answers (15 s), so a
