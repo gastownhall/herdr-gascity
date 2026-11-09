@@ -5,7 +5,7 @@ import { KEY_MAP, keyAction, moveIn } from "../../src/keys.ts";
 
 describe("keys", () => {
   test("the map, and keys the copy leaves alone", () => {
-    expect(KEY_MAP).toEqual({ j: "next-session", down: "next-session", k: "prev-session", up: "prev-session", r: "refresh", escape: "back" });
+    expect(KEY_MAP).toEqual({ j: "next-session", down: "next-session", k: "prev-session", up: "prev-session", r: "refresh", t: "open-terminal", escape: "back" });
     expect(keyAction("j")).toBe("next-session");
     expect(keyAction("ctrl-j")).toBeNull();
     expect(keyAction("toString")).toBeNull();

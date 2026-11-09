@@ -33,6 +33,11 @@
 // the selection; a refused command says why in the notice and the probe.
 // Keys (keys.ts) call the same methods too.
 //
+// Open terminal (terminal/attach.ts) is an action like the others: it wakes
+// the session through gc's API, waits until gc says it runs, and only then
+// opens (or shows) a herdr tab running `gc session attach`, with the city's
+// path from gc's city list and the session's id from gc's session list.
+//
 // The "needs you" window is a copy herdr opened as an overlay (mod.open):
 // each tick it applies the newest fresh shared focus target (notify/focus.ts)
 // — selects its city, then opens its session — so a toast's click shows the
@@ -71,6 +76,8 @@ import { diagnosticsModel, type DiagnosticLine } from "./vm/diagnostics.ts";
 import { headerModel, type HeaderModel } from "./vm/header.ts";
 import { probeDocument, type ExecRecord } from "./vm/probe.ts";
 import { cleanLine } from "./vm/sanitize.ts";
+import { openTerminal as openTerminalSpec, type TerminalHost } from "./terminal/attach.ts";
+import { resolveBinding } from "./terminal/binding.ts";
 
 /** What a copy reads from herdr, besides discovery's host (host.ts). */
 export interface CopyHost {
@@ -85,6 +92,8 @@ export interface CopyHost {
   keyboard(): boolean;
   /** The raw shared focus target (notify/focus.ts). */
   focusTarget(): unknown;
+  /** herdr's spaces, panes and terminals, and the tabs open terminal opens or shows. */
+  terminal: TerminalHost;
 }
 
 export interface CopyDeps {
@@ -620,6 +629,24 @@ export class CopyController {
     return this.send(sessionNew(c.agent, alias.trim() === "" ? null : alias.trim()));
   }
 
+  /**
+   * Opens session `id`'s terminal (the Open terminal button, the t key and
+   * the attach command): refused unless gc lists the session in the running
+   * city this copy shows and its transport has a terminal to attach to.
+   * Returns whether it was sent.
+   */
+  openTerminal(id: string | null): boolean {
+    if (id === null) return this.refuse("open a session first");
+    const state = this.deps.discovery.machine.state;
+    const session = this.city?.snapshot().sessions.value?.items.find((x) => x.id === id);
+    if (state.phase !== "city-running" || !this.city || this.city.key.city !== state.city.name) return this.refuse("no running city to act on");
+    if (!session) return this.refuse(`session ${cleanLine(id)} is not listed by gc`);
+    const binding = resolveBinding({ session, cityPath: state.city.path, gcBin: state.endpoint.gcBin, gcVersion: state.endpoint.version });
+    if (!binding.ok) return this.refuse(binding.error);
+    const name = `${session.agent_name ?? session.template}/${session.id}`;
+    return this.send(openTerminalSpec(binding.value, name, { host: this.deps.host.terminal, clock: this.deps.clock }));
+  }
+
   // ---- keys ---------------------------------------------------------------------------
 
   /** A key of the focused copy (keys.ts): the same methods as the buttons. Returns whether it did something. */
@@ -634,6 +661,10 @@ export class CopyController {
       }
       case "refresh":
         ui.retry();
+        return true;
+      case "open-terminal":
+        if (this.selected === null) return false;
+        this.openTerminal(this.selected);
         return true;
       case "back":
         if (this.dialog() !== null) this.cancelDialog();
@@ -773,6 +804,11 @@ export class CopyController {
       case "answer": {
         const id = this.resolveSession(c.session);
         if (id !== null) this.answerFor(id, c.requestId, c.option);
+        return "sent";
+      }
+      case "attach": {
+        const id = this.resolveSession(c.session);
+        if (id !== null) this.openTerminal(id);
         return "sent";
       }
       case "agent-suspend":

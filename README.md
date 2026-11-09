@@ -3,7 +3,8 @@
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
 **Status: scaffold, gc client, discovery, sync engine, agents panel, work
-board, session and work actions, commands, keys and "needs you" toasts.** The mod finds the gc API, lists the cities, and
+board, session and work actions, commands, keys, "needs you" toasts and open
+terminal.** The mod finds the gc API, lists the cities, and
 shows the copy's city: its connection state, its rigs, agents and sessions
 with live status, pending prompts and active beads, a detail pane for one
 session, and the work board (ready, in progress, recently closed) with a
@@ -13,8 +14,9 @@ answer a prompt, suspend and resume agents and rigs) and on work (create a
 bead and optionally sling it, sling, close and reopen a bead), and shows
 every action's outcome. Every action can also be driven by a command
 (`herdr-app do gascity.<command>`), and a toast tells you when a session
-needs you, opening a "needs you" window on the session. Opening a terminal
-comes next.
+needs you, opening a "needs you" window on the session. Open terminal shows
+a session's terminal in a herdr tab running `gc session attach`, after
+waking the session through gc's API.
 
 ## Layout
 
@@ -27,6 +29,8 @@ comes next.
 | `src/commands.ts`, `src/keys.ts` | The command grammar (strict; see below) and the key map of a focused copy. |
 | `src/notify/` | "Needs you" toasts: `needsYou.ts` (one toast per new pending prompt, per app), `focus.ts` (the shared `gascity.focus` target), `window.ts` (the overlay window copy). |
 | `src/actions/` | The person's actions: `session.ts`, `agent.ts`, `rig.ts`, `work.ts` (one gc API call each), `activity.ts` (what an action is and the states it goes through), `outcome.ts` (the ledger that sends them and follows their outcomes). |
+| `src/terminal/` | Open terminal: `binding.ts` (the TerminalBinding seam and transport gating), `argv.ts` (the `env -u HC_*` attach argv and its shape check), `attach.ts` (wake through gc, then open or show the attach tab, confirmed in herdr's terminal list). |
+| `src/hostGuards.ts` | The argument checks of host.ts's wrappers: the URL the platform opener gets, and the only path the mod writes. |
 | `src/sync/` | The sync engine: one shared store per gc city per app, its poll loop, the event watcher, the fetch budget, backoff, visibility and staleness (see below). |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
@@ -50,16 +54,23 @@ comes next.
   `paste_image`, and hc's `send`/`keys`/`label`).
 - **One door to the host.** Only `src/host.ts` imports `herdr`, and only as
   `import * as herdr`. The namespace is used only as `herdr.<export>`.
-  `herdr.run` and `herdr.exec` are called directly with a string-literal first
-  argument from an allowlist: `tab.new`, `tab.select` and `mod.open`, and
-  the programs `xdg-open` and `open`. A toast's `action` is a second way to
+  `herdr.run` is called directly with a string-literal first argument from
+  an allowlist: `tab.select` and `mod.open`. A toast's `action` is a second way to
   run an app command (herdr runs it when the toast is clicked), so
   `herdr.notify` is called directly with an object literal whose `action`,
   if any, is an object literal naming a string-literal command from its own
-  allowlist: `mod.open`. The one exception, listed in the lint's
-  `ALLOWLIST` by its exact text (which must occur exactly once), is discovery's
-  `<gcBin> supervisor status --json` (fixed arguments; `src/host.ts` refuses a
-  `gcBin` that does not name `gc` before spawning). The mod imports nothing but `gpui-kit`,
+  allowlist: `mod.open`. The calls whose arguments must be checked are
+  listed in the lint's `ALLOWLIST` by their exact text (each must occur
+  exactly once), so each can only be its wrapper's own call in `src/host.ts`,
+  and each wrapper refuses a bad argument before herdr sees it: discovery's
+  `<gcBin> supervisor status --json` (fixed arguments; a `gcBin` that does
+  not name `gc` is refused); `tab.new` in `openAttachTab` (only `env -u
+  HC_SCOPE -u HC_TERMINAL_ID -u HC_TERMINAL_SOCKET <gc> --city <absolute
+  path> session attach <gc session id> [--no-start]`); and `xdg-open`/`open`
+  in `openUrl` (only an http(s) URL on this computer: a file would be opened
+  by its default handler, and macOS runs a `.command` file). `writeTextFile`
+  writes only the probe directory (`<app home>/data/gascity-probe/`): a file
+  under `mods/` would be code no lint saw. The mod imports nothing but `gpui-kit`,
   `gpui-base`, `herdr`, zod and its own modules. It does not use the host's
   `process` (whose `run` spawns programs).
 - **No code compiled at run time.** There is no `eval`, no `Function`
@@ -87,12 +98,16 @@ comes next.
 `scripts/authority.ts` checks the first three rules over `src/**/*.ts` and
 `gascity/**/*.js` with the TypeScript parser, so comments never count. String
 literals are also scanned for `hc`/`tmux`/`bd` anywhere in a shell command
-and for the denied terminal commands. A hit is allowed only inside exact text
+(except a literal that is only compared, an operand of `===`, `!==`, `==` or
+`!=` or a `case` label: that is data read from gc, such as its `transport`
+value `tmux`, not a command; every other use is still scanned) and for the
+denied terminal commands. A hit is allowed only inside exact text
 listed in the lint's `ALLOWLIST`, and only when that text occurs exactly once
 in the file, so an entry pins one place: an identical call added elsewhere
 fails. An allowlist entry that matches nothing fails. The bundle's entries are
-discovery's `gc supervisor status` call and zod's plain-object check, which
-reads `o.constructor` only to compare it and read its prototype.
+discovery's `gc supervisor status` call, open terminal's `tab.new` and zod's
+plain-object check, which reads `o.constructor` only to compare it and read
+its prototype (`openUrl` has no caller yet, so the bundle has no opener).
 
 ## The gc client
 
@@ -449,6 +464,52 @@ and never ends or types into a terminal itself.
   still queued 70 s after it was asked for is dropped and shown as not sent,
   so it can never go out after being reported.
 
+## Open terminal
+
+The detail pane's Open terminal (the `t` key, the `attach` command) shows the
+session's terminal in a herdr tab running `gc session attach`. herdr-core
+gives every program a terminal runs an `HC_SCOPE` sweep token and kills
+every process carrying it when the terminal's holder dies, and `gc session
+attach` on a session that is not running starts its runtime in the CLI
+process. So gc must never start a runtime inside the tab:
+
+- **Wake first, through gc.** The mod reads the session from gc; if it is
+  not running it asks gc to wake it (`POST …/wake`, with the action's
+  Idempotency-Key), so the controller starts it from its own environment,
+  then reads it at 0.5 s, 1 s, then every 2 s until gc says `running`. A
+  refused wake, or a session still not running 60 s after the wake, opens
+  no tab; the log says why (gc's reason, or its last state).
+- **The argv drops herdr-core's variables.** The tab runs `env -u HC_SCOPE
+  -u HC_TERMINAL_ID -u HC_TERMINAL_SOCKET <gc> --city <path> session attach
+  <id>`, so nothing the attach leaves running carries the token if the
+  session fell asleep in between. The city path is gc's (its city list), the
+  id gc's (its session list), `<gc>` the `gcBin` setting. With gc 1.6.0 or
+  newer (by `/health`'s version; the first release after `--no-start`
+  landed) the argv ends with `--no-start`, so the attach starts nothing; a
+  `dev` or older gc gets no flag, and the wake through the API is the guard.
+- **A local space.** The tab opens in the active space if it is on this
+  computer, else in the first space that is; never in a remote machine's
+  space (the attach would run on that host). With no local space, no tab:
+  the log says to open one (`space.new`).
+- **Dedupe while the attach runs.** A terminal in a local space whose
+  program is still our attach of that session gets its tab selected instead.
+  When the attach exits, herdr's wrapper leaves the person's shell in the
+  terminal (same argv, `program.shell` true): that one is not reused, a new
+  tab is opened.
+- **Confirmed through herdr's terminal list** (`run` returns nothing): a new
+  terminal running the attach must appear within 5 s (else *not seen*) and
+  still be running it 10 s after the tab opened (else *attach exited*: gc's
+  reason is in the tab, which stays open as a shell). Otherwise it is
+  *opened*. Each outcome is one entry in the activity log; the entry is
+  pending (with what it waits for) until then.
+- **Transport gating.** Sessions on transports without a terminal (`acp`,
+  `subprocess`) show why instead of the button; any other value, or none,
+  is allowed and gc answers in the tab.
+- **The seam.** `src/terminal/binding.ts` decides how a session's terminal
+  is shown. Today the only binding is the attach tab; the session's own
+  native terminal in an overlay window (once gc reports a session's runtime
+  binding, or a runtime pack labels its terminals) goes there first.
+
 ## Commands, keys and notifications
 
 **Commands.** `herdr-app do gascity.<command>` and keys.json bindings
@@ -533,6 +594,7 @@ arguments separated by `:`; each argument is percent-encoded
 | `interrupt:<city>:<session>:<text>` | interrupt the turn and send input (Interrupt and send) |
 | `message:<city>:<session>:<text>` | send a queued message to a session (Send as message) |
 | `answer:<city>:<session>:<request>:<option>` | answer a session's pending prompt with one of gc's options (its answer button); the session's detail must show that prompt |
+| `attach:<city>:<session>` | open a session's terminal in a herdr tab, waking it through gc first (Open terminal; the t key) |
 | `agent-suspend:<city>:<agent>[:confirm]` | suspend an agent (Suspend agent…, then Suspend agent) |
 | `agent-resume:<city>:<agent>` | resume an agent (Resume agent) |
 | `rig-suspend:<city>:<rig>[:confirm]` | suspend a rig (Suspend rig…, then Suspend rig) |
@@ -545,7 +607,8 @@ arguments separated by `:`; each argument is percent-encoded
 **Keys.** `mod.json` is `focusable`: `pane.go` onto a Gas City pane hands it
 the keyboard and sends the bare `focus` command, and the copy focuses its
 root. Then `j`/`down` and `k`/`up` open the next or previous session (as
-clicking its row), `r` is Retry now, and `escape` closes the open question
+clicking its row), `r` is Retry now, `t` is Open terminal for the open
+session, and `escape` closes the open question
 or form, else the session's detail. Keys act only while the root itself
 holds the keyboard: typing in a text box (the send box, a form) is the box's
 alone. The send box sends to the session whose detail drew it, never to

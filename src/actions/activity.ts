@@ -5,6 +5,9 @@
 // The states, as the person sees them:
 //   sending  – the request is on its way (or queued in the fetch budget);
 //   polling  – gc accepted it (202) and the mod is asking for its outcome;
+//   watching – gc answered and the action goes on in steps of its own (open
+//              terminal: wait until gc says the session runs, open the tab,
+//              confirm it in herdr's terminal list), each from its copy's ticks;
 //   done     – gc says it happened;
 //   failed   – gc says it did not happen (a refusal, or a failed outcome);
 //   unknown  – it may or may not have happened: the transport failed, gc
@@ -38,6 +41,7 @@ export type ActionKind =
   | "session.interrupt"
   | "session.message"
   | "session.respond"
+  | "session.attach"
   | "agent.suspend"
   | "agent.resume"
   | "rig.suspend"
@@ -70,7 +74,34 @@ export interface Confirmation {
  */
 export type Sent =
   | { kind: "done"; detail: string; created?: string }
-  | { kind: "accepted"; requestId: string; afterSeq: string };
+  | { kind: "accepted"; requestId: string; afterSeq: string }
+  | { kind: "watch"; watch: Watch };
+
+/** How a watched action ends. */
+export type WatchEnd =
+  | { kind: "done"; detail: string }
+  | { kind: "failed"; error: GcError }
+  | { kind: "not-sent"; reason: string };
+
+/**
+ * An action that goes on after its request, in steps the ledger runs from the
+ * ticks of the copy that started it (open terminal). Each step returns the
+ * next Watch or how the action ends. Every Watch says how it ends at its
+ * deadline (a step in flight then is ignored) and if its copy closes first.
+ */
+export interface Watch {
+  /** What is happening now, for the log, e.g. "waiting for gc to report session sc-20 running". */
+  readonly detail: string;
+  /** When the next step is due. */
+  readonly nextAt: number;
+  /** When it ends as `expired`, whatever a step in flight would say. */
+  readonly deadline: number;
+  readonly expired: WatchEnd;
+  /** How it ends when the copy that started it closes first (it is never taken over: its next steps are that copy's). */
+  readonly abandoned: WatchEnd;
+  /** The next step. Never rejects for a gc or host failure: those are a WatchEnd or the next Watch. */
+  step(c: GcClient, city: string): Promise<Watch | WatchEnd>;
+}
 
 /**
  * A second action sent once the first one is done, built from what the
@@ -133,6 +164,8 @@ export type ActionState =
     /** The last poll's transport error, if it failed (polling goes on until the deadline). */
     lastError: GcError | null;
   }
+  /** A watched action between its steps (Watch); `since` is when gc answered its request. */
+  | { kind: "watching"; since: number; watch: Watch; inFlight: boolean }
   | { kind: "done"; at: number; detail: string; requestId: string | null }
   | { kind: "failed"; at: number; error: GcError }
   | { kind: "unknown"; at: number; error: OutcomeUnknown }
@@ -164,8 +197,8 @@ export interface ActivitySnapshot {
 }
 
 /** Is the action still under way? */
-export function isPending(state: ActionState): state is Extract<ActionState, { kind: "sending" | "polling" }> {
-  return state.kind === "sending" || state.kind === "polling";
+export function isPending(state: ActionState): state is Extract<ActionState, { kind: "sending" | "polling" | "watching" }> {
+  return state.kind === "sending" || state.kind === "polling" || state.kind === "watching";
 }
 
 /** A stable key for a target, e.g. "session:sc-20". */

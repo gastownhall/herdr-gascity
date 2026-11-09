@@ -78,7 +78,7 @@ export type GcError =
   | {
     kind: "attach-not-started";
     sessionId: string;
-    reason: "wake-refused" | "not-running-after-wake" | "not-seen-in-terminals" | "attach-exited";
+    reason: "wake-refused" | "not-running-after-wake" | "no-local-space" | "not-seen-in-terminals" | "attach-exited";
     detail: string;
   }
   /** The configured gc API is not a loopback address. */

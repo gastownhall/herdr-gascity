@@ -37,6 +37,12 @@ declare module "herdr" {
   /** Every pane in every tab (herdr's PaneInfo; decoded by host.schemas.ts). Live. */
   export function panes(): unknown[];
 
+  /** Every space on every machine (herdr's SpaceInfo; decoded by host.schemas.ts). Live. */
+  export function spaces(): unknown[];
+
+  /** Every core terminal as `hc ls --json` reports it, plus herdr's `program` (decoded by host.schemas.ts). Live. */
+  export function terminals(): unknown[];
+
   /** Actual terminal/pane focus: the window's current space and tab, or null. Live. */
   export function focused(): unknown;
 

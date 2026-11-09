@@ -22,9 +22,9 @@
 import { View } from "gpui-kit";
 import { InputState } from "gpui-base";
 import {
-  closeWindow, execGcStatus, hostFetch, logError, missingHostExports, nextCommand, postNeedsYou, probeIo, readExecLog, readFocusTarget,
-  readHerdrVersion, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTheme, readVisibility, rememberCity,
-  selectTab, setProbeEnabled, setWindowOpen,
+  closeWindow, execGcStatus, hostFetch, logError, missingHostExports, nextCommand, openAttachTab, postNeedsYou, probeIo, readExecLog,
+  readFocusTarget, readHerdrVersion, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTerminalScene,
+  readTheme, readVisibility, rememberCity, selectTab, setProbeEnabled, setWindowOpen,
 } from "./host.ts";
 import { sharedCommandBook } from "./commandBook.ts";
 import { CopyController, type CommandUi } from "./copy.ts";
@@ -117,6 +117,7 @@ function setUp(): Copy {
       execLog: readExecLog,
       keyboard: () => focus.handle?.is_focused() ?? false,
       focusTarget: readFocusTarget,
+      terminal: { scene: readTerminalScene, openTab: openAttachTab, selectTab },
     },
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
@@ -211,7 +212,8 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
   const copy = state.copy;
   return {
     showTab: (tab, cx) => {
-      selectTab(tab);
+      const shown = selectTab(tab);
+      if (!shown.ok) logError(`gascity: ${errorText(shown.error)}`);
       cx.notify();
     },
     showNext: (cx) => {
@@ -256,6 +258,10 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
     },
     requestKill: (sessionId, cx) => {
       copy.requestKill(sessionId);
+      cx.notify();
+    },
+    openTerminal: (sessionId, cx) => {
+      copy.openTerminal(sessionId);
       cx.notify();
     },
     send: (sessionId, mode, cx) => {

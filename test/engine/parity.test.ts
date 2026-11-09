@@ -78,6 +78,15 @@ interface SyncSummary {
   workPosts: { path: string; body: unknown; key: string }[];
 }
 
+/** The open-terminal scenario's report (test/engine/entry.ts terminalScenario). */
+interface TerminalSummary {
+  paths: string[];
+  opened: unknown[];
+  selected: string[];
+  activity: [string, string, string][];
+  guards: unknown;
+}
+
 /** The command scenario's report (test/engine/entry.ts commandScenario). */
 interface CommandSummary {
   roundTrip: { raw: string; command?: unknown; nonce?: string | null; written?: string; same?: boolean; error?: string }[];
@@ -246,6 +255,20 @@ describe("the bundled gc client with zod, and the sync engine", () => {
     expect(commands.toasts).toEqual([[], ["sc-6/b"], [], ["sc-6/c"]]);
     expect(commands.claims).toEqual([true, false, true]);
     expect(commands.focus).toEqual([{ city: "scratch", session: "sc-20", seq: 2, at: 2000 }, null]);
+    const terminal = (JSON.parse(quick.output) as { terminal: TerminalSummary }).terminal;
+    // asleep: one GET, the wake, polls until running; then one tab in the local space (the active one is remote);
+    // the second open finds the session running (one GET, no wake) and its attach still running: its tab is selected
+    expect(terminal.paths).toEqual(["GET /v0/city/scratch/session/sc-20", "POST /v0/city/scratch/session/sc-20/wake",
+      "GET /v0/city/scratch/session/sc-20", "GET /v0/city/scratch/session/sc-20", "GET /v0/city/scratch/session/sc-20"]);
+    expect(terminal.opened).toEqual([{
+      space: "s1", name: "worker/sc-20",
+      argv: ["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET", "gc", "--city", "/scratch/city", "session", "attach", "sc-20", "--no-start"],
+    }]);
+    expect(terminal.selected).toEqual(["t2"]);
+    expect(terminal.activity.map((r) => [r[0], r[1]])).toEqual([["Open terminal · session sc-20", "done"], ["Open terminal · session sc-20", "done"]]);
+    expect(terminal.activity[1]?.[2]).toBe("opened in a new tab (terminal t5)");
+    expect(terminal.activity[0]?.[2]).toBe("already open: showed its tab (terminal t5)");
+    expect(terminal.guards).toEqual({ argv: [null, true], noStart: [true, false, false], url: [null, true], path: [null, true] });
     expect(quick.output).toBe(await runInBun());
   }, 60_000);
 

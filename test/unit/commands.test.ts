@@ -47,6 +47,7 @@ const EXAMPLES: Command[] = [
   { verb: "interrupt", city: "scratch", session: "sc-20", text: "stop\nnow" },
   { verb: "message", city: "scratch", session: "sc-20", text: "" },
   { verb: "answer", city: "scratch", session: "sc-20", requestId: "perm-1", option: "approve" },
+  { verb: "attach", city: "scratch", session: "sc-20" },
   { verb: "agent-suspend", city: "scratch", name: "frontend/builder", confirm: true },
   { verb: "agent-resume", city: "scratch", name: "worker" },
   { verb: "rig-suspend", city: "scratch", name: "frontend", confirm: false },

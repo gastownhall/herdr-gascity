@@ -1,5 +1,6 @@
 // The detail pane of the selected session: title and status, its actions
-// (each one gc API call; close and kill ask first), facts, wake reasons, the
+// (each one gc API call; close and kill ask first; Open terminal wakes it
+// through gc, then opens a herdr tab attached to it), facts, wake reasons, the
 // pending prompt with one answer button per option gc lists, the send box,
 // and its output as plain text, one element per line (no markdown, no links).
 // An action already under way shows as waiting instead of a button.
@@ -21,6 +22,8 @@ export interface DetailActions {
   act(spec: ActionSpec, cx: GpuiContext): void;
   /** Kill asks first, offering a plain and a forced kill. */
   requestKill(sessionId: string, cx: GpuiContext): void;
+  /** Opens the session's terminal in a herdr tab (waking it through gc first). */
+  openTerminal(sessionId: string, cx: GpuiContext): void;
   /** Sends the send box's text to `sessionId`, the session whose detail drew the box. */
   send(sessionId: string, mode: InputMode, cx: GpuiContext): void;
   /** Answers the open session's pending prompt `requestId` with `option`, exactly as the button was drawn. */
@@ -52,8 +55,16 @@ function pendingText(p: PendingView): string[] {
   }
 }
 
+/** Open terminal, or why it is not offered or waits. */
+function terminalButton(id: string, noTerminal: string | null, ctx: DetailContext, theme: ThemeRead, actions: DetailActions): GpuiElement {
+  const key = "gascity-action-terminal";
+  if (noTerminal !== null) return waiting(key, "Open terminal", noTerminal, theme);
+  if (isBusy(ctx.activity, { kind: "session.attach", target: { kind: "session", id } })) return waiting(key, "Open terminal", "under way", theme);
+  return button(key, "Open terminal", (cx) => actions.openTerminal(id, cx));
+}
+
 /** One button per session action, or why it waits. */
-function actionBar(id: string, ctx: DetailContext, theme: ThemeRead, actions: DetailActions): GpuiElement {
+function actionBar(id: string, noTerminal: string | null, ctx: DetailContext, theme: ThemeRead, actions: DetailActions): GpuiElement {
   const specs: [string, ActionSpec][] = [
     ["wake", session.sessionWake(id)],
     ["suspend", session.sessionSuspend(id)],
@@ -68,7 +79,7 @@ function actionBar(id: string, ctx: DetailContext, theme: ThemeRead, actions: De
   const kill = isBusy(ctx.activity, session.sessionKill(id, false)) || isBusy(ctx.activity, session.sessionKill(id, true))
     ? waiting("gascity-action-kill", "Kill", "under way", theme)
     : button("gascity-action-kill", "Kill…", (cx) => actions.requestKill(id, cx));
-  return h_flex().id("gascity-detail-actions").gap(8).children([...buttons, kill]);
+  return h_flex().id("gascity-detail-actions").gap(8).children([terminalButton(id, noTerminal, ctx, theme, actions), ...buttons, kill]);
 }
 
 function answers(p: PendingView, actions: DetailActions): GpuiElement | null {
@@ -97,7 +108,7 @@ export function renderDetail(m: DetailModel, theme: ThemeRead, actions: DetailAc
   let el = v_flex().id("gascity-detail").gap(4)
     .child(h_flex().id("gascity-detail-head").gap(8).child(label("gascity-detail-title", `Detail: ${m.title}`)).child(close))
     .child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`))
-    .child(actionBar(m.ref, ctx, theme, actions))
+    .child(actionBar(m.ref, m.noTerminal, ctx, theme, actions))
     .child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme))
     .child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`));
   pendingText(m.pending).forEach((t, i) => {

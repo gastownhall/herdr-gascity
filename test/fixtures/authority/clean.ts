@@ -7,7 +7,19 @@ const bdId = "gc-12";
 const label = "gc session attach";
 
 export function open(space: string) {
-  herdr.run("tab.new", { space, name: `${bdId}/${hcAddress}`, argv: ["gc", "session", "attach", label] });
+  const argv = ["gc", "session", "attach", label];
+  herdr.run("tab.select", { id: `${space}/${bdId}/${hcAddress}/${argv.length}` });
+}
+
+export function attachable(transport: string): boolean {
+  // gc's transport value is data: comparing it with "tmux" runs nothing.
+  if (transport === "tmux" || ("bd" !== transport)) return true;
+  switch (transport) {
+    case "hc":
+      return false;
+    default:
+      return transport != "TMUX";
+  }
 }
 
 export function idioms(n: number, d: Date, o: object): string {

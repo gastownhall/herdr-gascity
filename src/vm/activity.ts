@@ -98,6 +98,7 @@ function followUpText(e: ActionEntry): string | null {
     switch (e.state.kind) {
       case "sending":
       case "polling":
+      case "watching":
       case "done":
         where = "sent once the bead is created";
         break;
@@ -139,6 +140,8 @@ function stateRow(e: ActionEntry, city: CitySnapshot | null, now: number): Activ
         detail: cleanLine(`accepted, waiting for gc's outcome of request ${s.requestId} (${seconds(now - s.acceptedAt)})${last}`),
       };
     }
+    case "watching":
+      return { ...base, tone: "pending", detail: cleanLine(`${s.watch.detail} (${seconds(now - s.since)})`), requestId: null };
     case "done":
       return { ...base, tone: "done", detail: cleanLine(s.detail), requestId: s.requestId === null ? null : cleanLine(s.requestId) };
     case "failed": {
