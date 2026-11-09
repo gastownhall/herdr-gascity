@@ -46,22 +46,8 @@ jobs:
           # All history: a tag's commit must be on main.
           fetch-depth: 0
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: .bun-version
-          # The binary is never cached: a cache saved by a workflow that runs
-          # downloaded code could be restored by the release build.
-          no-cache: true
-
-      - name: Install dependencies (frozen lockfile)
-        run: bun install --frozen-lockfile
-
-      - name: Typecheck, authority lint, bundle freshness, unit and installer tests
-        run: bun run ci
-
-      - name: Shellcheck the installer
-        run: shellcheck install.sh test/install/stub/herdr-app test/install/stub/curl
-
+      # Before any of the tagged commit's code runs (bun install, bun run ci):
+      # only git and jq read the checkout here.
       - name: The tag's commit is on main
         if: github.ref_type == 'tag'
         env:
@@ -82,6 +68,22 @@ jobs:
             echo "::error::tag $TAG does not name package.json's version $version"
             exit 1
           fi
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+          # The binary is never cached: a cache saved by a workflow that runs
+          # downloaded code could be restored by the release build.
+          no-cache: true
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck, authority lint, bundle freshness, unit and installer tests
+        run: bun run ci
+
+      - name: Shellcheck the installer
+        run: shellcheck install.sh test/install/stub/herdr-app test/install/stub/curl
 
       - name: Package
         id: package

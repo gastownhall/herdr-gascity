@@ -9,6 +9,8 @@
 #   replies/<key>            the reply to any other call of <key>
 #   replies/<key>.okafter    seconds after the first call of <key> before
 #                            replies/<key>.ok is given (replies/<key> before)
+#   replies/<key>.when       another key: once that key has been called,
+#                            replies/<key>.then is given
 #
 # <key> is the subcommand (`check`, `status`, `ls`), or for `do` the command
 # up to its first ":" (`tab.new`, `gascity.set-gc-bin`). A reply file's first
@@ -45,6 +47,9 @@ if [ -f "$dir/replies/$key.okafter" ]; then
   if [ $(( $(date +%s) - $(cat "$dir/first.$key") )) -ge "$(cat "$dir/replies/$key.okafter")" ]; then
     reply=$dir/replies/$key.ok
   fi
+fi
+if [ -z "$reply" ] && [ -f "$dir/replies/$key.when" ] && [ -f "$dir/count/$(cat "$dir/replies/$key.when")" ]; then
+  reply=$dir/replies/$key.then
 fi
 [ -n "$reply" ] || { [ -f "$dir/replies/$key.$n" ] && reply=$dir/replies/$key.$n; } || true
 [ -n "$reply" ] || { [ -f "$dir/replies/$key" ] && reply=$dir/replies/$key; } || true

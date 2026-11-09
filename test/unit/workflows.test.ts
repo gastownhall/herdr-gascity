@@ -95,15 +95,28 @@ describe("release.yml", () => {
     expect(subjects).toContain("install.sh");
   });
 
-  test("a tag whose commit is not on main is refused before anything is packaged", async () => {
+  test("the tag checks come right after checkout, before any of the tagged commit's code runs", async () => {
     const w = await release();
     const pkg = w.jobs["package"]!;
-    const checkout = pkg.steps.find((s) => s.uses?.startsWith("actions/checkout@"));
-    expect(checkout?.with?.["fetch-depth"]).toBe(0);
-    const i = pkg.steps.findIndex((s) => s.run?.includes("merge-base --is-ancestor"));
-    const p = pkg.steps.findIndex((s) => s.run?.includes("bun run package"));
-    expect(i).toBeGreaterThan(-1);
-    expect(i).toBeLessThan(p);
-    expect(pkg.steps[i]!.run).toContain("origin/main");
+    expect(pkg.steps[0]!.uses).toStartWith("actions/checkout@");
+    expect(pkg.steps[0]!.with?.["fetch-depth"]).toBe(0);
+    const [onMain, version] = [pkg.steps[1]!, pkg.steps[2]!];
+    expect(onMain.if).toBe("github.ref_type == 'tag'");
+    expect(onMain.run).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/main');
+    expect(version.if).toBe("github.ref_type == 'tag'");
+    expect(version.run).toContain("jq -er .version package.json");
+    // Only git and jq run before them: no bun, no install, no repository script.
+    for (const step of [onMain, version]) expect(step.run).not.toMatch(/\bbun\b|\.\/|scripts\/|canary\//);
+  });
+
+  test("restores no cache: no cache action, and no setup step with its cache on", async () => {
+    const w = await release();
+    for (const { job, step } of steps(w)) {
+      const uses = step.uses ?? "";
+      expect({ job, uses, cacheAction: /^actions\/cache(\/[a-z]+)?@/.test(uses) }).toEqual({ job, uses, cacheAction: false });
+      if (uses.startsWith("oven-sh/setup-bun@")) expect(step.with?.["no-cache"]).toBe(true);
+      if (/^actions\/setup-(go|node|python)@/.test(uses)) expect(step.with?.["cache"]).toBe(false);
+      expect(step.run ?? "").not.toMatch(/actions\/cache|ACTIONS_CACHE_URL|ACTIONS_RUNTIME_TOKEN/);
+    }
   });
 });

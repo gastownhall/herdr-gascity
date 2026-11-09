@@ -11,8 +11,8 @@
 #   - moves an earlier install to <app home>/mod-backups/gascity-<time>/
 #     (outside mods/: herdr loads every folder there) and puts the new one
 #     in <app home>/mods/gascity/ (the earlier one goes back if that fails);
-#   - when the app is open: shows the Gas City tab, or opens one in a local
-#     space (making one if there is none; retrying until herdr has noticed
+#   - when the app is open: shows the Gas City tab (if the mod in it answers),
+#     or opens one in a local space (making one if there is none; retrying until herdr has noticed
 #     the new folder), and stores the gc program the mod runs (gcBin) in its
 #     shared settings, retrying until the copy answers.
 # Every failed step prints why and exits non-zero.
@@ -244,20 +244,23 @@ new_space() {
   made_space=1
 }
 
-# Sets $tab: the Gas City tab already open in a local space, else a new one.
-open_tab() {
+# Reads `herdr-app ls`: $found_tab (with $found_space), a terminal-free tab
+# named "Gas City" in a local space, maybe the mod's; $local_space, the
+# local space a new tab goes to (empty: none).
+find_tab() {
   if ! reply=$(herdr-app ls 2>&1); then
     printf 'gascity: herdr-app ls failed:\n%s\n' "$reply" >&2
     exit 1
   fi
   listing=$(printf '%s\n' "$reply" | read_ls)
-  tab=$(printf '%s\n' "$listing" | awk -F '\t' '$1 == "T" { print $3; exit }')
-  if [ -n "$tab" ]; then
-    space=$(printf '%s\n' "$listing" | awk -F '\t' '$1 == "T" { print $2; exit }')
-    say "the \"$tab_name\" tab ($tab) is already open in space $space"
-    return
-  fi
-  space=$(printf '%s\n' "$listing" | awk -F '\t' '$1 == "S" { print $2; exit }')
+  found_tab=$(printf '%s\n' "$listing" | awk -F '\t' '$1 == "T" { print $3; exit }')
+  found_space=$(printf '%s\n' "$listing" | awk -F '\t' '$1 == "T" { print $2; exit }')
+  local_space=$(printf '%s\n' "$listing" | awk -F '\t' '$1 == "S" { print $2; exit }')
+}
+
+# Sets $tab: a new Gas City tab in $local_space (made first if empty).
+new_tab() {
+  space=$local_space
   made_space=0
   [ -n "$space" ] || new_space
 
@@ -288,22 +291,26 @@ open_tab() {
   say "opened a \"$tab_name\" tab ($tab) in space $space"
 }
 
-# The copy loads asynchronously (and reloads after an upgrade): until it
-# does, herdr answers that no copy of the mod listens.
-set_gc_bin() {
+# answers <command>: sends `herdr-app do gascity.<command>` until a shown
+# copy of the mod takes it, or $wait_s seconds pass (then false, the last
+# answer in $reply). The copy loads asynchronously (and reloads after an
+# upgrade): until it does, herdr answers that no copy of the mod listens.
+answers() {
   deadline=$(($(date +%s) + wait_s))
   while :; do
-    if reply=$(herdr-app "do" "$mod.set-gc-bin:$encoded_gc_bin" 2>&1) &&
+    if reply=$(herdr-app "do" "$mod.$1" 2>&1) &&
       printf '%s' "$reply" | tr -d ' \n' | grep -q '"ok":true'; then
-      break
+      return 0
     fi
-    if [ "$(date +%s)" -ge "$deadline" ]; then
-      printf 'gascity: the Gas City tab did not answer %s within %ss; herdr said:\n%s\n' "$mod.set-gc-bin" "$wait_s" "$reply" >&2
-      exit 1
-    fi
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
     sleep 0.25
   done
-  say "gcBin is $gc_bin"
+}
+
+# What the installer sends to the shown copy: set-gc-bin, or, with no gcBin
+# to set, refresh (only to learn whether the tab holds the mod).
+first_command() {
+  if [ -n "$gc_bin" ]; then echo "set-gc-bin:$encoded_gc_bin"; else echo refresh; fi
 }
 
 main() {
@@ -374,14 +381,34 @@ main() {
     exit 0
   fi
 
-  open_tab
-  # Commands reach only a shown copy of the mod.
-  herdr_do tab.select --id "$tab"
+  # Commands reach only a shown copy of the mod, so each tab is selected
+  # first. A tab of that name holding no terminal is reused only if a copy of
+  # the mod in it answers; herdr's listing does not say which mod a tab holds.
+  find_tab
+  answered=0
+  if [ -n "$found_tab" ]; then
+    tab=$found_tab
+    herdr_do tab.select --id "$tab"
+    if answers "$(first_command)"; then
+      answered=1
+      say "showed the \"$tab_name\" tab ($tab) already open in space $found_space"
+    else
+      say "the tab named \"$tab_name\" ($tab) did not answer as the mod; opening a new one"
+    fi
+  fi
+  if [ "$answered" = 0 ]; then
+    new_tab
+    herdr_do tab.select --id "$tab"
+    if [ -n "$gc_bin" ] && ! answers "$(first_command)"; then
+      printf 'gascity: the Gas City tab did not answer %s within %ss; herdr said:\n%s\n' "$mod.set-gc-bin" "$wait_s" "$reply" >&2
+      exit 1
+    fi
+  fi
 
   if [ -z "$gc_bin" ]; then
     say "no gc on this PATH: the mod runs \`gc\` from Herdr's PATH. To name another, run this again with --gc-bin <path>"
   else
-    set_gc_bin
+    say "gcBin is $gc_bin"
   fi
 
   say "done. Keys: add \"ctrl-alt-g\": \"mod.open:gascity\" under \"global\" in $home/keys.json to open the \"needs you\" window."

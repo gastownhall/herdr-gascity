@@ -38,8 +38,9 @@ replaces anything. An earlier install is moved to
 would load it as a second mod), and moved back if the new build cannot be
 put in place. The whole script runs from `main "$@"` on its last line, so
 a download cut short runs nothing. With Herdr open it shows the Gas City
-tab already open in a local space, or opens one in a space on this
-computer (`space.new`
+tab already open in a local space (reused only if the mod in it answers:
+herdr's listing does not say which mod a tab holds), or opens one in a
+space on this computer (`space.new`
 first when there is none, or when herdr answers "no space yet"; retried
 while herdr has not yet noticed the new folder), shows it,
 and sends `gascity.set-gc-bin:<gc>` until the new copy answers (15 s), so a

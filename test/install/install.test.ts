@@ -542,6 +542,39 @@ describe("a reinstall with the Gas City tab already open", () => {
     expect(r.dos).toEqual([["tab.select", "--id", "tb-gc"], ["gascity.set-gc-bin:gc"]]);
   });
 
+  test("a terminal-free tab named Gas City that is not the mod's (it never answers): a new tab is opened", async () => {
+    await appRunning();
+    await reply("ls", `0\n${lsReply([{ id: "pa", machine: null, active: true, tabs: [{ id: "tb-other", name: "Gas City", terminals: 0 }] }])}\n`);
+    await reply("gascity.set-gc-bin", NOT_LOADED);
+    await writeFile(join(stub, "replies", "gascity.set-gc-bin.when"), "tab.new");
+    await writeFile(join(stub, "replies", "gascity.set-gc-bin.then"), ok());
+    const r = await run(["--from", fixture, "--gc-bin", "gc"], { env: { HERDR_GASCITY_WAIT: "1" } });
+    expect(r.code).toBe(0);
+    const names = r.dos.map((d) => d.join(" "));
+    expect(names[0]).toBe("tab.select --id tb-other");
+    expect(names.filter((n) => n === "gascity.set-gc-bin:gc").length).toBeGreaterThan(1);
+    expect(names.slice(-3)).toEqual(["tab.new --mod gascity --name Gas City --space pa", "tab.select --id tb9", "gascity.set-gc-bin:gc"]);
+    expect(output(r)).toContain("tb-other");
+  });
+
+  test("with no gcBin to set, a reused tab is confirmed with gascity.refresh", async () => {
+    await appRunning();
+    await reply("ls", `0\n${lsReply([{ id: "pa", machine: null, active: true, tabs: [{ id: "tb-gc", name: "Gas City", terminals: 0 }] }])}\n`);
+    await reply("gascity.refresh", ok());
+    const r = await run(["--from", fixture]);
+    expect(r.code).toBe(0);
+    expect(r.dos).toEqual([["tab.select", "--id", "tb-gc"], ["gascity.refresh"]]);
+  });
+
+  test("with no gcBin to set, a foreign Gas City tab that never answers refresh: a new tab", async () => {
+    await appRunning();
+    await reply("ls", `0\n${lsReply([{ id: "pa", machine: null, active: true, tabs: [{ id: "tb-other", name: "Gas City", terminals: 0 }] }])}\n`);
+    await reply("gascity.refresh", NOT_LOADED);
+    const r = await run(["--from", fixture], { env: { HERDR_GASCITY_WAIT: "1" } });
+    expect(r.code).toBe(0);
+    expect(r.dos.slice(-2)).toEqual([["tab.new", "--mod", "gascity", "--name", "Gas City", "--space", "pa"], ["tab.select", "--id", "tb9"]]);
+  });
+
   test("a tab named Gas City that holds a terminal, or one on another machine, is not the mod's", async () => {
     await appRunning();
     await reply("ls", `0\n${lsReply([
