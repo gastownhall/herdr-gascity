@@ -38,3 +38,26 @@ describe("cleanText: multi-line output (peek)", () => {
     expect(cleanText("\u001b[1mCANARY READY\u001b[0m\n\u0007done\u0000")).toBe("CANARY READY\ndone");
   });
 });
+
+describe("characters that reorder or hide text, or break lines out of band", () => {
+  test("the Arabic letter mark (U+061C) is removed like the other bidi marks", () => {
+    expect(cleanLine("abc\u061cdef")).toBe("abcdef");
+  });
+
+  test("Unicode tag characters (U+E0000–U+E007F) are removed: they carry invisible text", () => {
+    // "hi" hidden as tag characters between a and b, plus the cancel tag
+    expect(cleanLine("a\u{E0068}\u{E0069}b\u{E007F}c\u{E0000}")).toBe("abc");
+    // characters next to the tag block are kept
+    expect(cleanLine("\u{E0100}\u{1F600}")).toBe("\u{E0100}\u{1F600}");
+  });
+
+  test("line and paragraph separators (U+2028, U+2029) are line breaks: kept as LF in text, one space in a line", () => {
+    expect(cleanText("a\u2028b\u2029c")).toBe("a\nb\nc");
+    expect(cleanLine("a\u2028b\u2029c")).toBe("a b c");
+  });
+
+  test("cleaning stays idempotent", () => {
+    const once = cleanText("x\u061c\u2028\u{E0041}y");
+    expect(cleanText(once)).toBe(once);
+  });
+});

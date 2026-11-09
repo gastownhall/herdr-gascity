@@ -1,6 +1,7 @@
 // The probe document the canary reads: a JSON serialization of the same
 // view-models `render` draws, never a separate code path. Pure; the writer
-// (src/probe.ts) adds `seq` and `ts` and writes it.
+// (src/probe.ts) adds `seq` and `ts` (and, for a document it had to cut down
+// to herdr's 1 MiB file limit, `truncated`: what it left out) and writes it.
 
 import type { CityMachine } from "../discovery/city.ts";
 import type { ActivityModel } from "./activity.ts";

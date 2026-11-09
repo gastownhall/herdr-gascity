@@ -4,7 +4,7 @@
 // agents → sessions from the shared snapshot, opens a detail, shows errors
 // and staleness, writes the probe, and on close starts nothing.
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { findById, loadMod, textOf } from "../harness.ts";
 import { BASE, gc, running, text } from "./panel-fixture.ts";
 
@@ -37,6 +37,42 @@ describe("the copy's lifecycle", () => {
     await b.tick(2_000);
     expect(mod.fetched.length).toBeGreaterThan(before);
     expect(text(b.render(), "gascity-chip")).toBe("connected");
+  });
+});
+
+describe("visibility reads", () => {
+  test("herdr's panes(), focused() and layout() are read once per app per window, not by every copy every tick", async () => {
+    const mod = await loadMod({ route: gc() });
+    const b = mod.copy();
+    const c = mod.copy();
+    mod.init();
+    b.init();
+    c.init();
+    await mod.settle();
+    const before = mod.herdrCalls.filter((x) => x.name === "panes").length;
+    for (let i = 0; i < 8; i++) {
+      await mod.tick(250);
+      await b.tick(0);
+      await c.tick(0);
+    }
+    // 2 s of ticks by three copies (24 ticks): at most one read per second
+    const reads = mod.herdrCalls.filter((x) => x.name === "panes").length - before;
+    expect(reads).toBeGreaterThanOrEqual(1);
+    expect(reads).toBeLessThanOrEqual(3);
+    for (const name of ["focused", "layout"]) expect(mod.herdrCalls.filter((x) => x.name === name).length).toBeLessThanOrEqual(3);
+  });
+
+  test("a render (herdr re-renders on a live-data change) makes the next tick read again", async () => {
+    const mod = await loadMod({ route: gc() });
+    mod.init();
+    await mod.settle();
+    await mod.tick(250);
+    const before = mod.herdrCalls.filter((x) => x.name === "panes").length;
+    await mod.tick(250);
+    expect(mod.herdrCalls.filter((x) => x.name === "panes").length).toBe(before);
+    mod.render();
+    await mod.tick(250);
+    expect(mod.herdrCalls.filter((x) => x.name === "panes").length).toBe(before + 1);
   });
 });
 
@@ -107,6 +143,27 @@ describe("diagnostics and the probe", () => {
     mod.click("gascity-diagnostics-toggle");
     const drawer = text(mod.render(), "gascity-diagnostics-drawer") ?? "";
     expect(drawer).toContain("rigs: gc answered 500: rigs broke");
+  });
+
+  test("a failure written to herdr's log is cleaned: no escape or control character from gc's city name or error reaches the log", async () => {
+    const base = gc();
+    const name = "scr\u001b]0;pwned\u0007at\u202ech";
+    const logged: string[] = [];
+    const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => { logged.push(args.map(String).join(" ")); });
+    try {
+      await running({
+        route: (url) => {
+          const p = new URL(url).pathname;
+          if (p === "/v0/cities") return { status: 200, body: { items: [{ name, path: "/c", running: true }], total: 1 } };
+          if (p.endsWith("/rigs")) return { status: 500, body: { detail: "rigs\u001b[31m broke\u2028again" } };
+          return base(url);
+        },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    const line = logged.find((l) => l.includes(": rigs: "));
+    expect(line).toBe("gascity: scratch: rigs: gc answered 500: rigs broke again");
   });
 
   test("with shared gascity.probe on, the copy writes the probe under the app home", async () => {

@@ -36,8 +36,10 @@
 // a bead.closed event lists its bead, a later bead.updated or bead.deleted
 // about a listed (or seeded) bead drops it unless it is still closed, and
 // infrastructure beads are only counted. An event whose bead cannot be read
-// is recorded and the bead is fetched by id instead; after a gap every
-// listed bead is fetched again.
+// is recorded and the bead is fetched by id instead; after a gap (or when the
+// endpoint recovers) every listed bead is fetched again, at most
+// BEAD_FETCHES_PER_STEP per step, and the seed once (one request), since a
+// seeded bead may have been reopened, or a dropped one closed again, unseen.
 //
 // An open detail (watchPeek) also gets, on demand: the session's wake
 // reasons (gc probes the runtime for each session it lists with them, so they
@@ -45,8 +47,12 @@
 // prompt (when the detail opens and whenever the city's pending list changes
 // for that session). Active beads that the board does not carry are fetched
 // by id, at most BEAD_FETCHES_PER_STEP per step, and again on an event about
-// them or at the sweep. So is a watched bead (a copy's open bead detail), even
-// when the board shows it: the board's columns carry no description.
+// them, after an event gap, when the endpoint recovers and on "retry now":
+// gc emits an event for every bead change, so (like the board) they are as
+// current as the last good event poll, and the sweep, whose cost would grow
+// with the city, leaves them alone. A watched bead (a copy's open bead
+// detail) is fetched the same way, even when the board shows it (the board's
+// columns carry no description), and also at the sweep.
 //
 // A request the step was waiting for may be cancelled under it: dropped from
 // the fetch queue when the step is abandoned, or taken with the copy whose
@@ -158,12 +164,17 @@ export interface EventsState {
   readonly resyncs: number;
 }
 
-/** A failure the store records: a gc call's, an app-wide hook that threw, or a step that crashed or stalled. */
+/** A failure the store (or a copy) records: a gc call's, an app-wide hook that threw, a step that crashed or stalled, a copy's tick that threw. */
 export type SyncError =
   | GcError
   | { kind: "listener-failed"; message: string }
   | { kind: "step-crashed"; message: string }
-  | { kind: "step-stalled"; idleMs: number };
+  | { kind: "step-stalled"; idleMs: number }
+  | { kind: "tick-crashed"; message: string }
+  /** A copy's discovery made no progress (its host calls were taken with another copy) and was started again. */
+  | { kind: "discovery-stalled"; idleMs: number }
+  /** The probe document was over herdr's file limit and was cut down (probe.ts): what it lost. */
+  | { kind: "probe-truncated"; limitBytes: number; dropped: string[] };
 
 /** One diagnostics entry: when, where (a domain, "events", "bead:<id>", "listener", "step", …) and what. */
 export interface ErrorEntry {
@@ -390,6 +401,7 @@ export class CityStore implements EndpointListener {
   /** "Retry now": re-arms held domains and, if the endpoint is backing off, makes the probe due. */
   retryNow(): void {
     this.rearmHeld(this.deps.clock.now(), "snapshot");
+    for (const b of this.lookups.values()) b.due = true;
     this.deps.endpoint.retryNow();
     this.commit();
   }
@@ -482,6 +494,7 @@ export class CityStore implements EndpointListener {
     if (recovered) {
       const now = this.deps.clock.now();
       for (const d of ALL_DOMAINS) this.mark(d, now, "snapshot");
+      for (const b of this.lookups.values()) b.due = true;
       this.incomplete = true;
       this.recheckClosed();
     }
@@ -568,7 +581,10 @@ export class CityStore implements EndpointListener {
         this.last.sweep = now;
         this.rearmHeld(now, "sweep");
         for (const d of ALL_DOMAINS) this.mark(d, now, "sweep");
-        for (const b of this.lookups.values()) b.due = true;
+        for (const id of this.beadWatches.keys()) {
+          const b = this.lookups.get(id);
+          if (b) b.due = true;
+        }
       } else {
         this.last.peek = now;
         for (const q of this.peeks.values()) q.due = true;
@@ -833,6 +849,7 @@ export class CityStore implements EndpointListener {
     this.progress(step);
     if (this.settle(r, "closed-seed") && r.ok) {
       this.seed = { value: r.value, fetchedAt: this.deps.clock.now(), error: null, held: false, due: false };
+      this.closed.reaffirm(r.value.items.filter((b) => b.status === "closed").map((b) => b.id));
       this.syncLookups();
     } else if (!r.ok && !isCancelled(r.error)) {
       this.seed.error = r.error;
@@ -874,9 +891,10 @@ export class CityStore implements EndpointListener {
     this.closedQueue = [...this.closedQueue.filter((c) => c.id !== id), { id, seq }];
   }
 
-  /** Events may have been missed: fetch every listed bead again. */
+  /** Events may have been missed: fetch every listed bead again, and the seed once. */
   private recheckClosed(): void {
     for (const c of this.closed.recent()) this.queueClosed(c.bead.id, null);
+    if (!this.seed.held) this.seed.due = true;
   }
 
   private async fetchClosed(step: Step): Promise<void> {

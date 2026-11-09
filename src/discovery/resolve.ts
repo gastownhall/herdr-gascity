@@ -11,11 +11,17 @@
 // Fallback rules:
 //   - a source with nothing to offer (no setting, gc says nothing or cannot be
 //     run, no supervisor.toml) is recorded and skipped;
-//   - a candidate that does not answer /health within 5 s, or answers with
-//     something that is not gc's health, is recorded and the next one tried.
-//     Probes go through the app-wide fetch budget: one that lost its race is
-//     dropped if it is still queued, and otherwise stays counted in flight
-//     until herdr's fetch settles (it holds a pool thread until then);
+//   - a candidate that does not answer /health within 5 s of the request
+//     being sent, or answers with something that is not gc's health, is
+//     recorded and the next one tried. Probes go through the app-wide fetch
+//     budget, and the 5 s run from when the request leaves its queue: time
+//     spent waiting behind other requests is not gc's. A probe still queued
+//     after HEALTH_QUEUE_MS is dropped. A probe that lost its race stays
+//     counted in flight until herdr's fetch settles (it holds a pool thread
+//     until then);
+//   - a probe the mod cancelled (dropped from the queue, or reclaimed with a
+//     closed copy) says nothing about gc: it is tried once more before it is
+//     recorded and the next candidate tried;
 //   - a candidate that is not loopback is refused, and a source that exists
 //     but cannot be read for sure (malformed settings or supervisor.toml) is
 //     an error: resolution stops there instead of guessing a later candidate,
@@ -32,8 +38,16 @@ import { parseSupervisorConfig, supervisorApiUrl } from "./supervisorConfig.ts";
 
 /** gc's default API URL. */
 export const DEFAULT_API_URL = "http://127.0.0.1:8372";
-/** How long a /health probe may take before the next candidate is tried. */
+/** How long a sent /health probe may take before the next candidate is tried. */
 export const HEALTH_PROBE_MS = 5_000;
+/**
+ * How long a /health probe may wait in the fetch queue before it is dropped.
+ * A slot is reclaimed RECLAIM_AFTER_MS (35 s) after herdr cancelled its fetch,
+ * so a queue this old is stuck behind requests that will never settle.
+ */
+export const HEALTH_QUEUE_MS = 40_000;
+/** Probes of one candidate the mod cancelled (not sent, or reclaimed) before it is recorded as unreachable. */
+export const PROBE_ATTEMPTS = 2;
 
 /** Where a candidate URL came from, in resolution order. */
 export type EndpointSource = "setting" | "gc-reported" | "supervisor-config" | "default";
@@ -79,8 +93,12 @@ export interface ResolveHost {
   /** supervisor.toml's path and text (null when the file does not exist). */
   readSupervisorConfig(): Promise<Result<{ path: string; text: string | null }, GcError>>;
   fetch: HostFetch;
-  /** A fresh budgeted fetch for one /health probe, whose queued request can be dropped. */
-  probeFetch(): { fetch: HostFetch; drop(): void };
+  /**
+   * A fresh budgeted fetch for one /health probe: `sent` resolves when its
+   * request leaves the fetch queue; `drop` drops it while still queued (it
+   * then rejects as cancelled) and returns how many it dropped.
+   */
+  probeFetch(): { fetch: HostFetch; drop(): number; sent: Promise<void> };
   /** Resolves after `ms` (the async context's sleep). */
   sleep(ms: number): Promise<void>;
 }
@@ -99,21 +117,33 @@ const SOURCE_NAMES: Readonly<Record<EndpointSource, string>> = {
   default: "the default",
 };
 
-/** Probes GET /health with a deadline; ok with gc's health, or the failure. A probe still queued at the deadline is dropped. */
+/**
+ * Probes GET /health: ok with gc's health, or the failure. The request waits
+ * in the fetch queue up to HEALTH_QUEUE_MS (then it is dropped: a
+ * cancellation), and from when it is sent gets HEALTH_PROBE_MS.
+ */
 async function probe(host: ResolveHost, url: string): Promise<Result<SupervisorHealthOutputBody, GcError>> {
   const pf = host.probeFetch();
   const client = createGcClient({ baseUrl: url, fetch: pf.fetch });
   if (!client.ok) return client;
-  let settled = false;
-  const answer = getHealth(client.value).then((r) => {
-    settled = true;
-    return r;
-  });
-  const deadline = host.sleep(HEALTH_PROBE_MS).then((): Result<SupervisorHealthOutputBody, GcError> => {
-    if (!settled) pf.drop();
-    return err({ kind: "timeout", url: `${client.value.baseUrl}/health`, ms: HEALTH_PROBE_MS });
-  });
+  const answer = getHealth(client.value);
+  const waited = await Promise.race([
+    answer.then(() => "answered" as const),
+    pf.sent.then(() => "sent" as const),
+    host.sleep(HEALTH_QUEUE_MS).then(() => "queue-expired" as const),
+  ]);
+  // Dropped from the queue, it rejects as cancelled; one that left the queue meanwhile gets its 5 s.
+  if (waited === "answered" || (waited === "queue-expired" && pf.drop() > 0)) return answer;
+  const deadline = host.sleep(HEALTH_PROBE_MS).then((): Result<SupervisorHealthOutputBody, GcError> =>
+    err({ kind: "timeout", url: `${client.value.baseUrl}/health`, ms: HEALTH_PROBE_MS }));
   return Promise.race([answer, deadline]);
+}
+
+/** Probes a candidate; a probe the mod cancelled was not an answer from gc, so it is tried again (PROBE_ATTEMPTS). */
+async function probeCandidate(host: ResolveHost, url: string): Promise<Result<SupervisorHealthOutputBody, GcError>> {
+  let health = await probe(host, url);
+  for (let attempt = 1; attempt < PROBE_ATTEMPTS && !health.ok && health.error.kind === "cancelled"; attempt++) health = await probe(host, url);
+  return health;
 }
 
 /** Resolves the gc API endpoint. Never throws. */
@@ -167,7 +197,7 @@ export async function resolveEndpoint(host: ResolveHost): Promise<Result<Endpoin
       continue;
     }
     probed.set(url, source);
-    const health = await probe(host, url);
+    const health = await probeCandidate(host, url);
     if (!health.ok) {
       attempts.push({ source, outcome: "unreachable", url, error: health.error });
       continue;

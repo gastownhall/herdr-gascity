@@ -5,14 +5,17 @@
 // herdr's ownership rule decides the shape. Every async host operation
 // belongs to the copy whose code starts it and never settles once that copy
 // closes, so:
-//   - discovery runs in a task of this copy (init, or a "retry now" click);
+//   - discovery runs in a task of this copy (init, a "retry now" click, or
+//     this copy's own tick while it has no endpoint, backing off, or when a
+//     run stalled because herdr resumed it in a copy that then closed);
 //   - everything shared (the city list poll, the city store's steps, the
 //     probe write) starts only from this copy's own periodic timer: `tick`;
 //   - the city list and the city store are subscribed from a tick as soon as
 //     the API and a running city are known, and unsubscribed when they
 //     change;
-//   - `close` only unsubscribes: it starts nothing, and work this copy had
-//     started is abandoned to the next tick of a surviving copy.
+//   - `close` only unsubscribes and cancels its discovery: it starts nothing,
+//     and work this copy had started is abandoned to the next tick of a
+//     surviving copy.
 // Rendering reads `view`, which builds the view-models from the machine and
 // the shared snapshots; it never fetches.
 //
@@ -35,6 +38,7 @@ import type { HostDecodeError } from "./host.schemas.ts";
 import type { ProbeWriter } from "./probe.ts";
 import type { Result } from "./result.ts";
 import type { Clock } from "./sync/clock.ts";
+import type { ErrorEntry, SyncError } from "./sync/store.ts";
 import type { CitiesSubscription, Subscription, SyncRegistry } from "./sync/registry.ts";
 import { ALL_DOMAINS } from "./sync/invalidate.ts";
 import { mayBeOnScreen, type VisibilityInput } from "./sync/visibility.ts";
@@ -52,7 +56,8 @@ import { cleanLine } from "./vm/sanitize.ts";
 export interface CopyHost {
   visibility(): Result<VisibilityInput, HostDecodeError>;
   probeEnabled(): boolean;
-  herdrVersion(): string | null;
+  /** herdr-app's version (null when it reports none), or why it could not be read. */
+  herdrVersion(): Result<string | null, GcError>;
   execLog(): readonly ExecRecord[];
 }
 
@@ -115,8 +120,34 @@ function isCityScoped(e: GcError | null): e is CityScopedError {
   return e !== null && CITY_SCOPED.has(e.kind);
 }
 
+/** Starts a discovery run in a task of this copy (from its own timer's context). */
+export type Spawn = (body: (task: DiscoveryTask) => Promise<void>) => void;
+
+/** While a copy has no endpoint, its tick rediscovers after this long, doubling… */
+export const REDISCOVER_BASE_MS = 5_000;
+/** …up to this. */
+export const REDISCOVER_CAP_MS = 60_000;
+/**
+ * A discovery run none of whose host calls settled for this long is presumed
+ * lost (herdr resumed it in a copy that closed) and started again. Every call
+ * it awaits ends sooner: a /health probe waits at most 40 s queued then 5 s,
+ * and /v0/cities at most 35 s queued then herdr's 30 s timeout.
+ */
+export const DISCOVERY_STALL_MS = 90_000;
+
+/** The wait before rediscovery number `attempt` (1-based). */
+export function rediscoverDelay(attempt: number): number {
+  return Math.min(REDISCOVER_CAP_MS, REDISCOVER_BASE_MS * 2 ** Math.min(Math.max(attempt, 1) - 1, 16));
+}
+
 /** The host errors a copy keeps for its banners. */
 const HOST_ERROR_LIMIT = 20;
+/** The failures of a copy's own work (its ticks, its host reads) kept for the diagnostics. */
+const COPY_ERROR_LIMIT = 20;
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 /** One copy of the mod. */
 export class CopyController {
@@ -145,11 +176,18 @@ export class CopyController {
   private notice: string | null = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   private applied = new WeakSet<object>();
+  /** Failures of this copy's own work, oldest first (diagnostics). */
+  private failures: ErrorEntry[] = [];
+  /** The next rediscovery while this copy has no endpoint, and how many there were. */
+  private rediscovery: { attempt: number; at: number } | null = null;
+  /** The discovery's progress count when it last moved, and when (stall detection). */
+  private discoveryProgress = { count: 0, at: 0 };
 
   constructor(private readonly deps: CopyDeps) {}
 
   /** Discovers gc's API and the cities; run it in a task of this copy (init). */
   discover(task: DiscoveryTask): Promise<void> {
+    this.discoveryProgress = { count: this.deps.discovery.progress, at: this.deps.clock.now() };
     return this.deps.discovery.run(task);
   }
 
@@ -157,13 +195,27 @@ export class CopyController {
    * This copy's periodic timer (every TICK_MS) and nothing else calls this:
    * subscribes and unsubscribes as the machine says, ticks the shared city
    * list and city store, and writes the probe. Returns true when the view
-   * should be redrawn.
+   * should be redrawn. An exception inside is recorded in the diagnostics
+   * (and the view redrawn to show it); the next tick starts over. `spawn`
+   * starts a task of this copy for a rediscovery (no endpoint, or a stalled run).
    */
-  tick(): boolean {
+  tick(spawn: Spawn | null = null): boolean {
     if (this.closed) return false;
+    try {
+      return this.step(spawn);
+    } catch (cause) {
+      this.recordFailure("tick", { kind: "tick-crashed", message: messageOf(cause) });
+      return true;
+    }
+  }
+
+  private step(spawn: Spawn | null): boolean {
     const { registry, discovery, clock } = this.deps;
     this.readVisibility();
     registry.setOnScreen(this.onScreen);
+    // Slots of closed copies are freed here too, so a queued discovery request starts in this copy's turn.
+    registry.reclaim();
+    if (spawn !== null) this.followDiscovery(clock.now(), spawn);
 
     const before = discovery.machine.state;
     this.followCities("endpoint" in before ? before.endpoint.url : null, before.phase !== "city-running");
@@ -188,6 +240,7 @@ export class CopyController {
     }
 
     if (this.deps.host.probeEnabled()) this.writeProbe(clock.now());
+    else this.deps.probe.off(clock.now());
 
     const signature = [
       this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.city?.activity().rev ?? -1, this.onScreen, this.selected,
@@ -202,6 +255,7 @@ export class CopyController {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.deps.discovery.cancel();
     this.peek?.release();
     this.peek = null;
     this.beadWatch?.release();
@@ -210,6 +264,7 @@ export class CopyController {
     this.city = null;
     this.cities?.unsubscribe();
     this.cities = null;
+    this.deps.probe.release(this);
   }
 
   /** The view-models for render (and the probe). */
@@ -234,6 +289,7 @@ export class CopyController {
           ...(s?.errors ?? []),
           ...(citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : []),
           ...this.deps.probe.errors(),
+          ...this.failures,
         ],
         drift: [...(agents?.drift ?? []), ...(board?.drift ?? [])],
         unreadable: [...(agents?.unreadable.map((u) => u.text) ?? []), ...(board?.unreadable ?? [])],
@@ -253,6 +309,7 @@ export class CopyController {
    */
   retry(task: DiscoveryTask): Promise<void> {
     this.refreshCount++;
+    this.rediscovery = null;
     this.cities?.refresh();
     if (this.city) {
       this.city.retryNow();
@@ -553,6 +610,35 @@ export class CopyController {
 
   // ---- subscriptions --------------------------------------------------------------
 
+  /**
+   * Without an endpoint, rediscovers from this copy's own tick: after
+   * rediscoverDelay(1), (2), … once each run has ended. A run that made no
+   * progress for DISCOVERY_STALL_MS is started again at once.
+   */
+  private followDiscovery(now: number, spawn: Spawn): void {
+    const d = this.deps.discovery;
+    const phase = d.machine.state.phase;
+    if (phase !== "no-endpoint" && phase !== "discovering" && phase !== "listing") {
+      this.rediscovery = null;
+      return;
+    }
+    if (d.running()) {
+      if (d.progress !== this.discoveryProgress.count) {
+        this.discoveryProgress = { count: d.progress, at: now };
+        return;
+      }
+      const idleMs = now - this.discoveryProgress.at;
+      if (idleMs < DISCOVERY_STALL_MS) return;
+      this.recordFailure("discovery", { kind: "discovery-stalled", idleMs });
+    } else {
+      this.rediscovery ??= { attempt: 1, at: now + rediscoverDelay(1) };
+      if (now < this.rediscovery.at) return;
+      const attempt = this.rediscovery.attempt + 1;
+      this.rediscovery = { attempt, at: now + rediscoverDelay(attempt) };
+    }
+    spawn((task) => this.discover(task));
+  }
+
   private readVisibility(): void {
     const v = this.deps.host.visibility();
     if (v.ok) {
@@ -643,11 +729,25 @@ export class CopyController {
     return `${m.state.phase}:${selectedCity(m.state) ?? ""}:${machineIds.get(m) ?? remember(m)}:${this.deps.discovery.hostErrors.length}`;
   }
 
+  /** Records a failure of this copy's own work; one identical to the newest is not recorded again (a tick fails every 250 ms). */
+  private recordFailure(source: string, error: SyncError): void {
+    const last = this.failures.at(-1);
+    if (last && last.source === source && JSON.stringify(last.error) === JSON.stringify(error)) return;
+    this.failures = [...this.failures, { at: this.deps.clock.now(), source, error }].slice(-COPY_ERROR_LIMIT);
+  }
+
+  private herdrVersion(): string | null {
+    const v = this.deps.host.herdrVersion();
+    if (v.ok) return v.value;
+    this.recordFailure("herdr", v.error);
+    return null;
+  }
+
   private writeProbe(now: number): void {
     const v = this.view(now);
-    this.deps.probe.offer(probeDocument({
+    this.deps.probe.offer(this, probeDocument({
       modVersion: MOD_VERSION,
-      herdrVersion: this.deps.host.herdrVersion(),
+      herdrVersion: this.herdrVersion(),
       machine: this.deps.discovery.machine,
       header: v.header,
       onScreen: this.onScreen,
@@ -661,7 +761,7 @@ export class CopyController {
       execLog: this.deps.host.execLog(),
       refreshCount: this.refreshCount,
       fetchInFlightMax: this.deps.registry.budgetStats().maxInFlight,
-    }), now, true);
+    }), now);
   }
 }
 

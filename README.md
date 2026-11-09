@@ -118,7 +118,10 @@ reads `o.constructor` only to compare it and read its prototype.
 ## Discovery
 
 Each copy of the mod finds gc's API on this machine. Candidates, first that
-answers `GET /health` within 5 s wins:
+answers `GET /health` within 5 s of the request being sent wins (time spent
+waiting in the fetch budget's queue does not count; a probe still queued
+after 40 s is dropped, and a probe the mod cancelled is tried once more
+before the candidate counts as unreachable):
 
 1. the `apiUrl` setting;
 2. the URL gc reports in `gc supervisor status --json` (`api_url`), when gc
@@ -141,6 +144,13 @@ shows its last choice (kept in that copy's localStorage), else the only
 running city, else asks. City states: discovering, no endpoint, cities failed,
 choose a city, unknown city, running, stopped; a running city also shows
 read-only and "gc too old" notices from gc's answers.
+
+With no endpoint, the copy rediscovers from its own 250 ms timer: 5 s after
+the failure, then 10, 20, 40 and every 60 s ("retry now" does it at once). A
+discovery that makes no progress for 90 s (herdr resumed it in another copy
+that then closed, so its requests never settle) is started again. Closing a
+copy cancels its discovery: its queued requests are dropped and nothing it
+had started runs gc or sends a request afterwards.
 
 ## Drift jobs
 
@@ -241,9 +251,10 @@ promise never settles. The engine is built around that rule:
   `cancelled` error, not a gc timeout. A cancelled read does not back off and
   is not held: it is simply still due. A cancelled mutation is
   outcome-unknown. Time spent queued never counts as a timeout. Discovery's
-  `/health` and `/v0/cities` probes go through the same budget; a probe that
-  lost its 5 s race is dropped if it is still queued, and otherwise stays
-  counted in flight until herdr's fetch settles.
+  `/health` and `/v0/cities` probes go through the same budget; a probe's 5 s
+  race starts when it leaves the queue, and a probe that lost it stays counted
+  in flight until herdr's fetch settles. Each copy's tick also reclaims, so a
+  queued request starts in a live copy's turn even with no city subscribed.
 - **Backoff** (`backoff.ts`, `endpoint.ts`). A transport failure, a 5xx, or
   an answer from off the loopback origin (a followed redirect) on a read
   backs the endpoint off: 1 s doubling to 60 s, with jitter. Until it
@@ -283,8 +294,9 @@ it unsubscribes and starts nothing; the other copies keep updating.
   shows its most urgent session, or its own state without one. A value this
   version does not know is shown raw and listed in the diagnostics.
 - **Active bead.** Its title comes from the board's data, else from the bead
-  fetched by id (at most 10 per step, again on an event about it); it is
-  never guessed.
+  fetched by id (at most 10 per step, again on an event about it, after an
+  event gap, when gc comes back and on "retry now", but not at every sweep,
+  whose cost would grow with the city); it is never guessed.
 - **Detail pane.** Clicking a session opens it: gc's facts, the output (40
   lines, refreshed every 2 s while the pane is open and on screen), the wake
   reasons (fetched when it opens and on "retry now", because gc probes the
@@ -298,8 +310,9 @@ it unsubscribes and starts nothing; the other copies keep updating.
   source.
 - **Plain text only.** Every string gc supplies (names, statuses, titles,
   errors, problem details, prompts, output) is shown with escape sequences,
-  control characters and bidirectional overrides removed (`vm/sanitize.ts`),
-  never as markdown or links.
+  control characters, bidirectional marks, Unicode tag characters and
+  out-of-band line separators removed (`vm/sanitize.ts`), never as markdown
+  or links. Lines written to herdr's log are cleaned the same way.
 - **Probe.** While the shared value `gascity.probe` is `true`, the copy's
   tick writes `<app home>/data/gascity-probe/probe.json`
   (`gascity-herdr-probe/3`): connection, discovery, city, visibility,
@@ -309,7 +322,13 @@ it unsubscribes and starts nothing; the other copies keep updating.
   request id, exec log,
   errors and the budget high-water mark. It serializes the same view-models the panel draws. Writes
   are herdr's compare-and-swap, at most one in flight, on change or every
-  5 s.
+  5 s. One copy owns the file (the first to write it, until it closes), so
+  several copies do not take turns rewriting it. A document over herdr's
+  1 MiB file limit is cut down by a fixed rule (the session output, pending
+  prompt and bead description go first, then every list is halved until it
+  fits) and says what it left out in `truncated`; the diagnostics record it.
+  When the probe is turned off the file is emptied (herdr gives mods no way
+  to delete a file), compare-and-swap like any write.
 
 ## The work board
 

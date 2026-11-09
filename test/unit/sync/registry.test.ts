@@ -615,7 +615,90 @@ describe("event watcher → targeted refetches", () => {
     gc.emit(...Array.from({ length: 60 }, () => ({ type: "order.fired" })));
     await host.advance(1500);
     for (const p of ["/rigs", "/agents", "/sessions", "/pending"]) expect(gc.count(p, start)).toBe(1);
-    expect(gc.count("/work/ready", start)).toBe(2); // ready + in progress, not the closed seed
+    // ready + in progress + the closed seed once: a seeded bead may have been reopened in the gap
+    expect(gc.count("/work/ready", start)).toBe(3);
+    expect(gc.paths(start).filter((p) => p.includes("status=closed")).length).toBe(1);
+  });
+
+  test("after a gap the seed is fetched again: a seeded bead reopened in the gap leaves Recently closed", async () => {
+    const { host, gc, open } = setup();
+    const seed = fixtureBody("get-v0-city-by-city-name-work-ready", "closed-seed") as { items: { id: string }[] };
+    let reopened = false;
+    gc.override = (req) => (req.query.get("status") === "closed" && reopened
+      ? { status: 200, body: { ...seed, items: seed.items.filter((b) => b.id !== "sc-73") } }
+      : undefined);
+    const a = await open();
+    await host.advance(1000);
+    expect(a.sub.snapshot().closed.seed.value?.items.map((b) => b.id)).toContain("sc-73");
+    reopened = true;
+    gc.emit({ type: "bead.updated", subject: "sc-73" }, ...Array.from({ length: 60 }, () => ({ type: "order.fired" })));
+    await host.advance(2000);
+    expect(a.sub.snapshot().closed.seed.value?.items.map((b) => b.id)).not.toContain("sc-73");
+  });
+
+  test("a fresh seed is gc's word: a bead dropped earlier but closed again in a gap is listed again", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    gc.emit({ type: "bead.updated", subject: "sc-74", payload: beadPayload("sc-74", "open") });
+    await host.advance(2000);
+    expect(a.sub.snapshot().closed.seed.value?.items.map((b) => b.id)).not.toContain("sc-74");
+    // closed again, but the event is lost in a gap; the refetched seed lists it
+    gc.emit(...Array.from({ length: 60 }, () => ({ type: "order.fired" })));
+    await host.advance(2000);
+    expect(a.sub.snapshot().closed.seed.value?.items.map((b) => b.id)).toContain("sc-74");
+  });
+
+  test("gc coming back after a backoff fetches the seed again too", async () => {
+    const { host, gc, open } = setup();
+    await open();
+    await host.advance(1000);
+    gc.override = () => ({ reject: "error sending request: connection refused" });
+    await host.advance(10_000);
+    gc.override = null;
+    const start = gc.seen.length;
+    await host.advance(40_000);
+    expect(gc.paths(start).filter((p) => p.includes("status=closed")).length).toBe(1);
+  });
+
+  test("after a gap or gc coming back, listed closes are rechecked at most 10 per step; those gc now reports open or missing are dropped", async () => {
+    const { host, gc, open } = setup();
+    const missing = new Set(["cl-2", "cl-9"]);
+    gc.override = (req) => {
+      const id = /\/bead\/([^/]+)$/.exec(req.path)?.[1];
+      return id !== undefined && missing.has(id) ? { status: 404, body: { title: "Not Found", status: 404, detail: `bead ${id} not found` } } : undefined;
+    };
+    const a = await open();
+    await host.advance(1000);
+    const ids = Array.from({ length: 14 }, (_, i) => `cl-${i}`);
+    gc.emit(...ids.map((id) => ({ type: "bead.closed", subject: id, payload: beadPayload(id, "closed") })));
+    await host.advance(2000);
+    expect(a.sub.snapshot().closed.recent.map((c) => c.bead.id).sort()).toEqual([...ids].sort());
+    // events carried the beads: none was fetched by id
+    expect(gc.count("/bead/cl-0")).toBe(0);
+    gc.beadStatus.set("cl-4", "open");
+    gc.beadStatus.set("cl-11", "in_progress");
+    const start = gc.seen.length;
+    gc.emit(...Array.from({ length: 60 }, () => ({ type: "order.fired" })));
+    await host.advance(5000);
+    const fetches = gc.seen.slice(start).filter((r) => /\/bead\/cl-\d+$/.test(r.path));
+    expect(fetches.length).toBe(14);
+    const perStep = new Map<number, number>();
+    for (const r of fetches) perStep.set(r.at, (perStep.get(r.at) ?? 0) + 1);
+    expect(Math.max(...perStep.values())).toBe(10);
+    expect(perStep.size).toBeGreaterThanOrEqual(2);
+    const recent = a.sub.snapshot().closed.recent.map((c) => c.bead.id);
+    expect(recent.sort()).toEqual(ids.filter((id) => !["cl-2", "cl-9", "cl-4", "cl-11"].includes(id)).sort());
+
+    // and again when gc comes back after a backoff
+    gc.beadStatus.set("cl-0", "open");
+    gc.override = () => ({ reject: "error sending request: connection refused" });
+    await host.advance(10_000);
+    gc.override = null;
+    const back = gc.seen.length;
+    await host.advance(40_000);
+    expect(gc.seen.slice(back).filter((r) => /\/bead\/cl-\d+$/.test(r.path)).length).toBe(10);
+    expect(a.sub.snapshot().closed.recent.map((c) => c.bead.id)).not.toContain("cl-0");
   });
 
   test("gc's event log reset (total below the cursor) resyncs and re-bases the cursor", async () => {

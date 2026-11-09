@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:2d9fa00ff035a0fd65fc7dfefcf4ea841a576cedcb744cd3761f38bdcb7a30fd over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:2110186d46dec17d3bd5ef68d67465e74daae50623f9294541585688378d4cac over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2684,6 +2684,17 @@ function layoutModNames(layout2) {
   return [...out];
 }
 
+// src/vm/sanitize.ts
+var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
+var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]|\udb40[\udc00-\udc7f]/g;
+var BREAKS = /\r\n?|[\u2028\u2029]/g;
+function cleanText(text) {
+  return text.replace(BREAKS, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
+}
+function cleanLine(text) {
+  return cleanText(text).replace(/[\n\t]+/g, " ");
+}
+
 // src/host.ts
 var REQUIRED_HOST_EXPORTS = [
   "theme",
@@ -2771,12 +2782,12 @@ function readProbeEnabled() {
   return herdr.shared(PROBE_KEY) === true;
 }
 function readHerdrVersion() {
+  if (typeof herdr.updates !== "function") return ok(null);
   try {
-    if (typeof herdr.updates !== "function") return null;
     const v = herdr.updates()?.app?.version;
-    return typeof v === "string" ? v : null;
-  } catch {
-    return null;
+    return ok(typeof v === "string" ? v : null);
+  } catch (cause) {
+    return err({ kind: "host-call", api: "updates()", cause: messageOf2(cause) });
   }
 }
 var probeIo = {
@@ -2819,7 +2830,7 @@ async function execGcStatus(gcBin) {
 }
 function logError(line) {
   const c = globalThis.console;
-  if (c !== void 0 && typeof c.error === "function") c.error(line);
+  if (c !== void 0 && typeof c.error === "function") c.error(cleanLine(line));
 }
 var HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 function isColor(value) {
@@ -3374,16 +3385,6 @@ function targetText(t) {
   }
 }
 
-// src/vm/sanitize.ts
-var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
-var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
-function cleanText(text) {
-  return text.replace(/\r\n?/g, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
-}
-function cleanLine(text) {
-  return cleanText(text).replace(/[\n\t]+/g, " ");
-}
-
 // src/vm/errorText.ts
 var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
 function seconds(ms) {
@@ -3509,8 +3510,9 @@ var FetchBudget = class {
   /**
    * A fetch for `endpoint` (an API base URL) at `priority`, for a GcClient.
    * Requests made with a `group` can be dropped together while still queued.
+   * `onStart` runs when a request leaves the queue and is handed to herdr.
    */
-  fetchFor(endpoint, priority, group = null) {
+  fetchFor(endpoint, priority, group = null, onStart = null) {
     const rank = PRIORITIES.indexOf(priority);
     return (url, init) => new Promise((resolve, reject) => {
       this.queue.push({
@@ -3518,7 +3520,10 @@ var FetchBudget = class {
         rank,
         seq: this.seq++,
         group,
-        start: () => this.start(endpoint, url, init, resolve, reject),
+        start: () => {
+          onStart?.();
+          this.start(endpoint, url, init, resolve, reject);
+        },
         drop: () => reject(timedRejection(`gascity: request to ${url} dropped before it was sent`, 0, "abandoned"))
       });
       this.reclaim();
@@ -4072,6 +4077,10 @@ var ClosedList = class {
   dropped(id) {
     return this.droppedIds.has(id);
   }
+  /** A freshly fetched seed lists these beads as closed now: gc's newest word, so they are no longer dropped. */
+  reaffirm(ids) {
+    for (const id of ids) this.droppedIds.delete(id);
+  }
   /** Is the bead on the list? */
   has(id) {
     return this.list.some((c) => c.bead.id === id);
@@ -4296,6 +4305,7 @@ var CityStore = class {
   /** "Retry now": re-arms held domains and, if the endpoint is backing off, makes the probe due. */
   retryNow() {
     this.rearmHeld(this.deps.clock.now(), "snapshot");
+    for (const b of this.lookups.values()) b.due = true;
     this.deps.endpoint.retryNow();
     this.commit();
   }
@@ -4383,6 +4393,7 @@ var CityStore = class {
     if (recovered) {
       const now = this.deps.clock.now();
       for (const d of ALL_DOMAINS) this.mark(d, now, "snapshot");
+      for (const b of this.lookups.values()) b.due = true;
       this.incomplete = true;
       this.recheckClosed();
     }
@@ -4457,7 +4468,10 @@ var CityStore = class {
         this.last.sweep = now;
         this.rearmHeld(now, "sweep");
         for (const d of ALL_DOMAINS) this.mark(d, now, "sweep");
-        for (const b of this.lookups.values()) b.due = true;
+        for (const id of this.beadWatches.keys()) {
+          const b = this.lookups.get(id);
+          if (b) b.due = true;
+        }
       } else {
         this.last.peek = now;
         for (const q of this.peeks.values()) q.due = true;
@@ -4707,6 +4721,7 @@ var CityStore = class {
     this.progress(step2);
     if (this.settle(r, "closed-seed") && r.ok) {
       this.seed = { value: r.value, fetchedAt: this.deps.clock.now(), error: null, held: false, due: false };
+      this.closed.reaffirm(r.value.items.filter((b) => b.status === "closed").map((b) => b.id));
       this.syncLookups();
     } else if (!r.ok && !isCancelled(r.error)) {
       this.seed.error = r.error;
@@ -4744,9 +4759,10 @@ var CityStore = class {
     if (cur && (seq === null || cur.seq !== null && cur.seq >= seq)) return;
     this.closedQueue = [...this.closedQueue.filter((c) => c.id !== id), { id, seq }];
   }
-  /** Events may have been missed: fetch every listed bead again. */
+  /** Events may have been missed: fetch every listed bead again, and the seed once. */
   recheckClosed() {
     for (const c of this.closed.recent()) this.queueClosed(c.bead.id, null);
+    if (!this.seed.held) this.seed.due = true;
   }
   async fetchClosed(step2) {
     if (this.closedQueue.length === 0) return;
@@ -5423,6 +5439,12 @@ function syncErrorText(e) {
       return cleanLine(`an app-wide listener failed: ${e.message}`);
     case "step-crashed":
       return cleanLine(`a refresh step crashed: ${e.message}`);
+    case "probe-truncated":
+      return cleanLine(`the probe document was over ${e.limitBytes} bytes and was cut down: ${e.dropped.join("; ")}`);
+    case "discovery-stalled":
+      return `discovery made no progress for ${Math.round(e.idleMs / 1e3)} s and was started again`;
+    case "tick-crashed":
+      return cleanLine(`a periodic update failed: ${e.message}`);
     case "step-stalled":
       return `a refresh step made no progress for ${Math.round(e.idleMs / 1e3)} s and was abandoned`;
     default:
@@ -5666,7 +5688,17 @@ var CITY_SCOPED = /* @__PURE__ */ new Set(["city-not-running", "write-grant-requ
 function isCityScoped(e) {
   return e !== null && CITY_SCOPED.has(e.kind);
 }
+var REDISCOVER_BASE_MS = 5e3;
+var REDISCOVER_CAP_MS = 6e4;
+var DISCOVERY_STALL_MS = 9e4;
+function rediscoverDelay(attempt) {
+  return Math.min(REDISCOVER_CAP_MS, REDISCOVER_BASE_MS * 2 ** Math.min(Math.max(attempt, 1) - 1, 16));
+}
 var HOST_ERROR_LIMIT = 20;
+var COPY_ERROR_LIMIT = 20;
+function messageOf5(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 var CopyController = class {
   constructor(deps) {
     this.deps = deps;
@@ -5697,21 +5729,40 @@ var CopyController = class {
   notice = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   applied = /* @__PURE__ */ new WeakSet();
+  /** Failures of this copy's own work, oldest first (diagnostics). */
+  failures = [];
+  /** The next rediscovery while this copy has no endpoint, and how many there were. */
+  rediscovery = null;
+  /** The discovery's progress count when it last moved, and when (stall detection). */
+  discoveryProgress = { count: 0, at: 0 };
   /** Discovers gc's API and the cities; run it in a task of this copy (init). */
   discover(task) {
+    this.discoveryProgress = { count: this.deps.discovery.progress, at: this.deps.clock.now() };
     return this.deps.discovery.run(task);
   }
   /**
    * This copy's periodic timer (every TICK_MS) and nothing else calls this:
    * subscribes and unsubscribes as the machine says, ticks the shared city
    * list and city store, and writes the probe. Returns true when the view
-   * should be redrawn.
+   * should be redrawn. An exception inside is recorded in the diagnostics
+   * (and the view redrawn to show it); the next tick starts over. `spawn`
+   * starts a task of this copy for a rediscovery (no endpoint, or a stalled run).
    */
-  tick() {
+  tick(spawn = null) {
     if (this.closed) return false;
+    try {
+      return this.step(spawn);
+    } catch (cause) {
+      this.recordFailure("tick", { kind: "tick-crashed", message: messageOf5(cause) });
+      return true;
+    }
+  }
+  step(spawn) {
     const { registry: registry3, discovery, clock } = this.deps;
     this.readVisibility();
     registry3.setOnScreen(this.onScreen);
+    registry3.reclaim();
+    if (spawn !== null) this.followDiscovery(clock.now(), spawn);
     const before = discovery.machine.state;
     this.followCities("endpoint" in before ? before.endpoint.url : null, before.phase !== "city-running");
     const state = discovery.machine.state;
@@ -5731,6 +5782,7 @@ var CopyController = class {
       if (discovery.machine.state.phase !== "city-running") this.followCity(null);
     }
     if (this.deps.host.probeEnabled()) this.writeProbe(clock.now());
+    else this.deps.probe.off(clock.now());
     const signature = [
       this.machineVersion(),
       this.citiesRev,
@@ -5748,6 +5800,7 @@ var CopyController = class {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.deps.discovery.cancel();
     this.peek?.release();
     this.peek = null;
     this.beadWatch?.release();
@@ -5756,6 +5809,7 @@ var CopyController = class {
     this.city = null;
     this.cities?.unsubscribe();
     this.cities = null;
+    this.deps.probe.release(this);
   }
   /** The view-models for render (and the probe). */
   view(now) {
@@ -5778,7 +5832,8 @@ var CopyController = class {
         entries: [
           ...s?.errors ?? [],
           ...citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : [],
-          ...this.deps.probe.errors()
+          ...this.deps.probe.errors(),
+          ...this.failures
         ],
         drift: [...agents?.drift ?? [], ...board?.drift ?? []],
         unreadable: [...agents?.unreadable.map((u) => u.text) ?? [], ...board?.unreadable ?? []]
@@ -5796,6 +5851,7 @@ var CopyController = class {
    */
   retry(task) {
     this.refreshCount++;
+    this.rediscovery = null;
     this.cities?.refresh();
     if (this.city) {
       this.city.retryNow();
@@ -6060,6 +6116,34 @@ var CopyController = class {
     return { kind: "confirm", question: cleanLine(c.retryOf === null ? first.confirm.question : `Retry: ${first.confirm.question}`), choices };
   }
   // ---- subscriptions --------------------------------------------------------------
+  /**
+   * Without an endpoint, rediscovers from this copy's own tick: after
+   * rediscoverDelay(1), (2), … once each run has ended. A run that made no
+   * progress for DISCOVERY_STALL_MS is started again at once.
+   */
+  followDiscovery(now, spawn) {
+    const d = this.deps.discovery;
+    const phase = d.machine.state.phase;
+    if (phase !== "no-endpoint" && phase !== "discovering" && phase !== "listing") {
+      this.rediscovery = null;
+      return;
+    }
+    if (d.running()) {
+      if (d.progress !== this.discoveryProgress.count) {
+        this.discoveryProgress = { count: d.progress, at: now };
+        return;
+      }
+      const idleMs = now - this.discoveryProgress.at;
+      if (idleMs < DISCOVERY_STALL_MS) return;
+      this.recordFailure("discovery", { kind: "discovery-stalled", idleMs });
+    } else {
+      this.rediscovery ??= { attempt: 1, at: now + rediscoverDelay(1) };
+      if (now < this.rediscovery.at) return;
+      const attempt = this.rediscovery.attempt + 1;
+      this.rediscovery = { attempt, at: now + rediscoverDelay(attempt) };
+    }
+    spawn((task) => this.discover(task));
+  }
   readVisibility() {
     const v = this.deps.host.visibility();
     if (v.ok) {
@@ -6140,11 +6224,23 @@ var CopyController = class {
     const m = this.deps.discovery.machine;
     return `${m.state.phase}:${selectedCity(m.state) ?? ""}:${machineIds.get(m) ?? remember(m)}:${this.deps.discovery.hostErrors.length}`;
   }
+  /** Records a failure of this copy's own work; one identical to the newest is not recorded again (a tick fails every 250 ms). */
+  recordFailure(source, error) {
+    const last = this.failures.at(-1);
+    if (last && last.source === source && JSON.stringify(last.error) === JSON.stringify(error)) return;
+    this.failures = [...this.failures, { at: this.deps.clock.now(), source, error }].slice(-COPY_ERROR_LIMIT);
+  }
+  herdrVersion() {
+    const v = this.deps.host.herdrVersion();
+    if (v.ok) return v.value;
+    this.recordFailure("herdr", v.error);
+    return null;
+  }
   writeProbe(now) {
     const v = this.view(now);
-    this.deps.probe.offer(probeDocument({
+    this.deps.probe.offer(this, probeDocument({
       modVersion: MOD_VERSION,
-      herdrVersion: this.deps.host.herdrVersion(),
+      herdrVersion: this.herdrVersion(),
       machine: this.deps.discovery.machine,
       header: v.header,
       onScreen: this.onScreen,
@@ -6158,7 +6254,7 @@ var CopyController = class {
       execLog: this.deps.host.execLog(),
       refreshCount: this.refreshCount,
       fetchInFlightMax: this.deps.registry.budgetStats().maxInFlight
-    }), now, true);
+    }), now);
   }
 };
 var machineIds = /* @__PURE__ */ new WeakMap();
@@ -6435,6 +6531,8 @@ function supervisorApiUrl(listen) {
 // src/discovery/resolve.ts
 var DEFAULT_API_URL = "http://127.0.0.1:8372";
 var HEALTH_PROBE_MS = 5e3;
+var HEALTH_QUEUE_MS = 4e4;
+var PROBE_ATTEMPTS = 2;
 var SOURCE_NAMES = {
   setting: "the apiUrl setting",
   "gc-reported": "gc supervisor status",
@@ -6445,16 +6543,20 @@ async function probe(host, url) {
   const pf = host.probeFetch();
   const client = createGcClient({ baseUrl: url, fetch: pf.fetch });
   if (!client.ok) return client;
-  let settled = false;
-  const answer = getHealth(client.value).then((r) => {
-    settled = true;
-    return r;
-  });
-  const deadline = host.sleep(HEALTH_PROBE_MS).then(() => {
-    if (!settled) pf.drop();
-    return err({ kind: "timeout", url: `${client.value.baseUrl}/health`, ms: HEALTH_PROBE_MS });
-  });
+  const answer = getHealth(client.value);
+  const waited = await Promise.race([
+    answer.then(() => "answered"),
+    pf.sent.then(() => "sent"),
+    host.sleep(HEALTH_QUEUE_MS).then(() => "queue-expired")
+  ]);
+  if (waited === "answered" || waited === "queue-expired" && pf.drop() > 0) return answer;
+  const deadline = host.sleep(HEALTH_PROBE_MS).then(() => err({ kind: "timeout", url: `${client.value.baseUrl}/health`, ms: HEALTH_PROBE_MS }));
   return Promise.race([answer, deadline]);
+}
+async function probeCandidate(host, url) {
+  let health = await probe(host, url);
+  for (let attempt = 1; attempt < PROBE_ATTEMPTS && !health.ok && health.error.kind === "cancelled"; attempt++) health = await probe(host, url);
+  return health;
 }
 async function resolveEndpoint(host) {
   const attempts = [];
@@ -6503,7 +6605,7 @@ async function resolveEndpoint(host) {
       continue;
     }
     probed.set(url, source);
-    const health = await probe(host, url);
+    const health = await probeCandidate(host, url);
     if (!health.ok) {
       attempts.push({ source, outcome: "unreachable", url, error: health.error });
       continue;
@@ -6516,6 +6618,10 @@ async function resolveEndpoint(host) {
 
 // src/discovery/controller.ts
 var HOST_ERROR_LIMIT2 = 20;
+var NOT_RUN = "not run: this discovery was cancelled";
+function droppedRejection(url) {
+  return Object.assign(new Error(`gascity: request to ${url} not sent: this discovery was cancelled`), { hostElapsedMs: 0, cancelled: "abandoned" });
+}
 var DiscoveryController = class {
   constructor(host, copy) {
     this.host = host;
@@ -6525,10 +6631,29 @@ var DiscoveryController = class {
   machine;
   /** Host calls that failed outside the machine (e.g. remembering the city); shown, newest last. */
   hostErrors = [];
+  /** How many host calls of runs have settled so far: a run whose count stops moving has stalled. */
+  progress = 0;
   generation = 0;
+  active = false;
+  /** The current run's budgeted fetches, so their queued requests can be dropped. */
+  fetches = /* @__PURE__ */ new Set();
   /** Applies one event. */
   apply(event) {
     this.machine = step(this.machine, event);
+  }
+  /** Whether a run is under way (and not cancelled or superseded). */
+  running() {
+    return this.active;
+  }
+  /**
+   * Ends the current run: its queued requests are dropped (never sent) and its
+   * later host calls start nothing. Starts nothing (it runs from a copy's close).
+   */
+  cancel() {
+    this.generation++;
+    this.active = false;
+    for (const f of this.fetches) f.drop();
+    this.fetches = /* @__PURE__ */ new Set();
   }
   /**
    * Discovers from scratch: endpoint, then cities. A newer run supersedes an
@@ -6536,20 +6661,30 @@ var DiscoveryController = class {
    * describe a discovery the person already replaced.
    */
   async run(task) {
-    const generation = ++this.generation;
+    this.cancel();
+    const generation = this.generation;
     const current = () => generation === this.generation;
-    this.apply({ type: "discover" });
-    task.notify();
-    const resolved = await resolveEndpoint({ ...this.host, sleep: (ms) => task.sleep(ms) });
-    if (!current()) return;
-    this.apply({ type: "resolved", result: resolved });
-    task.notify();
-    if (!resolved.ok) return;
-    const client = createGcClient({ baseUrl: resolved.value.url, fetch: this.host.fetch });
-    const cities = client.ok ? await listCities(client.value) : client;
-    if (!current()) return;
-    this.apply({ type: "cities", result: cities });
-    task.notify();
+    const host = this.guarded(current);
+    this.active = true;
+    try {
+      this.apply({ type: "discover" });
+      task.notify();
+      const resolved = await resolveEndpoint({ ...host, sleep: (ms) => task.sleep(ms) });
+      if (!current()) return;
+      this.apply({ type: "resolved", result: resolved });
+      task.notify();
+      if (!resolved.ok) return;
+      const client = createGcClient({ baseUrl: resolved.value.url, fetch: host.probeFetch().fetch });
+      const cities = client.ok ? await listCities(client.value) : client;
+      if (!current()) return;
+      this.apply({ type: "cities", result: cities });
+      task.notify();
+    } finally {
+      if (current()) {
+        this.active = false;
+        this.fetches = /* @__PURE__ */ new Set();
+      }
+    }
   }
   /** The person chose a city; an unpinned copy remembers it. */
   select(city) {
@@ -6559,12 +6694,98 @@ var DiscoveryController = class {
     const remembered = this.host.rememberCity(city);
     if (!remembered.ok) this.hostErrors = [...this.hostErrors, remembered.error].slice(-HOST_ERROR_LIMIT2);
   }
+  /** The host as one run sees it: nothing starts once the run is no longer current; every settled call is progress. */
+  guarded(current) {
+    const settled = (p) => p.finally(() => {
+      if (current()) this.progress++;
+    });
+    return {
+      settings: () => this.host.settings(),
+      gcStatus: (gcBin) => current() ? settled(this.host.gcStatus(gcBin)) : Promise.resolve(err({ kind: "exec", argv: [gcBin, ...GC_STATUS_ARGS], code: null, stderr: NOT_RUN })),
+      readSupervisorConfig: () => current() ? settled(this.host.readSupervisorConfig()) : Promise.resolve(err({ kind: "host-call", api: "readTextFile(supervisor.toml)", cause: NOT_RUN })),
+      fetch: this.host.fetch,
+      probeFetch: () => {
+        const pf = this.host.probeFetch();
+        if (current()) this.fetches.add(pf);
+        const fetch2 = (url, init) => current() ? settled(pf.fetch(url, init)) : Promise.reject(droppedRejection(url));
+        return { fetch: fetch2, drop: () => pf.drop(), sent: settled(pf.sent) };
+      }
+    };
+  }
 };
 
 // src/probe.ts
 var PROBE_HEARTBEAT_MS = 5e3;
 var PROBE_WRITE_DEADLINE_MS = 5e3;
+var PROBE_MAX_BYTES = 1024 * 1024;
 var ERROR_LIMIT = 20;
+function utf8Bytes(text) {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 128) n += 1;
+    else if (c < 2048) n += 2;
+    else if (c >= 55296 && c <= 56319 && i + 1 < text.length && (text.charCodeAt(i + 1) & 64512) === 56320) {
+      n += 4;
+      i++;
+    } else n += 3;
+  }
+  return n;
+}
+function serialize(doc) {
+  return `${JSON.stringify(doc, null, 2)}
+`;
+}
+function half(list, keep = "first") {
+  const n = Math.floor(list.length / 2);
+  return keep === "first" ? list.slice(0, n) : list.slice(list.length - n);
+}
+function halveLists(b) {
+  return {
+    ...b,
+    sessions: half(b.sessions),
+    actions: half(b.actions),
+    exec_log: half(b.exec_log, "last"),
+    errors: half(b.errors),
+    board: b.board === null ? null : {
+      ...b.board,
+      ready: { ...b.board.ready, cards: half(b.board.ready.cards) },
+      in_progress: { ...b.board.in_progress, cards: half(b.board.in_progress.cards) },
+      closed: { ...b.board.closed, recent: half(b.board.closed.recent), earlier: half(b.board.closed.earlier) },
+      errors: half(b.board.errors)
+    }
+  };
+}
+function listsEmpty(b) {
+  const lists = [b.sessions, b.actions, b.exec_log, b.errors];
+  if (b.board) lists.push(b.board.ready.cards, b.board.in_progress.cards, b.board.closed.recent, b.board.closed.earlier, b.board.errors);
+  return lists.every((l) => l.length === 0);
+}
+function fitProbe(body, extra, limit = PROBE_MAX_BYTES) {
+  const whole = serialize({ ...body, ...extra });
+  if (utf8Bytes(whole) <= limit) return { text: whole, truncated: [] };
+  const truncated = [];
+  let b = body;
+  if (b.detail !== null && (b.detail.output !== null || b.detail.pending !== null)) {
+    b = { ...b, detail: { ...b.detail, output: null, pending: null } };
+    truncated.push("detail.output", "detail.pending");
+  }
+  if (b.bead_detail !== null && b.bead_detail.description !== null) {
+    b = { ...b, bead_detail: { ...b.bead_detail, description: null } };
+    truncated.push("bead_detail.description");
+  }
+  const sizes = (x) => `sessions ${x.sessions.length}, actions ${x.actions.length}, exec_log ${x.exec_log.length}, errors ${x.errors.length}`;
+  const before = sizes(b);
+  for (let halvings = 0; ; halvings++) {
+    const notes = halvings === 0 ? truncated : [...truncated, `every list halved ${halvings} times (${before} -> ${sizes(b)})`];
+    const text = serialize({ ...b, truncated: notes, ...extra });
+    if (utf8Bytes(text) <= limit) return { text, truncated: notes };
+    if (listsEmpty(b)) break;
+    b = halveLists(b);
+  }
+  const all = [...truncated, "everything but the schema and versions"];
+  return { text: serialize({ schema: body.schema, mod_version: body.mod_version, herdr_version: body.herdr_version, truncated: all, ...extra }), truncated: all };
+}
 var ProbeWriter = class {
   constructor(io) {
     this.io = io;
@@ -6578,41 +6799,91 @@ var ProbeWriter = class {
   lastWriteAt = -Infinity;
   seq = 0;
   failures = [];
-  /** Recent write failures, oldest first. */
+  /** The copy whose documents are written, while the probe is on. */
+  owner = null;
+  /** The probe is off and the file is known to be absent or empty. */
+  cleared = false;
+  /** What the last cut-down document lost ("" when the last write was whole). */
+  lastCut = "";
+  /** Recent write failures and cut-down documents, oldest first. */
   errors() {
     return this.failures;
   }
-  /** Called from a copy's own tick: writes `body` if the probe is on and the document changed or a heartbeat is due. */
-  offer(body, now, enabled) {
-    if (!enabled) return;
-    if (this.inFlight) {
-      if (now - this.inFlight.startedAt < PROBE_WRITE_DEADLINE_MS) return;
-      this.fail(now, { kind: "host-call", api: `writeTextFile(${this.io.path()})`, cause: `no answer within ${PROBE_WRITE_DEADLINE_MS} ms` });
-      this.inFlight = null;
-    }
+  /**
+   * Called from a copy's own tick while the probe is on: writes `body` if
+   * `owner` owns the file (or nobody does) and the document changed or a
+   * heartbeat is due.
+   */
+  offer(owner, body, now) {
+    if (this.busy(now)) return;
+    if (this.owner !== null && this.owner !== owner) return;
+    this.owner = owner;
+    this.cleared = false;
     const json = JSON.stringify(body);
     if (json === this.lastBody && now - this.lastWriteAt < PROBE_HEARTBEAT_MS) return;
+    const fitted = fitProbe(body, { seq: ++this.seq, ts: new Date(now).toISOString() });
+    const cut = fitted.truncated.join("; ");
+    if (cut !== "" && cut !== this.lastCut) {
+      this.record(now, { kind: "probe-truncated", limitBytes: PROBE_MAX_BYTES, dropped: fitted.truncated });
+    }
+    this.lastCut = cut;
+    this.swap(now, () => fitted.text, (text) => {
+      this.expected = text;
+      this.lastBody = json;
+      this.lastWriteAt = now;
+    });
+  }
+  /** Called from a copy's own tick while the probe is off: empties a file that still holds a document. */
+  off(now) {
+    this.owner = null;
+    this.lastBody = null;
+    this.lastCut = "";
+    if (this.cleared || this.busy(now)) return;
+    this.swap(now, (current) => current === null || current === "" ? null : "", (text) => {
+      this.expected = text;
+      this.cleared = true;
+    });
+  }
+  /** The copy closes: it no longer owns the file (the next copy to offer takes over). Starts nothing. */
+  release(owner) {
+    if (this.owner === owner) this.owner = null;
+  }
+  /** A write is in flight (one with no answer by the deadline is given up and recorded). */
+  busy(now) {
+    if (!this.inFlight) return false;
+    if (now - this.inFlight.startedAt < PROBE_WRITE_DEADLINE_MS) return true;
+    this.fail(now, { kind: "host-call", api: `writeTextFile(${this.io.path()})`, cause: `no answer within ${PROBE_WRITE_DEADLINE_MS} ms` });
+    this.inFlight = null;
+    return false;
+  }
+  /**
+   * One compare-and-swap: `next` gets what the file holds and returns the text
+   * to write, or null to leave it as it is; `done` gets what the file holds after.
+   */
+  swap(now, next, done) {
     const token = ++this.tokens;
     this.inFlight = { token, startedAt: now };
-    const text = `${JSON.stringify({ ...body, seq: ++this.seq, ts: new Date(now).toISOString() }, null, 2)}
-`;
     const path = this.io.path();
     const known = this.expected;
-    const expected = known === void 0 ? this.io.read(path) : Promise.resolve({ ok: true, value: known });
-    void expected.then((r) => r.ok ? this.io.write(path, text, r.value) : r).then((r) => {
+    const current = known === void 0 ? this.io.read(path) : Promise.resolve(ok(known));
+    void current.then(async (r) => {
+      if (!r.ok) return r;
+      const text = next(r.value);
+      if (text === null) return ok(r.value);
+      const w = await this.io.write(path, text, r.value);
+      return w.ok ? ok(text) : w;
+    }).then((r) => {
       if (this.inFlight?.token !== token) return;
       this.inFlight = null;
-      if (r.ok) {
-        this.expected = text;
-        this.lastBody = json;
-        this.lastWriteAt = now;
-      } else {
-        this.fail(now, r.error);
-      }
+      if (r.ok) done(r.value);
+      else this.fail(now, r.error);
     });
   }
   fail(at2, error) {
     this.expected = void 0;
+    this.record(at2, error);
+  }
+  record(at2, error) {
     this.failures = [...this.failures, { at: at2, source: "probe", error }].slice(-ERROR_LIMIT);
   }
 };
@@ -6933,12 +7204,23 @@ var SyncRegistry = class {
    */
   probeFetch() {
     const group = {};
+    let markSent;
+    const sent = new Promise((resolve) => {
+      markSent = resolve;
+    });
     return {
-      fetch: (url, init) => this.budget.fetchFor(originOf2(url), "snapshot", group)(url, init),
-      drop: () => {
-        this.budget.dropQueued(group);
-      }
+      fetch: (url, init) => this.budget.fetchFor(originOf2(url), "snapshot", group, markSent)(url, init),
+      drop: () => this.budget.dropQueued(group),
+      sent
     };
+  }
+  /**
+   * Frees fetch slots herdr can no longer settle (their copy closed) and
+   * starts what fits; call from a copy's own tick, so a queued request
+   * (discovery's) starts in a live copy's turn even with no city subscribed.
+   */
+  reclaim() {
+    this.budget.reclaim();
   }
   /** Sets the app-wide "a gascity view may be on screen" (visibility.ts) for every store. */
   setOnScreen(onScreen) {
@@ -7038,6 +7320,38 @@ var shared3 = null;
 function sharedRegistry(create) {
   shared3 ??= create();
   return shared3;
+}
+
+// src/sync/visibilityCache.ts
+var VISIBILITY_MAX_AGE_MS = 1e3;
+var VisibilityCache = class {
+  constructor(read) {
+    this.read = read;
+  }
+  read;
+  last = null;
+  stale = false;
+  /** The answer at `now`: the shared one while it is current, else a new read. */
+  get(now) {
+    const last = this.last;
+    if (last !== null) {
+      const age = now - last.at;
+      if (age >= 0 && (age < TICK_MS || !this.stale && age < VISIBILITY_MAX_AGE_MS)) return last.value;
+    }
+    const value = this.read();
+    this.last = { at: now, value };
+    this.stale = false;
+    return value;
+  }
+  /** herdr re-rendered a copy: its live data may have changed, so read again at the next tick window. */
+  invalidate() {
+    this.stale = true;
+  }
+};
+var shared4 = null;
+function sharedVisibilityCache(create) {
+  shared4 ??= create();
+  return shared4;
 }
 
 // src/view/panel.ts
@@ -7478,6 +7792,9 @@ function registry2() {
     onError: (key, entry) => logError(`gascity: ${key.city}: ${entry.source}: ${syncErrorText(entry.error)}`)
   }));
 }
+function visibility() {
+  return sharedVisibilityCache(() => new VisibilityCache(readVisibility));
+}
 function taskOf(task) {
   return { notify: () => task.notify(), sleep: (ms) => task.sleep(ms) };
 }
@@ -7500,7 +7817,7 @@ function setUp() {
   const copy = new CopyController({
     registry: reg,
     discovery,
-    host: { visibility: readVisibility, probeEnabled: readProbeEnabled, herdrVersion: readHerdrVersion, execLog: readExecLog },
+    host: { visibility: () => visibility().get(systemClock.now()), probeEnabled: readProbeEnabled, herdrVersion: readHerdrVersion, execLog: readExecLog },
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo))
   });
@@ -7658,13 +7975,14 @@ var GasCity = class extends View {
     this.inputs = inputsFor(state.copy);
     cx.spawn((task) => state.copy.discover(taskOf(task)));
     cx.timer.every(TICK_MS, (tcx) => {
-      if (state.copy.tick()) tcx.notify();
+      if (state.copy.tick((body) => tcx.spawn((task) => body(taskOf(task))))) tcx.notify();
     });
   }
   close(_cx) {
     if (this.state.kind === "ready") this.state.copy.close();
   }
   render(_cx) {
+    visibility().invalidate();
     const state = this.state;
     if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme2 = readTheme();
