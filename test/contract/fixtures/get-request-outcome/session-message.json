@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/request/req-4373eba793a309d0249712ff",
+    "query": "after_seq=266"
+  },
+  "status": 200,
+  "body": {
+    "request_id": "req-4373eba793a309d0249712ff",
+    "operation": "session.message",
+    "state": "succeeded",
+    "event": {
+      "seq": 269,
+      "type": "request.result.session.message",
+      "ts": "2026-11-09T06:24:49.109475642Z",
+      "actor": "api",
+      "subject": "sc-20",
+      "payload": {
+        "request_id": "req-4373eba793a309d0249712ff",
+        "session_id": "sc-20",
+        "queued": false
+      }
+    }
+  }
+}

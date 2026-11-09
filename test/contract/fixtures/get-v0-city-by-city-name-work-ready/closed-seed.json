@@ -1,0 +1,439 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/work/ready",
+    "query": "status=closed&sort=newest&limit=20"
+  },
+  "status": 200,
+  "body": {
+    "items": [
+      {
+        "id": "sc-74",
+        "title": "recorder bead mw8vmef1",
+        "status": "closed",
+        "issue_type": "task",
+        "priority": 2,
+        "created_at": "2026-11-09T06:24:47.530735668Z",
+        "updated_at": "2026-11-09T06:24:47.567207679Z",
+        "description": "recorded for the herdr-gascity contract fixtures",
+        "metadata": {
+          "close_reason": "recorded mw8vmef1",
+          "gc.routed_to": "worker"
+        },
+        "close_reason": "recorded mw8vmef1"
+      },
+      {
+        "id": "sc-73",
+        "title": "order:gate-sweep",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:38.226858805Z",
+        "updated_at": "2026-11-09T06:24:39.014496849Z",
+        "labels": [
+          "order-run:gate-sweep",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-72",
+        "title": "order:beads-health",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:37.224389569Z",
+        "updated_at": "2026-11-09T06:24:37.406468979Z",
+        "labels": [
+          "order-run:beads-health",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-71",
+        "title": "order:nudge-on-route",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:33.22799602Z",
+        "updated_at": "2026-11-09T06:24:33.495645287Z",
+        "labels": [
+          "order-run:nudge-on-route",
+          "order-tracking",
+          "order:nudge-on-route",
+          "seq:227",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-70",
+        "title": "order:nudge-on-route",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:10.502530251Z",
+        "updated_at": "2026-11-09T06:24:10.800406031Z",
+        "labels": [
+          "order-run:nudge-on-route",
+          "order-tracking",
+          "order:nudge-on-route",
+          "seq:219",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-69",
+        "title": "order:nudge-on-route",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:09.523724155Z",
+        "updated_at": "2026-11-09T06:24:09.957184444Z",
+        "labels": [
+          "order-run:nudge-on-route",
+          "order-tracking",
+          "order:nudge-on-route",
+          "seq:215",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-68",
+        "title": "order:nudge-on-route",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:07.574069029Z",
+        "updated_at": "2026-11-09T06:24:08.132994045Z",
+        "labels": [
+          "order-run:nudge-on-route",
+          "order-tracking",
+          "order:nudge-on-route",
+          "seq:208",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-67",
+        "title": "order:gate-sweep",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:07.541899543Z",
+        "updated_at": "2026-11-09T06:24:09.464887469Z",
+        "labels": [
+          "order-run:gate-sweep",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-66",
+        "title": "order:cascade-nudge-on-blocker-close",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:07.539848923Z",
+        "updated_at": "2026-11-09T06:24:09.753970229Z",
+        "labels": [
+          "order-run:cascade-nudge-on-blocker-close",
+          "order-tracking",
+          "order:cascade-nudge-on-blocker-close",
+          "seq:206",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-65",
+        "title": "order:nudge-on-route",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:06.9205618Z",
+        "updated_at": "2026-11-09T06:24:07.51154902Z",
+        "labels": [
+          "order-run:nudge-on-route",
+          "order-tracking",
+          "order:nudge-on-route",
+          "seq:177",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-64",
+        "title": "order:beads-health",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:06.379212758Z",
+        "updated_at": "2026-11-09T06:24:06.79414995Z",
+        "labels": [
+          "order-run:beads-health",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-63",
+        "title": "order:nudge-on-route",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:05.717030517Z",
+        "updated_at": "2026-11-09T06:24:06.36263185Z",
+        "labels": [
+          "order-run:nudge-on-route",
+          "order-tracking",
+          "order:nudge-on-route",
+          "seq:168",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-62",
+        "title": "order:notify-on-human-gate-creation",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:05.712750888Z",
+        "updated_at": "2026-11-09T06:24:06.483108684Z",
+        "labels": [
+          "order-run:notify-on-human-gate-creation",
+          "order-tracking",
+          "order:notify-on-human-gate-creation",
+          "seq:167",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-61",
+        "title": "order:cascade-nudge-on-blocker-close",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:05.707709165Z",
+        "updated_at": "2026-11-09T06:24:07.152958383Z",
+        "labels": [
+          "order-run:cascade-nudge-on-blocker-close",
+          "order-tracking",
+          "order:cascade-nudge-on-blocker-close",
+          "seq:166",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-60",
+        "title": "recorder session",
+        "status": "closed",
+        "issue_type": "session",
+        "created_at": "2026-11-09T06:24:05.482535672Z",
+        "updated_at": "2026-11-09T06:24:32.578486843Z",
+        "labels": [
+          "gc:session",
+          "template:worker"
+        ],
+        "metadata": {
+          "agent_name": "rec-mw8vlhxl",
+          "alias": "rec-mw8vlhxl",
+          "awake_started_at": "2026-11-09T06:24:06.900339411Z",
+          "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
+          "continuation_epoch": "1",
+          "continuation_reset_pending": "",
+          "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+          "creation_complete_at": "2026-11-09T06:24:06Z",
+          "detached_at": "",
+          "effective_sleep_after_idle": "off",
+          "generation": "2",
+          "instance_token": "4aee5b022f38e7d438215fdf972c99ba",
+          "last_woke_at": "",
+          "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
+          "pending_create_claim": "",
+          "pending_create_started_at": "",
+          "pin_awake": "",
+          "primed_at": "2026-11-09T06:24:06Z",
+          "prompt_hash": "c18fd7a046cc6670f8d2a2dce5a7610aa6f402c6ddae30b7dc6692e305a860fa",
+          "provider": "sh",
+          "requested_sleep_after_idle": "off",
+          "reset_committed_at": "",
+          "resume_command": "",
+          "resume_flag": "",
+          "resume_style": "",
+          "runtime_lease_epoch": "3",
+          "runtime_lease_expires_at": "",
+          "runtime_lease_flock": "",
+          "runtime_lease_holder": "",
+          "runtime_lease_ttl": "",
+          "session_id_flag": "",
+          "session_name": "s-sc-60",
+          "session_origin": "manual",
+          "sleep_capability": "timed_only",
+          "sleep_policy_fingerprint": "value=off|class=interactive_resume|source=legacy_off|wake=resume|cap=timed_only|deps=|template=worker",
+          "sleep_policy_source": "legacy_off",
+          "sleep_reason": "killed",
+          "slept_at": "2026-11-09T06:24:07Z",
+          "started_config_hash": "v7:17cb1b0ea9cf323be1fe8248a2ed600ee0b0c61f09f0ef2f492ccfd61b6edb6c",
+          "started_launch_hash": "v7:30d190a917d08cd66dc00a2e629a809f72618935a56fab0f4663db744159f358",
+          "started_live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
+          "started_provision_hash": "v7:8433eeeecd7db4801a9defdf754f8eb455cfc98235070d154f08147163fca9e7",
+          "state": "asleep",
+          "state_reason": "",
+          "synced_at": "2026-11-09T06:24:07Z",
+          "template": "worker",
+          "usage_close_pending": "",
+          "usage_closed_at": "",
+          "usage_closed_awake_started_at": "",
+          "usage_closed_session_key": "",
+          "usage_compute_emitted_at": "2026-11-09T06:24:06.900339411Z",
+          "usage_model_swept_at": "2026-11-09T06:24:06.900339411Z",
+          "wake_request": "",
+          "wake_requested_at": "",
+          "work_dir": "/tmp/m1-city/city/.gc/worktrees/rec-mw8vlhxl"
+        },
+        "no_history": true
+      },
+      {
+        "id": "sc-57",
+        "title": "order:order-tracking-sweep",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:24:02.233536833Z",
+        "updated_at": "2026-11-09T06:24:02.713660307Z",
+        "labels": [
+          "order-run:order-tracking-sweep",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-56",
+        "title": "order:gate-sweep",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:23:37.224789832Z",
+        "updated_at": "2026-11-09T06:23:37.836931034Z",
+        "labels": [
+          "order-run:gate-sweep",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-55",
+        "title": "order:beads-health",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:23:36.240285253Z",
+        "updated_at": "2026-11-09T06:23:36.430127815Z",
+        "labels": [
+          "order-run:beads-health",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-54",
+        "title": "order:gate-sweep",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:23:06.223661089Z",
+        "updated_at": "2026-11-09T06:23:06.826206941Z",
+        "labels": [
+          "order-run:gate-sweep",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      },
+      {
+        "id": "sc-53",
+        "title": "order:beads-health",
+        "status": "closed",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:23:05.221864973Z",
+        "updated_at": "2026-11-09T06:23:05.453064566Z",
+        "labels": [
+          "order-run:beads-health",
+          "order-tracking",
+          "exec"
+        ],
+        "metadata": {
+          "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+        },
+        "no_history": true,
+        "close_reason": "order dispatch completed: tracking bead lifecycle finished"
+      }
+    ]
+  }
+}

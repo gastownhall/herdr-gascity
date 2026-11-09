@@ -1,0 +1,11 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/session/sc-20/pending",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "supported": false
+  }
+}

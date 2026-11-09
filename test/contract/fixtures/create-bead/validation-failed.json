@@ -1,0 +1,27 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/beads",
+    "query": "",
+    "body": {
+      "description": "no title"
+    }
+  },
+  "status": 422,
+  "body": {
+    "type": "urn:gascity:error:validation-failed",
+    "title": "Validation Failed",
+    "status": 422,
+    "detail": "validation failed",
+    "errors": [
+      {
+        "message": "expected required property title to be present",
+        "location": "body",
+        "value": {
+          "description": "no title"
+        }
+      }
+    ],
+    "code": "validation-failed"
+  }
+}

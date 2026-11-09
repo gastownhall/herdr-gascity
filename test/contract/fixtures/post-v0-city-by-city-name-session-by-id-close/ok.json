@@ -1,0 +1,11 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/rec-mw8vmef1/close",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "status": "ok"
+  }
+}

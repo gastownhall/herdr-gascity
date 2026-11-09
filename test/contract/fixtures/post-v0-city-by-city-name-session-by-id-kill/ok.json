@@ -1,0 +1,12 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/rec-mw8vmef1/kill",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "status": "ok",
+    "id": "sc-76"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/work/ready",
+    "query": "status=in_progress&limit=50"
+  },
+  "status": 200,
+  "body": {
+    "items": []
+  }
+}

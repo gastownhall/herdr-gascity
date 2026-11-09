@@ -1,0 +1,94 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/agents",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "items": [
+      {
+        "name": "core.control-dispatcher",
+        "description": "Deterministic compiler-v2 workflow control worker",
+        "running": false,
+        "suspended": false,
+        "pool_limits": {
+          "min": 0,
+          "max": 1
+        },
+        "pack_derived": true,
+        "pack": "core",
+        "state": "stopped",
+        "available": true
+      },
+      {
+        "name": "frontend/core.control-dispatcher",
+        "description": "Deterministic compiler-v2 workflow control worker",
+        "running": false,
+        "suspended": false,
+        "rig": "frontend",
+        "pool_limits": {
+          "min": 0,
+          "max": 1
+        },
+        "pack_derived": true,
+        "pack": "core",
+        "state": "stopped",
+        "available": true
+      },
+      {
+        "name": "worker",
+        "running": true,
+        "suspended": false,
+        "pool": "worker",
+        "pool_limits": {
+          "min": 0,
+          "max": -1
+        },
+        "session": {
+          "name": "worker",
+          "attached": false
+        },
+        "pack_derived": true,
+        "state": "idle",
+        "available": true
+      },
+      {
+        "name": "worker-adhoc-88210e2896",
+        "running": true,
+        "suspended": false,
+        "pool": "worker",
+        "pool_limits": {
+          "min": 0,
+          "max": -1
+        },
+        "session": {
+          "name": "worker-adhoc-88210e2896",
+          "attached": false
+        },
+        "pack_derived": true,
+        "state": "idle",
+        "available": true
+      },
+      {
+        "name": "frontend/builder",
+        "running": true,
+        "suspended": false,
+        "rig": "frontend",
+        "pool": "frontend/builder",
+        "pool_limits": {
+          "min": 0,
+          "max": -1
+        },
+        "session": {
+          "name": "frontend--builder",
+          "attached": false
+        },
+        "pack_derived": true,
+        "state": "idle",
+        "available": true
+      }
+    ],
+    "total": 5
+  }
+}

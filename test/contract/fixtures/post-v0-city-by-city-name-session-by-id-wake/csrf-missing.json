@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/sc-20/wake",
+    "query": ""
+  },
+  "status": 403,
+  "body": {
+    "title": "Forbidden",
+    "status": 403,
+    "detail": "csrf: X-GC-Request header required on mutation endpoints"
+  }
+}

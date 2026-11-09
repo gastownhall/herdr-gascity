@@ -1,0 +1,83 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/sessions",
+    "query": "limit=500"
+  },
+  "status": 200,
+  "body": {
+    "items": [
+      {
+        "id": "sc-20",
+        "kind": "agent",
+        "template": "worker",
+        "state": "active",
+        "title": "adhoc worker",
+        "alias": "worker-adhoc-88210e2896",
+        "agent_name": "worker-adhoc-88210e2896",
+        "provider": "sh",
+        "display_name": "Sh",
+        "session_name": "worker-adhoc-88210e2896",
+        "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896",
+        "created_at": "2026-11-09T06:18:23Z",
+        "attached": false,
+        "pool": "worker",
+        "agent_kind": "pool",
+        "running": true,
+        "submission_capabilities": {
+          "supports_follow_up": true,
+          "supports_interrupt_now": true,
+          "supports_steer": false
+        }
+      },
+      {
+        "id": "sc-6",
+        "kind": "agent",
+        "template": "frontend/builder",
+        "state": "active",
+        "title": "frontend/builder",
+        "alias": "frontend/builder",
+        "agent_name": "frontend/builder",
+        "provider": "",
+        "session_name": "frontend--builder",
+        "work_dir": "/tmp/m1-city/rig",
+        "created_at": "2026-11-09T06:17:56Z",
+        "attached": false,
+        "rig": "frontend",
+        "pool": "builder",
+        "agent_kind": "pool",
+        "running": true,
+        "submission_capabilities": {
+          "supports_follow_up": true,
+          "supports_interrupt_now": true,
+          "supports_steer": false
+        },
+        "configured_named_session": true
+      },
+      {
+        "id": "sc-5",
+        "kind": "agent",
+        "template": "worker",
+        "state": "active",
+        "title": "worker",
+        "alias": "worker",
+        "agent_name": "worker",
+        "provider": "",
+        "session_name": "worker",
+        "work_dir": "/tmp/m1-city/city",
+        "created_at": "2026-11-09T06:17:56Z",
+        "attached": false,
+        "pool": "worker",
+        "agent_kind": "pool",
+        "running": true,
+        "submission_capabilities": {
+          "supports_follow_up": true,
+          "supports_interrupt_now": true,
+          "supports_steer": false
+        },
+        "configured_named_session": true
+      }
+    ],
+    "total": 3
+  }
+}

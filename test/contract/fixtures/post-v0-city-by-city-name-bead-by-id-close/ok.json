@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/bead/sc-74/close",
+    "query": "",
+    "body": {
+      "reason": "recorded mw8vmef1"
+    }
+  },
+  "status": 200,
+  "body": {
+    "status": "closed"
+  }
+}

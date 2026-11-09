@@ -5,7 +5,7 @@
 // The header names the package version and a sha256 digest of the git-tracked
 // build inputs. It cannot name the git commit: the bundle is part of that commit.
 
-import { build } from "esbuild";
+import { build, type BuildOptions } from "esbuild";
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -49,25 +49,36 @@ function header(version: string, digest: string): string {
   ].join("\n");
 }
 
+/**
+ * The esbuild options of the mod bundle: one readable ES module for herdr's
+ * QuickJS engine. Shared with the engine-parity probe (test/engine), so that
+ * probe runs code bundled exactly like the mod.
+ */
+export const BUNDLE_OPTIONS = {
+  bundle: true,
+  write: false,
+  format: "esm",
+  platform: "neutral",
+  mainFields: ["module", "main"],
+  target: "es2022",
+  external: [...HOST_MODULES],
+  minify: false,
+  sourcemap: false,
+  legalComments: "eof",
+  charset: "utf8",
+  logLevel: "silent",
+} as const satisfies BuildOptions;
+
 /** Builds the bundle in memory and returns its text. */
 export async function buildBundle(root: string = ROOT): Promise<string> {
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { version: string };
   const result = await build({
+    ...BUNDLE_OPTIONS,
+    external: [...HOST_MODULES],
+    mainFields: [...BUNDLE_OPTIONS.mainFields],
     absWorkingDir: root,
     entryPoints: [ENTRY],
     outfile: BUNDLE_FILE,
-    bundle: true,
-    write: false,
-    format: "esm",
-    platform: "neutral",
-    mainFields: ["module", "main"],
-    target: "es2022",
-    external: [...HOST_MODULES],
-    minify: false,
-    sourcemap: false,
-    legalComments: "eof",
-    charset: "utf8",
-    logLevel: "silent",
     banner: { js: header(pkg.version, digestOf(await inputEntries(root))) },
   });
   const [file, ...rest] = result.outputFiles;

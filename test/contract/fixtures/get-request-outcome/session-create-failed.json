@@ -1,0 +1,25 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/request/req-656b5b1151c6ab7709f776ef",
+    "query": "after_seq=261"
+  },
+  "status": 200,
+  "body": {
+    "request_id": "req-656b5b1151c6ab7709f776ef",
+    "operation": "session.create",
+    "state": "failed",
+    "event": {
+      "seq": 263,
+      "type": "request.failed",
+      "ts": "2026-11-09T06:24:49.102434895Z",
+      "actor": "api",
+      "payload": {
+        "request_id": "req-656b5b1151c6ab7709f776ef",
+        "operation": "session.create",
+        "error_code": "create_failed",
+        "error_message": "session alias already exists: \"worker\" conflicts with session name on sc-5"
+      }
+    }
+  }
+}

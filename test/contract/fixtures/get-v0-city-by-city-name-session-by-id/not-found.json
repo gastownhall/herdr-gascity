@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/session/no-such-session-mw8vmef1",
+    "query": ""
+  },
+  "status": 404,
+  "body": {
+    "type": "urn:gascity:error:session-not-found",
+    "title": "Session Not Found",
+    "status": 404,
+    "detail": "not_found: session not found: \"no-such-session-mw8vmef1\"",
+    "code": "session-not-found"
+  }
+}
