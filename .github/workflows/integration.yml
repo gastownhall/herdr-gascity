@@ -10,6 +10,9 @@ name: Integration
 # Separate from CI's unit job (`bun run ci`): it needs gc, tmux and a few
 # minutes. It runs on every push and pull request that touches the mod, the
 # harness or the pin.
+#
+# No caches: the job builds and runs gc from the commit api/PIN names, so it
+# neither restores nor saves Go or bun caches another run could read.
 
 on:
   push:
@@ -26,7 +29,6 @@ on:
       - ".github/workflows/integration.yml"
   pull_request:
     paths: *paths
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -66,7 +68,7 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: gascity-src/go.mod
-          cache-dependency-path: gascity-src/go.sum
+          cache: false
 
       - name: Install tmux and ICU headers (gc links ICU)
         timeout-minutes: 5
@@ -84,6 +86,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
+          no-cache: true
 
       - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
