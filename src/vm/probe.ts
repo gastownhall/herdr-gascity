@@ -3,6 +3,7 @@
 // (src/probe.ts) adds `seq` and `ts` and writes it.
 
 import type { CityMachine } from "../discovery/city.ts";
+import type { ActivityModel } from "./activity.ts";
 import type { AgentsModel, SessionRow } from "./agents.ts";
 import type { BeadCard, BeadDetailModel, BoardModel, ClosedCard } from "./board.ts";
 import { cleanLine } from "./sanitize.ts";
@@ -33,6 +34,8 @@ export interface ProbeInput {
   board: BoardModel | null;
   beadDetail: BeadDetailModel;
   detail: DetailModel;
+  /** The city's activity log (null without a running city). */
+  activity: ActivityModel | null;
   diagnostics: readonly DiagnosticLine[];
   execLog: readonly ExecRecord[];
   refreshCount: number;
@@ -50,6 +53,17 @@ export interface ProbeSession {
   status_source: string;
   attached: boolean;
   active_bead: string | null;
+}
+
+/** One action as the probe shows it. */
+export interface ProbeAction {
+  id: number;
+  action: string;
+  title: string;
+  state: string;
+  detail: string;
+  request_id: string | null;
+  attempt: number;
 }
 
 export interface ProbeColumn {
@@ -94,7 +108,8 @@ export interface ProbeBody {
     wake_reasons: string;
     pending: unknown;
   };
-  actions: never[];
+  /** The city's actions, newest first, with their state and gc's request id. */
+  actions: ProbeAction[];
   exec_log: { at: number; kind: string; argv: string[] }[];
   errors: DiagnosticLine[];
   refresh_count: number;
@@ -172,9 +187,14 @@ export function probeDocument(input: ProbeInput): ProbeBody {
       status: detail.status.label,
       output: detail.output.text,
       wake_reasons: detail.wakeReasons,
-      pending: detail.pending,
+      // The cleaned prompt the pane shows; the raw answer values stay out of the file.
+      pending: detail.pending.kind === "prompt"
+        ? { kind: "prompt", requestId: detail.pending.requestId, promptKind: detail.pending.promptKind, prompt: detail.pending.prompt, options: detail.pending.options }
+        : detail.pending,
     },
-    actions: [],
+    actions: (input.activity?.rows ?? []).map((r) => ({
+      id: r.id, action: r.kind, title: r.title, state: r.tone, detail: r.detail, request_id: r.requestId, attempt: r.attempt,
+    })),
     exec_log: input.execLog.map((e) => ({ at: e.at, kind: e.kind, argv: [...e.argv] })),
     errors: [...input.diagnostics],
     refresh_count: input.refreshCount,

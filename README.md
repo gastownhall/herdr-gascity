@@ -3,11 +3,14 @@
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
 **Status: scaffold, gc client, discovery, sync engine, agents panel, work
-board.** The mod finds the gc API, lists the cities, and shows the copy's
-city: its connection state, its rigs, agents and sessions with live status,
-pending prompts and active beads, a detail pane for one session, and the work
-board (ready, in progress, recently closed) with a detail pane for one bead.
-It only reads; actions (answer, send, wake, open a terminal, sling, close)
+board, session actions.** The mod finds the gc API, lists the cities, and
+shows the copy's city: its connection state, its rigs, agents and sessions
+with live status, pending prompts and active beads, a detail pane for one
+session, and the work board (ready, in progress, recently closed) with a
+detail pane for one bead. It acts on sessions, agents and rigs through gc's
+API (start, wake, suspend, stop the turn, close, kill, pin, send input,
+answer a prompt, suspend and resume agents and rigs) and shows every
+action's outcome. Opening a terminal and work actions (sling, close a bead)
 come next.
 
 ## Layout
@@ -18,6 +21,7 @@ come next.
 | `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
 | `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `board.ts` (the work board and bead detail), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
+| `src/actions/` | The person's actions: `session.ts`, `agent.ts`, `rig.ts` (one gc API call each), `activity.ts` (what an action is and the states it goes through), `outcome.ts` (the ledger that sends them and follows their outcomes). |
 | `src/sync/` | The sync engine: one shared store per gc city per app, its poll loop, the event watcher, the fetch budget, backoff, visibility and staleness (see below). |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
@@ -44,15 +48,28 @@ come next.
   `herdr.run` and `herdr.exec` are called directly with a string-literal first
   argument from an allowlist: `tab.new`, `tab.select` and `mod.open`, and
   the programs `xdg-open` and `open`. The one exception, listed in the lint's
-  `ALLOWLIST` by its exact text, is discovery's
+  `ALLOWLIST` by its exact text (which must occur exactly once), is discovery's
   `<gcBin> supervisor status --json` (fixed arguments; `src/host.ts` refuses a
   `gcBin` that does not name `gc` before spawning). The mod imports nothing but `gpui-kit`,
   `gpui-base`, `herdr`, zod and its own modules. It does not use the host's
   `process` (whose `run` spawns programs).
 - **No code compiled at run time.** There is no `eval`, no `Function`
-  constructor in any spelling (including `x.constructor(...)` and
-  `Reflect.construct`), and no dynamic import. zod is imported only through
-  `src/gc/zod.ts`, which must call `z.config({ jitless: true })`.
+  identifier, no `Reflect.construct`, and no dynamic import. Every read of
+  `.constructor` (the way to `Function`, `AsyncFunction` and their kin
+  without naming them) is refused, whether called, aliased
+  (`const F = f.constructor`), passed on (`Reflect.apply(f.constructor, …)`,
+  `.call`, `.bind`), destructured (`const { constructor: F } = f`) or read by
+  key (`Reflect.get(f, "constructor")`); only `.constructor.name`,
+  `.constructor.prototype` and `===`/`!==` comparisons are allowed.
+  **Known limit:** the lint reads syntax, so a key computed at run time gets
+  past it (`const k = "constructor"; f[k](…)`, `globalThis["Func" + "tion"]`,
+  scanning property descriptors, `Reflect.get` with a variable key). These are
+  left to review and to the runtime check: the engine-parity probe runs the
+  client, the sync engine and the action paths in QuickJS with `Function`,
+  `eval` and every function prototype's `constructor` replaced by traps, and
+  fails if any trap is hit.
+  zod is imported only through `src/gc/zod.ts`, which must call
+  `z.config({ jitless: true })`.
 - **The bundle is the source.** `gascity/main.js` is unminified and must equal
   `bun run build` byte for byte, so a person or agent installing the mod can
   read what runs. Its header has a digest of the git-tracked build inputs, so
@@ -62,8 +79,11 @@ come next.
 `gascity/**/*.js` with the TypeScript parser, so comments never count. String
 literals are also scanned for `hc`/`tmux`/`bd` anywhere in a shell command
 and for the denied terminal commands. A hit is allowed only inside exact text
-listed in the lint's `ALLOWLIST`. An allowlist entry that matches nothing
-fails.
+listed in the lint's `ALLOWLIST`, and only when that text occurs exactly once
+in the file, so an entry pins one place: an identical call added elsewhere
+fails. An allowlist entry that matches nothing fails. The bundle's entries are
+discovery's `gc supervisor status` call and zod's plain-object check, which
+reads `o.constructor` only to compare it and read its prototype.
 
 ## The gc client
 
@@ -285,7 +305,8 @@ it unsubscribes and starts nothing; the other copies keep updating.
   (`gascity-herdr-probe/3`): connection, discovery, city, visibility,
   sessions with their status, the board (each column's cards, the closes
   seen in events with their seq and `close_reason`, the seed, the filter and
-  the columns' errors), the selected bead, the session detail, exec log,
+  the columns' errors), the selected bead, the session detail, actions with their state and
+  request id, exec log,
   errors and the budget high-water mark. It serializes the same view-models the panel draws. Writes
   are herdr's compare-and-swap, at most one in flight, on change or every
   5 s.
@@ -325,6 +346,57 @@ it adds no polling of its own.
   old its data is (event-driven columns are confirmed by each good event
   poll), keeps stale cards greyed with the error above them, and lists
   entries gc sent that cannot be read; every bead string is plain text.
+
+## Actions
+
+Every action is one gc API call; the mod never runs `hc`, `tmux` or `bd`
+and never ends or types into a terminal itself.
+
+- **Where.** The detail pane: Wake, Suspend, Stop turn, Pin, Unpin, Close…,
+  Kill… (with Force kill), a send box (Send, Interrupt and send when gc says
+  the session supports it, Send as message), and one answer button per option
+  gc lists for a pending prompt (gc's own words, sent back exactly as gc
+  listed them). Each answer button carries the prompt's request id and the
+  option it was drawn with; if gc's prompt has changed by the click, nothing
+  is sent and the panel asks to review it. Each agent row: New session… (an optional alias) and Suspend
+  agent… / Resume agent (rig-scoped agents use gc's own route). Each rig gc
+  lists: Suspend rig… / Resume rig. Actions marked `…` ask first: close,
+  kill, agent suspend and rig suspend say what gc will do and send nothing
+  until confirmed.
+- **Headers.** Every mutation carries `X-GC-Request`. `Idempotency-Key` (a
+  fresh UUID per action) goes only on the operations gc declares it on:
+  session create, submit, messages, respond, wake, suspend, stop, close and
+  kill. gc declares none on pin/unpin and agent/rig actions.
+- **Outcomes.** Each action shows in the activity log as pending, then done,
+  failed, outcome unknown or not sent, with gc's answer or reason and its request id.
+  A 202 (session create, submit, messages) is followed through gc's request
+  outcome endpoint (`after_seq` = the 202's `event_cursor`) at 0.5 s, 1 s,
+  2 s, then every 2 s; with no outcome after 120 s it is unknown. Submit and
+  message outcomes say whether gc delivered or queued the input; a created
+  session is named.
+- **Never retried automatically.** A mutation whose connection was lost,
+  whose 2xx answer could not be read, that was redirected, that gc answered
+  with a server error (any 5xx but 501, e.g. 503 `write_unconfirmed`, which
+  may have landed) or with 409 `idempotency-in-flight` (the same key is still
+  running) is outcome unknown, not failed: the mod refetches what it changes
+  and offers Retry only once a refetch that started after the outcome became
+  unknown has arrived, so the person sees the current state first. A retry
+  after an unknown outcome reuses the action's Idempotency-Key. gc keeps keys
+  in memory for 30 minutes and forgets them on restart, so the button
+  promises deduplication only within that; where gc declares no key the
+  button says the action may happen twice. Only a definite refusal (a 4xx, or
+  501) is failed, and its retry uses a new key. A destructive action asks
+  again on retry. An action already under way is not sent twice.
+- **herdr ownership.** An action is sent in the turn of the copy whose
+  button was clicked, and its outcome is polled from that copy's own timer.
+  The activity log is the city's, shared by every copy. If that copy closes
+  first: a request still queued in the fetch budget is dropped and shown as
+  not sent; one in flight is outcome unknown at once (its late answer is
+  ignored, nothing is resent); an accepted request's outcome is a read gc
+  serves by request id, so a surviving copy's timer takes over polling it.
+  Every step has a deadline, so an action never hangs as pending: a request
+  still queued 70 s after it was asked for is dropped and shown as not sent,
+  so it can never go out after being reported.
 
 ## Develop
 

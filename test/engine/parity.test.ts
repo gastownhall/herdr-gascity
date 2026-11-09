@@ -2,7 +2,8 @@
 // herdr-app runs mods in QuickJS (a quickjs-jit fork), not in
 // bun's JavaScriptCore. This test bundles test/engine/entry.ts with the mod's
 // own esbuild options and:
-//   1. lints that bundle with the authority lint and an empty allowlist:
+//   1. lints that bundle with the authority lint and no allowlist entry but
+//      the bundle's one constructor-read (zod's plain-object check):
 //      zod/mini's object schema has no JIT path, and with only the used
 //      builders re-exported esbuild drops zod's guarded `Function` sites
 //      (util.allowsEval, Doc.compile, compileFn) altogether;
@@ -69,6 +70,11 @@ interface SyncSummary {
   };
   beadDetail: { kind: string; id?: string; closeReason?: string | null; description?: string | null };
   sanitized: string[];
+  actions: { kind: string; state: string; attempt: number }[];
+  activity: [string, string, string][];
+  keyShapes: boolean[];
+  retryOk: boolean;
+  sameKeyRetry: boolean;
 }
 
 const probe = await bundleProbe();
@@ -156,9 +162,13 @@ async function runInBun(): Promise<string> {
 
 describe("the bundled gc client with zod, and the sync engine", () => {
   test("passes the authority lint with no allowlist: tree-shaken zod/mini keeps no Function site", () => {
-    // No allowlist entry may cover a code-compiling site; the probe is linted with none at all.
+    // No allowlist entry may cover a code-compiling site. The probe is linted
+    // with only the bundle's constructor-read entry (zod's plain-object check,
+    // matched by exact text, at most once): nothing else is allowed.
     expect(ALLOWLIST.filter((e) => e.rule === "function-constructor" || e.rule === "eval")).toEqual([]);
-    expect(lintSource("gascity/main.js", probe, [])).toEqual([]);
+    const reads = ALLOWLIST.filter((e) => e.rule === "constructor-read" && e.file === "gascity/main.js");
+    expect(reads).toHaveLength(1);
+    expect(lintSource("gascity/main.js", probe, reads).filter((v) => v.rule !== "stale-allowlist")).toEqual([]);
     expect(probe).toContain("config({ jitless: true });");
   });
 
@@ -189,6 +199,17 @@ describe("the bundled gc client with zod, and the sync engine", () => {
     expect(sync.board.closed.earlier.map((c) => c.id)).not.toContain("sc-60");
     expect(sync.board.hidden).toBe(2); // the session bead in the seed, and the session close
     expect(sync.beadDetail).toMatchObject({ kind: "bead", id: "sc-74", closeReason: "closed in the scenario", description: "recorded for the herdr-gascity contract fixtures" });
+    // actions: a 202 followed to "delivered", an answer, a 503 retried with the same key, and one whose copy went (unknown, not pending)
+    expect(sync.actions).toEqual([
+      { kind: "session.submit", state: "done", attempt: 1 },
+      { kind: "session.respond", state: "done", attempt: 1 },
+      { kind: "session.stop", state: "done", attempt: 2 },
+      { kind: "session.wake", state: "unknown", attempt: 1 },
+    ]);
+    expect(sync.activity[3]).toEqual(["Send · session sc-20", "done", "delivered"]);
+    expect(sync.retryOk).toBe(true);
+    expect(sync.sameKeyRetry).toBe(true);
+    expect(sync.keyShapes).toEqual([true, true, true, true, true]);
     expect(sync.sanitized).toEqual([
       "abcde f",
       "line\nnext",

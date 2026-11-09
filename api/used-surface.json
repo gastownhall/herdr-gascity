@@ -1,5 +1,5 @@
 {
-  "$comment": "The part of gc's API this mod uses. scripts/pin-gc-spec.ts prunes the pinned spec to these operations; scripts/gen-gc.ts generates types and zod schemas for exactly these models and fields. A model reached from an operation must be listed here; a listed field must exist in the pin. Only object schemas are listed; scalar schemas (enums) are inlined. Response models are decoded at run time; request models are TypeScript types only. payloadModels are decoded at run time from an untyped field (RequestFailedPayload is the payload of a request.failed event inside RequestOutcome.event; BeadEventPayload is the payload of bead.created/updated/closed/deleted events).",
+  "$comment": "The part of gc's API this mod uses. scripts/pin-gc-spec.ts prunes the pinned spec to these operations; scripts/gen-gc.ts generates types and zod schemas for exactly these models and fields. A model reached from an operation must be listed here; a listed field must exist in the pin. Only object schemas are listed; scalar schemas (enums) are inlined. Response models are decoded at run time; request models are TypeScript types only. payloadModels are decoded at run time from an untyped field (RequestFailedPayload is the payload of a request.failed event inside RequestOutcome.event; BeadEventPayload is the payload of bead.created/updated/closed/deleted events; the Session*SucceededPayload models are the payloads of the request.result.session.* events of a succeeded outcome).",
   "operations": {
     "get-health": "liveness, version and build id for compatibility checks",
     "get-v0-cities": "city list with running/status",
@@ -84,7 +84,11 @@
     "SessionStopBody": { "fields": ["turn"] },
     "SlingInputBody": { "fields": ["target", "bead"] },
     "BeadCreateInputBody": { "fields": ["title", "description", "priority", "labels", "type", "rig", "assignee"] },
-    "BeadCloseBody": { "fields": ["reason"] }
+    "BeadCloseBody": { "fields": ["reason"] },
+
+    "SessionCreateSucceededPayload": { "fields": ["request_id", "session"] },
+    "SessionSubmitSucceededPayload": { "fields": ["request_id", "session_id", "queued", "intent"] },
+    "SessionMessageSucceededPayload": { "fields": ["request_id", "session_id", "queued"] }
   },
-  "payloadModels": ["RequestFailedPayload", "BeadEventPayload"]
+  "payloadModels": ["RequestFailedPayload", "BeadEventPayload", "SessionCreateSucceededPayload", "SessionSubmitSucceededPayload", "SessionMessageSucceededPayload"]
 }

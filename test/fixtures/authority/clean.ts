@@ -16,6 +16,11 @@ export function idioms(n: number, d: Date, o: object): string {
   return `${n.toString()} ${d.valueOf()} ${has} ${o.constructor.name} ${typeof herdr.exec}`;
 }
 
+export function constructorChecks(a: object, b: object): boolean {
+  const proto = a.constructor.prototype;
+  return a.constructor === b.constructor || a.constructor !== Date || proto === undefined;
+}
+
 export class Child extends Error {
   constructor() {
     super("x");

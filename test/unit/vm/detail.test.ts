@@ -79,7 +79,33 @@ describe("detailModel", () => {
       now: NOW, selected: "s-1",
     });
     if (m.kind !== "session") throw new Error(m.kind);
-    expect(m.pending).toEqual({ kind: "prompt", requestId: "r-1", promptKind: "permission", prompt: "Run rm -rf build?", options: ["approve", "deny", "select:always"] });
+    expect(m.pending).toEqual({
+      kind: "prompt", requestId: "r-1", promptKind: "permission", prompt: "Run rm -rf build?", options: ["approve", "deny", "select:always"],
+      answer: { requestId: "r-1", options: ["approve", "deny", "select:always"] },
+    });
+  });
+
+  test("an answer sends gc's option exactly as gc listed it; the button shows it cleaned", () => {
+    const m = detailModel({
+      snapshot: snapshot({
+        sessions: slot(sessions([S1])),
+        details: details({ pending: slot({ supported: true, pending: { request_id: "r-2", kind: "question", options: ["select:\u001b[1mB"] } }) }),
+      }),
+      now: NOW, selected: "s-1",
+    });
+    if (m.kind !== "session" || m.pending.kind !== "prompt") throw new Error("no prompt");
+    expect(m.pending.options).toEqual(["select:B"]);
+    expect(m.pending.answer).toEqual({ requestId: "r-2", options: ["select:\u001b[1mB"] });
+  });
+
+  test("the session's raw id and whether it can be interrupted", () => {
+    const at = (x: typeof S1) => {
+      const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([x])) }), now: NOW, selected: x.id });
+      if (m.kind !== "session") throw new Error(m.kind);
+      return [m.ref, m.canInterrupt];
+    };
+    expect(at(S1)).toEqual(["s-1", false]);
+    expect(at({ ...S1, submission_capabilities: { supports_follow_up: true, supports_interrupt_now: true, supports_steer: false } })).toEqual(["s-1", true]);
   });
 
   test("no prompt, a provider without prompts, and a failed fetch are each said", () => {

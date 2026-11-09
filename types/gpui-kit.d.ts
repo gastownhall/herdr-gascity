@@ -64,4 +64,20 @@ declare module "gpui-kit" {
 declare module "gpui-base" {
   export function v_flex(): GpuiElement;
   export function h_flex(): GpuiElement;
+
+  /**
+   * Retained text state, created once and kept on the view. `InputState.new`
+   * needs a live host call: create it in `init` or an event handler, never in
+   * `render`.
+   */
+  export interface InputState {
+    value(): string;
+    set_value(next: string): void;
+    /** `submit` fires on Enter. */
+    on(event: "change" | "submit" | "focus" | "blur", handler: (event: unknown, cx: GpuiContext) => void): boolean;
+  }
+  export const InputState: { new: (options?: { placeholder?: string; value?: string }) => InputState };
+
+  /** The frame around retained text state. */
+  export const Input: { new: (state: InputState) => GpuiElement };
 }

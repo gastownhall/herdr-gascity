@@ -306,3 +306,21 @@ export const RequestFailedPayloadSchema: z.ZodMiniType<T.RequestFailedPayload> =
 export const BeadEventPayloadSchema: z.ZodMiniType<T.BeadEventPayload> = z.object({
   bead: BeadSchema,
 });
+
+export const SessionCreateSucceededPayloadSchema: z.ZodMiniType<T.SessionCreateSucceededPayload> = z.object({
+  request_id: z.string(),
+  session: SessionResponseSchema,
+});
+
+export const SessionSubmitSucceededPayloadSchema: z.ZodMiniType<T.SessionSubmitSucceededPayload> = z.object({
+  request_id: z.string(),
+  session_id: z.string(),
+  queued: z.boolean(),
+  intent: z.string(),
+});
+
+export const SessionMessageSucceededPayloadSchema: z.ZodMiniType<T.SessionMessageSucceededPayload> = z.object({
+  request_id: z.string(),
+  session_id: z.string(),
+  queued: z.boolean(),
+});

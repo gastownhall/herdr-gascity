@@ -79,9 +79,9 @@ export class Endpoint {
     return made.ok ? made.value : { baseUrl: this.baseUrl, call: () => Promise.resolve(made) };
   }
 
-  /** Drops the group's queued requests (they reject as cancelled and are never sent). Starts nothing. */
-  dropQueued(group: object): void {
-    this.budget.dropQueued(group);
+  /** Drops the group's queued requests (they reject as cancelled and are never sent). Starts nothing. Returns how many. */
+  dropQueued(group: object): number {
+    return this.budget.dropQueued(group);
   }
 
   addListener(l: EndpointListener): void {

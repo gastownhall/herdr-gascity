@@ -1,9 +1,10 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:cea6c948ab58e9505872cb94234edbe2400ef02ef6440c9adb201040952a29a0 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:66440fa3281df65845f02714ca546a40a1e906145aa8b6c5a496f0669530e1dc over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
+import { InputState } from "gpui-base";
 
 // src/host.ts
 import * as herdr from "herdr";
@@ -1741,13 +1742,13 @@ function decodeListed(envelope, item, value, operationId) {
   const outer = decodeValue(envelope, value, operationId);
   if (!outer.ok) return outer;
   const items = [];
-  const unreadable = [];
+  const unreadable2 = [];
   outer.value.items.forEach((raw, index) => {
     const decoded = decodeValue(item, raw, operationId, `items[${index}]`);
     if (decoded.ok) items.push(decoded.value);
-    else unreadable.push({ index, id: idOf(raw), error: decoded.error });
+    else unreadable2.push({ index, id: idOf(raw), error: decoded.error });
   });
-  return ok({ ...outer.value, items, unreadable });
+  return ok({ ...outer.value, items, unreadable: unreadable2 });
 }
 
 // src/gc/schemas.gen.ts
@@ -2016,6 +2017,21 @@ var RequestFailedPayloadSchema = object({
 var BeadEventPayloadSchema = object({
   bead: BeadSchema
 });
+var SessionCreateSucceededPayloadSchema = object({
+  request_id: string2(),
+  session: SessionResponseSchema
+});
+var SessionSubmitSucceededPayloadSchema = object({
+  request_id: string2(),
+  session_id: string2(),
+  queued: boolean2(),
+  intent: string2()
+});
+var SessionMessageSucceededPayloadSchema = object({
+  request_id: string2(),
+  session_id: string2(),
+  queued: boolean2()
+});
 
 // src/gc/errors.ts
 var CITY_NOT_RUNNING_PREFIX = "not_found: city not found or not running: ";
@@ -2038,6 +2054,7 @@ function rawText(body) {
   return body.trim().slice(0, RAW_LIMIT);
 }
 var CODE_CITY_NOT_FOUND = "city-not-found";
+var CODE_SESSION_CONFLICT = "session-conflict";
 function httpError(operationId, status2, body) {
   const problem = parseProblem(body);
   const detail = problem?.detail ?? "";
@@ -2063,6 +2080,45 @@ function httpError(operationId, status2, body) {
   }
   if (problem) return { kind: "http", status: status2, problem };
   return { kind: "http", status: status2, problem: null, raw: rawText(body) };
+}
+function problemHint(error) {
+  if (error.kind !== "http" || error.status !== 409 || !error.problem) return null;
+  const { code, detail } = error.problem;
+  if (code !== void 0 && code !== CODE_SESSION_CONFLICT) return null;
+  return detail?.startsWith("pending_interaction:") ? "answer-pending-prompt" : null;
+}
+var OUTCOME_OP = "get-request-outcome";
+function outcomeFailure(outcome) {
+  if (outcome.state === "outcome_unknown") {
+    return { kind: "outcome-unknown", requestId: outcome.request_id, operationId: OUTCOME_OP, cause: "reported-by-gc" };
+  }
+  if (isUnrecognized(outcome.state)) {
+    return {
+      kind: "outcome-unknown",
+      requestId: outcome.request_id,
+      operationId: OUTCOME_OP,
+      cause: "unrecognized-state",
+      issues: [`state: ${outcome.state.raw}`]
+    };
+  }
+  if (outcome.state !== "failed") return null;
+  const event = outcome.event;
+  if (!event || event.type !== "request.failed") {
+    return { kind: "decode", operationId: OUTCOME_OP, path: "event", issues: ["event: a failed outcome must carry a request.failed event"] };
+  }
+  const payload = decodeValue(RequestFailedPayloadSchema, event.payload, OUTCOME_OP, "event.payload");
+  if (!payload.ok) return payload.error;
+  return { kind: "outcome-failed", requestId: outcome.request_id, operation: outcome.operation, payload: payload.value };
+}
+var CODE_IDEMPOTENCY_IN_FLIGHT = "idempotency-in-flight";
+function uncertainMutationAnswer(operationId, status2, error) {
+  const detail = error.kind === "http" ? error.problem?.detail ?? error.problem?.title ?? error.raw ?? "" : "";
+  const issue2 = detail === "" ? `gc answered ${status2}` : `gc answered ${status2}: ${detail}`;
+  if (status2 === 409 && error.kind === "http" && error.problem?.code === CODE_IDEMPOTENCY_IN_FLIGHT) {
+    return { kind: "outcome-unknown", requestId: null, operationId, cause: "idempotency-in-flight", issues: [issue2] };
+  }
+  if (status2 >= 500 && status2 !== 501) return { kind: "outcome-unknown", requestId: null, operationId, cause: "server-error", issues: [issue2] };
+  return null;
 }
 
 // src/gc/operations.gen.ts
@@ -2520,7 +2576,10 @@ async function call(baseUrl, fetch2, now, op, args) {
     }
     return err({ kind: "not-loopback", url: finalUrl });
   }
-  if (status2 < 200 || status2 > 299) return err(httpError(op, status2, text));
+  if (status2 < 200 || status2 > 299) {
+    const e = httpError(op, status2, text);
+    return err((mutation ? uncertainMutationAnswer(op, status2, e) : null) ?? e);
+  }
   let decoded;
   try {
     const json = JSON.parse(text);
@@ -2785,6 +2844,252 @@ function readTheme() {
   return { colors, issues };
 }
 
+// src/gc/ops.ts
+var INFRASTRUCTURE_BEAD_TYPES = ["session", "message", "molecule", "gate"];
+function getHealth(c) {
+  return c.call("get-health", { path: {} });
+}
+function listCities(c) {
+  return c.call("get-v0-cities", { path: {} });
+}
+function listRigs(c, city) {
+  return c.call("get-v0-city-by-city-name-rigs", { path: { cityName: city } });
+}
+function listAgents(c, city) {
+  return c.call("get-v0-city-by-city-name-agents", { path: { cityName: city } });
+}
+function listSessions(c, city, query) {
+  return c.call("get-v0-city-by-city-name-sessions", { path: { cityName: city }, query });
+}
+function getSession(c, city, id, query = {}) {
+  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id }, query });
+}
+function listPending(c, city) {
+  return c.call("get-v0-city-by-city-name-pending", { path: { cityName: city } });
+}
+function getSessionPending(c, city, id) {
+  return c.call("get-v0-city-by-city-name-session-by-id-pending", { path: { cityName: city, id } });
+}
+function listWork(c, city, query) {
+  return c.call("get-v0-city-by-city-name-work-ready", { path: { cityName: city }, query });
+}
+function getBead(c, city, id) {
+  return c.call("get-v0-city-by-city-name-bead-by-id", { path: { cityName: city, id } });
+}
+function pollEvents(c, city, query) {
+  return c.call("get-v0-city-by-city-name-events", { path: { cityName: city }, query: { limit: query.limit } });
+}
+function getRequestOutcome(c, city, requestId, afterSeq) {
+  return c.call("get-request-outcome", { path: { cityName: city, requestId }, query: { after_seq: afterSeq } });
+}
+function createSession(c, city, body, idempotencyKey) {
+  return c.call("create-session", { path: { cityName: city }, body, idempotencyKey });
+}
+function submitSession(c, city, id, body, idempotencyKey) {
+  return c.call("submit-session", { path: { cityName: city, id }, body, idempotencyKey });
+}
+function sendSessionMessage(c, city, id, body, idempotencyKey) {
+  return c.call("send-session-message", { path: { cityName: city, id }, body, idempotencyKey });
+}
+function respondSession(c, city, id, body, idempotencyKey) {
+  return c.call("respond-session", { path: { cityName: city, id }, body, idempotencyKey });
+}
+function wakeSession(c, city, id, idempotencyKey) {
+  return c.call("post-v0-city-by-city-name-session-by-id-wake", { path: { cityName: city, id }, idempotencyKey });
+}
+function suspendSession(c, city, id, idempotencyKey) {
+  return c.call("post-v0-city-by-city-name-session-by-id-suspend", { path: { cityName: city, id }, idempotencyKey });
+}
+function stopSession(c, city, id, idempotencyKey, body) {
+  return c.call("post-v0-city-by-city-name-session-by-id-stop", { path: { cityName: city, id }, body, idempotencyKey });
+}
+function closeSession(c, city, id, idempotencyKey, query = {}) {
+  return c.call("post-v0-city-by-city-name-session-by-id-close", { path: { cityName: city, id }, query, idempotencyKey });
+}
+function killSession(c, city, id, idempotencyKey, query = {}) {
+  return c.call("post-v0-city-by-city-name-session-by-id-kill", { path: { cityName: city, id }, query, idempotencyKey });
+}
+function pinSession(c, city, id) {
+  return c.call("post-v0-city-by-city-name-session-by-id-pin", { path: { cityName: city, id } });
+}
+function unpinSession(c, city, id) {
+  return c.call("post-v0-city-by-city-name-session-by-id-unpin", { path: { cityName: city, id } });
+}
+function agentAction(c, city, agent, action) {
+  const slash = agent.lastIndexOf("/");
+  if (slash < 0) {
+    return c.call("post-v0-city-by-city-name-agent-by-base-by-action", { path: { cityName: city, base: agent, action } });
+  }
+  return c.call("post-v0-city-by-city-name-agent-by-dir-by-base-by-action", {
+    path: { cityName: city, dir: agent.slice(0, slash), base: agent.slice(slash + 1), action }
+  });
+}
+function rigAction(c, city, rig, action) {
+  return c.call("post-v0-city-by-city-name-rig-by-name-by-action", { path: { cityName: city, name: rig, action } });
+}
+
+// src/actions/answers.ts
+function statusDetail(body) {
+  return `gc: ${body.status}${body.replayed ? " (replayed: gc had already done it)" : ""}`;
+}
+function sessionDetail(s) {
+  return `gc: session ${s.id} ${s.state}${s.running ? ", running" : ""}`;
+}
+function rigDetail(body) {
+  const parts = [`gc: ${body.status}`];
+  if (body.killed.length > 0) parts.push(`stopped ${body.killed.join(", ")}`);
+  if (body.failed.length > 0) parts.push(`failed ${body.failed.join(", ")}`);
+  return parts.join("; ");
+}
+function accepted(body) {
+  return { kind: "accepted", requestId: body.request_id, afterSeq: body.event_cursor };
+}
+
+// src/actions/session.ts
+var LIFECYCLE = ["sessions", "agents"];
+var INPUT = ["sessions"];
+var ANSWER = ["pending", "sessions"];
+function spec(kind, verb, id, operationId, refresh, confirm, send) {
+  return { kind, verb, target: { kind: "session", id }, operationId, idempotent: OPERATIONS[operationId].idempotencyKey, confirm, refresh, send };
+}
+async function then(answer, read) {
+  const r = await answer;
+  return r.ok ? ok(read(r.value)) : r;
+}
+function sessionNew(agent, alias) {
+  const body = { kind: "agent", name: agent };
+  if (alias !== null && alias !== "") body.alias = alias;
+  return {
+    kind: "session.new",
+    verb: "New session",
+    target: { kind: "agent", name: agent },
+    operationId: "create-session",
+    idempotent: OPERATIONS["create-session"].idempotencyKey,
+    confirm: null,
+    refresh: LIFECYCLE,
+    send: (c, city, key) => then(createSession(c, city, body, key), accepted)
+  };
+}
+function sessionWake(id) {
+  return spec(
+    "session.wake",
+    "Wake",
+    id,
+    "post-v0-city-by-city-name-session-by-id-wake",
+    LIFECYCLE,
+    null,
+    (c, city, key) => then(wakeSession(c, city, id, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
+  );
+}
+function sessionSuspend(id) {
+  return spec(
+    "session.suspend",
+    "Suspend",
+    id,
+    "post-v0-city-by-city-name-session-by-id-suspend",
+    LIFECYCLE,
+    null,
+    (c, city, key) => then(suspendSession(c, city, id, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
+  );
+}
+function sessionStop(id) {
+  return spec(
+    "session.stop",
+    "Stop turn",
+    id,
+    "post-v0-city-by-city-name-session-by-id-stop",
+    LIFECYCLE,
+    null,
+    (c, city, key) => then(stopSession(c, city, id, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
+  );
+}
+function sessionClose(id) {
+  return spec("session.close", "Close", id, "post-v0-city-by-city-name-session-by-id-close", LIFECYCLE, {
+    question: `Close session ${id}?`,
+    detail: "gc ends the session permanently: it stops its runtime and closes its session bead. A closed session cannot be woken again."
+  }, (c, city, key) => then(closeSession(c, city, id, key), (b) => ({ kind: "done", detail: statusDetail(b) })));
+}
+function sessionKill(id, force) {
+  const confirm = force ? {
+    question: `Force kill session ${id}?`,
+    detail: "gc kills its runtime now, even with live background subagents or a hung runtime lease. Its work is kept and the session is left asleep."
+  } : {
+    question: `Kill session ${id}?`,
+    detail: "gc kills its runtime now, without waiting for the current turn. Its work is kept and the session is left asleep."
+  };
+  return spec(
+    force ? "session.kill-force" : "session.kill",
+    force ? "Force kill" : "Kill",
+    id,
+    "post-v0-city-by-city-name-session-by-id-kill",
+    LIFECYCLE,
+    confirm,
+    (c, city, key) => {
+      const answer = force ? killSession(c, city, id, key, { force: true }) : killSession(c, city, id, key);
+      return then(answer, (b) => ({ kind: "done", detail: statusDetail(b) }));
+    }
+  );
+}
+function sessionPin(id) {
+  return spec(
+    "session.pin",
+    "Pin",
+    id,
+    "post-v0-city-by-city-name-session-by-id-pin",
+    LIFECYCLE,
+    null,
+    (c, city) => then(pinSession(c, city, id), (s) => ({ kind: "done", detail: sessionDetail(s) }))
+  );
+}
+function sessionUnpin(id) {
+  return spec(
+    "session.unpin",
+    "Unpin",
+    id,
+    "post-v0-city-by-city-name-session-by-id-unpin",
+    LIFECYCLE,
+    null,
+    (c, city) => then(unpinSession(c, city, id), (s) => ({ kind: "done", detail: sessionDetail(s) }))
+  );
+}
+function sessionSubmit(id, message, intent) {
+  const interrupt = intent === "interrupt_now";
+  return spec(
+    interrupt ? "session.interrupt" : "session.submit",
+    interrupt ? "Interrupt and send" : "Send",
+    id,
+    "submit-session",
+    INPUT,
+    null,
+    (c, city, key) => then(submitSession(c, city, id, { message, intent }, key), accepted)
+  );
+}
+function sessionMessage(id, message) {
+  return spec(
+    "session.message",
+    "Send as message",
+    id,
+    "send-session-message",
+    INPUT,
+    null,
+    (c, city, key) => then(sendSessionMessage(c, city, id, { message }, key), accepted)
+  );
+}
+function sessionRespond(id, requestId, option) {
+  return spec(
+    "session.respond",
+    option,
+    id,
+    "respond-session",
+    ANSWER,
+    null,
+    (c, city, key) => then(
+      respondSession(c, city, id, { action: option, request_id: requestId }, key),
+      (b) => ({ kind: "done", detail: statusDetail(b) })
+    )
+  );
+}
+
 // src/discovery/city.ts
 var PROPS_API = "props()";
 function decodeCopy(props2, lastSelection) {
@@ -2940,48 +3245,88 @@ function mayBeOnScreen(input) {
   return input.panes.some((p) => p.mod === MOD_NAME && p.tab === focus.tab);
 }
 
-// src/gc/events.ts
-var BEAD_PAYLOAD_EVENTS = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted"]);
-function eventBead(e) {
-  if (!BEAD_PAYLOAD_EVENTS.has(e.type)) return ok(null);
-  const r = decodeValue(BeadEventPayloadSchema, e.payload, "get-v0-city-by-city-name-events", `event ${e.seq} ${e.type} payload`);
-  return r.ok ? ok(r.value.bead) : r;
+// src/actions/activity.ts
+function isPending(state) {
+  return state.kind === "sending" || state.kind === "polling";
+}
+function targetKey(t) {
+  return t.kind === "session" ? `session:${t.id}` : `${t.kind}:${t.name}`;
+}
+function targetText(t) {
+  return t.kind === "session" ? `session ${t.id}` : `${t.kind} ${t.name}`;
 }
 
-// src/gc/ops.ts
-var INFRASTRUCTURE_BEAD_TYPES = ["session", "message", "molecule", "gate"];
-function getHealth(c) {
-  return c.call("get-health", { path: {} });
+// src/vm/sanitize.ts
+var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
+var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+function cleanText(text) {
+  return text.replace(/\r\n?/g, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
 }
-function listCities(c) {
-  return c.call("get-v0-cities", { path: {} });
+function cleanLine(text) {
+  return cleanText(text).replace(/[\n\t]+/g, " ");
 }
-function listRigs(c, city) {
-  return c.call("get-v0-city-by-city-name-rigs", { path: { cityName: city } });
+
+// src/vm/errorText.ts
+var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
+function seconds(ms) {
+  return `${Math.round(ms / 1e3)} s`;
 }
-function listAgents(c, city) {
-  return c.call("get-v0-city-by-city-name-agents", { path: { cityName: city } });
+function drift(value) {
+  return isUnrecognized(value) ? value.raw : String(value);
 }
-function listSessions(c, city, query) {
-  return c.call("get-v0-city-by-city-name-sessions", { path: { cityName: city }, query });
+function errorText(e) {
+  return cleanLine(rawText2(e));
 }
-function getSession(c, city, id, query = {}) {
-  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id }, query });
-}
-function listPending(c, city) {
-  return c.call("get-v0-city-by-city-name-pending", { path: { cityName: city } });
-}
-function getSessionPending(c, city, id) {
-  return c.call("get-v0-city-by-city-name-session-by-id-pending", { path: { cityName: city, id } });
-}
-function listWork(c, city, query) {
-  return c.call("get-v0-city-by-city-name-work-ready", { path: { cityName: city }, query });
-}
-function getBead(c, city, id) {
-  return c.call("get-v0-city-by-city-name-bead-by-id", { path: { cityName: city, id } });
-}
-function pollEvents(c, city, query) {
-  return c.call("get-v0-city-by-city-name-events", { path: { cityName: city }, query: { limit: query.limit } });
+function rawText2(e) {
+  switch (e.kind) {
+    case "unreachable":
+      return `cannot reach ${e.url}: ${e.cause}`;
+    case "timeout":
+      return `no answer from ${e.url} within ${seconds(e.ms)}`;
+    case "too-large":
+      return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
+    case "http": {
+      const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
+      return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
+    }
+    case "csrf-rejected":
+      return "gc refused a change without X-GC-Request (a bug in the mod)";
+    case "read-only":
+      return `gc serves this API read-only (${e.detail})`;
+    case "write-grant-required":
+      return `this city requires a signed write grant (${e.detail})`;
+    case "read-grant-required":
+      return `this city requires a signed read grant (${e.detail})`;
+    case "city-not-running":
+      return `city "${e.city}" is not running`;
+    case "api-missing":
+      return `gc too old (needs ${e.operationId})${e.raw === void 0 ? "" : `: ${e.raw}`}`;
+    case "decode":
+      return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
+    case "outcome-failed":
+      return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
+    case "outcome-unknown": {
+      const why = e.requestId === null ? e.cause : `${e.cause}, request ${e.requestId}`;
+      const issues = e.issues && e.issues.length > 0 ? `: ${e.issues.join("; ")}` : "";
+      return `outcome of ${e.operationId} unknown (${why})${issues}`;
+    }
+    case "exec":
+      return e.code === null ? `${e.argv.join(" ")} did not run: ${e.stderr}` : `${e.argv.join(" ")} exited with code ${e.code}: ${e.stderr}`;
+    case "host-incompatible":
+      return `this herdr-app lacks ${e.missing.join(", ")}`;
+    case "host-decode":
+      return `unreadable ${e.api}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
+    case "host-call":
+      return `${e.api} failed: ${e.cause}`;
+    case "supervisor-config":
+      return `${e.path} line ${e.line}: ${e.issue}`;
+    case "attach-not-started":
+      return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
+    case "not-loopback":
+      return LOOPBACK_ONLY;
+    case "cancelled":
+      return e.reason === "copy-closed" ? `request to ${e.url} was cancelled: the Gas City view that started it closed` : `request to ${e.url} was dropped before it was sent: nothing waits for its answer any more`;
+  }
 }
 
 // src/sync/backoff.ts
@@ -3156,6 +3501,363 @@ var FetchBudget = class {
   }
 };
 
+// src/actions/outcome.ts
+var OUTCOME_POLL_DELAYS_MS = [500, 1e3, 2e3];
+var OUTCOME_POLL_EVERY_MS = 2e3;
+var OUTCOME_POLL_LIMIT_MS = 12e4;
+var SEND_DEADLINE_MS = 2 * RECLAIM_AFTER_MS;
+var ACTIVITY_LIMIT = 50;
+function retryGate(entry, snapshot) {
+  const s = entry.state;
+  if (isPending(s)) return { allowed: false, reason: "the action is still under way" };
+  if (s.kind === "done") return { allowed: false, reason: "the action is done" };
+  if (s.kind === "failed" || s.kind === "not-sent") return { allowed: true };
+  for (const d of entry.spec.refresh) {
+    const startedAt = snapshot.fetchStarts[d];
+    if (startedAt === void 0 || startedAt < s.at) return { allowed: false, reason: `refreshing ${d} before a retry` };
+  }
+  return { allowed: true };
+}
+function successDetail(outcome) {
+  const op = outcome.operation;
+  const payload = outcome.event?.payload;
+  if (isUnrecognized(op)) return "succeeded";
+  if (op === "session.create") {
+    const p2 = decodeValue(SessionCreateSucceededPayloadSchema, payload, "get-request-outcome", "event.payload");
+    if (!p2.ok) return unreadable(p2.error);
+    const alias = p2.value.session.alias;
+    return `created session ${p2.value.session.id}${alias !== void 0 && alias !== "" ? ` (${alias})` : ""}`;
+  }
+  const p = op === "session.submit" ? decodeValue(SessionSubmitSucceededPayloadSchema, payload, "get-request-outcome", "event.payload") : decodeValue(SessionMessageSucceededPayloadSchema, payload, "get-request-outcome", "event.payload");
+  if (!p.ok) return unreadable(p.error);
+  return p.value.queued ? "queued: the session gets it when it next runs" : "delivered";
+}
+function unreadable(e) {
+  return `succeeded (gc's result could not be read: ${e.issues.join("; ")})`;
+}
+function newIdempotencyKey(random = Math.random) {
+  const c = globalThis.crypto;
+  if (c !== void 0 && typeof c.randomUUID === "function") return c.randomUUID();
+  const hex = (n) => Array.from({ length: n }, () => Math.floor(random() * 16).toString(16)).join("");
+  const variant = "89ab"[Math.floor(random() * 4)] ?? "8";
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
+}
+function unknown2(requestId, operationId, cause, issues) {
+  const e = { kind: "outcome-unknown", requestId, operationId, cause };
+  if (issues !== void 0) e.issues = issues;
+  return e;
+}
+function pollDelay(polls) {
+  return OUTCOME_POLL_DELAYS_MS[polls] ?? OUTCOME_POLL_EVERY_MS;
+}
+var ActionLedger = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  deps;
+  records = [];
+  seq = 0;
+  tokens = 0;
+  rev = 0;
+  snap = { rev: 0, entries: [] };
+  disposed = false;
+  /** The activity log. */
+  snapshot() {
+    return this.snap;
+  }
+  /** Sends a new action now, in the turn of `owner` (the caller's copy). Returns its id. */
+  start(owner, spec2) {
+    const now = this.deps.clock.now();
+    const rec = {
+      id: ++this.seq,
+      spec: spec2,
+      key: this.deps.newKey(),
+      attempt: 1,
+      startedAt: now,
+      state: { kind: "sending", since: now },
+      owner,
+      group: {},
+      token: 0
+    };
+    this.records.push(rec);
+    this.trim();
+    this.send(rec, owner);
+    return rec.id;
+  }
+  /**
+   * The person retries an action, in the turn of `owner`. Refused while it is
+   * under way, once it is done, and after an unknown outcome until its state
+   * has been refetched (retryGate).
+   */
+  retry(owner, id, snapshot) {
+    const rec = this.records.find((r) => r.id === id);
+    if (!rec) return err("the action is no longer in the activity log");
+    const gate = retryGate(this.entry(rec), snapshot);
+    if (!gate.allowed) return err(gate.reason);
+    if (!(rec.state.kind === "unknown" && rec.spec.idempotent)) rec.key = this.deps.newKey();
+    rec.attempt++;
+    rec.startedAt = this.deps.clock.now();
+    this.send(rec, owner);
+    return ok(rec.id);
+  }
+  /** Refetches what an action changes now ("refresh before retry"). */
+  refreshFor(id) {
+    const rec = this.records.find((r) => r.id === id);
+    if (rec) this.refreshAfter(rec);
+  }
+  /**
+   * Called from a copy's own periodic tick: resolves actions past their
+   * deadlines, and polls the outcomes of the actions this copy started.
+   */
+  tick(owner) {
+    if (this.disposed) return;
+    const now = this.deps.clock.now();
+    for (const rec of [...this.records]) {
+      const s = rec.state;
+      if (s.kind === "sending" && now - s.since > SEND_DEADLINE_MS) {
+        const secs = Math.round(SEND_DEADLINE_MS / 1e3);
+        if (this.deps.dropQueued(rec.group) > 0) this.resolve(rec, { kind: "not-sent", at: now, reason: `the fetch queue did not reach it within ${secs} s` });
+        else this.resolve(rec, { kind: "unknown", at: now, error: unknown2(null, rec.spec.operationId, "timeout", [`no answer within ${secs} s`]) });
+      } else if (s.kind === "polling" && now - s.acceptedAt >= OUTCOME_POLL_LIMIT_MS) {
+        this.resolve(rec, { kind: "unknown", at: now, error: unknown2(s.requestId, rec.spec.operationId, "outcome-poll-expired") });
+      } else if (s.kind === "polling" && (rec.owner === owner || rec.owner === null) && !s.inFlight && now >= s.nextAt) {
+        rec.owner = owner;
+        this.poll(rec, s);
+      }
+    }
+  }
+  /**
+   * The copy `owner` closed: its actions still under way can no longer learn
+   * their outcome (herdr never settles its requests), so they become unknown
+   * now. Their queued requests are dropped and never sent. Starts nothing.
+   */
+  ownerGone(owner) {
+    const now = this.deps.clock.now();
+    for (const rec of this.records) {
+      if (rec.owner !== owner) continue;
+      const s = rec.state;
+      if (s.kind === "polling") {
+        this.deps.dropQueued(rec.group);
+        rec.owner = null;
+        rec.group = {};
+        rec.token = ++this.tokens;
+        rec.state = { ...s, inFlight: false, nextAt: now };
+        this.commit();
+      } else if (s.kind === "sending") {
+        if (this.deps.dropQueued(rec.group) > 0) {
+          this.resolve(rec, { kind: "not-sent", at: now, reason: "the Gas City view that started it closed before it was sent" });
+        } else {
+          this.resolve(rec, {
+            kind: "unknown",
+            at: now,
+            error: unknown2(null, rec.spec.operationId, "cancelled", ["the Gas City view that started it closed before gc's answer arrived"])
+          });
+        }
+      }
+    }
+  }
+  /** The store went away: late answers are ignored. */
+  dispose() {
+    this.disposed = true;
+  }
+  // ---- internals ------------------------------------------------------------------
+  send(rec, owner) {
+    rec.owner = owner;
+    rec.group = {};
+    const token = ++this.tokens;
+    rec.token = token;
+    rec.state = { kind: "sending", since: this.deps.clock.now() };
+    this.commit();
+    let answer;
+    try {
+      answer = rec.spec.send(this.deps.client("mutation", rec.group), this.deps.city, rec.key);
+    } catch (cause) {
+      answer = Promise.reject(cause);
+    }
+    answer.then(
+      (r) => this.sent(rec, token, r),
+      (cause) => this.sent(rec, token, err(unknown2(null, rec.spec.operationId, "unreadable-response", [`the action threw: ${String(cause)}`])))
+    );
+  }
+  live(rec, token) {
+    return !this.disposed && rec.token === token;
+  }
+  sent(rec, token, r) {
+    if (!this.live(rec, token)) return;
+    const now = this.deps.clock.now();
+    if (!r.ok) {
+      if (r.error.kind === "outcome-unknown") this.resolve(rec, { kind: "unknown", at: now, error: r.error });
+      else this.resolve(rec, { kind: "failed", at: now, error: r.error });
+      return;
+    }
+    const sent = r.value;
+    if (sent.kind === "done") {
+      this.resolve(rec, { kind: "done", at: now, detail: sent.detail, requestId: null });
+      return;
+    }
+    rec.state = {
+      kind: "polling",
+      requestId: sent.requestId,
+      afterSeq: sent.afterSeq,
+      acceptedAt: now,
+      polls: 0,
+      nextAt: now + pollDelay(0),
+      inFlight: false,
+      lastError: null
+    };
+    this.commit();
+  }
+  poll(rec, s) {
+    const token = rec.token;
+    rec.state = { ...s, inFlight: true };
+    this.commit();
+    getRequestOutcome(this.deps.client("events", rec.group), this.deps.city, s.requestId, s.afterSeq).then(
+      (r) => this.polled(rec, token, r),
+      (cause) => this.polled(rec, token, err(unknown2(s.requestId, "get-request-outcome", "unreadable-response", [String(cause)])))
+    );
+  }
+  polled(rec, token, r) {
+    const s = rec.state;
+    if (!this.live(rec, token) || s.kind !== "polling") return;
+    const now = this.deps.clock.now();
+    const next = { ...s, inFlight: false, polls: s.polls + 1, nextAt: now + pollDelay(s.polls + 1) };
+    if (!r.ok) {
+      const e = r.error;
+      if (e.kind === "cancelled" || backsOff(e)) {
+        rec.state = { ...next, lastError: e };
+        this.commit();
+        return;
+      }
+      this.resolve(rec, { kind: "unknown", at: now, error: unknown2(s.requestId, rec.spec.operationId, "outcome-poll-failed", [describe3(e)]) });
+      return;
+    }
+    const outcome = r.value;
+    const failure2 = outcomeFailure(outcome);
+    if (failure2?.kind === "outcome-failed") {
+      this.resolve(rec, { kind: "failed", at: now, error: failure2 });
+    } else if (failure2?.kind === "outcome-unknown") {
+      this.resolve(rec, { kind: "unknown", at: now, error: { ...failure2, operationId: rec.spec.operationId } });
+    } else if (failure2 !== null) {
+      this.resolve(rec, { kind: "unknown", at: now, error: unknown2(s.requestId, rec.spec.operationId, "unreadable-response", [describe3(failure2)]) });
+    } else if (outcome.state === "succeeded") {
+      this.resolve(rec, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId });
+    } else {
+      rec.state = { ...next, lastError: null };
+      this.commit();
+    }
+  }
+  /** Ends an action and refetches what it changed (a done one too: rig and agent changes are not evented). */
+  resolve(rec, state) {
+    rec.token = ++this.tokens;
+    rec.state = state;
+    this.refreshAfter(rec);
+    this.trim();
+    this.commit();
+  }
+  refreshAfter(rec) {
+    this.deps.refresh(rec.spec.refresh);
+    if (rec.spec.target.kind === "session") this.deps.refreshDetail(rec.spec.target.id);
+  }
+  /** Drops the oldest finished actions beyond ACTIVITY_LIMIT. */
+  trim() {
+    let excess = this.records.length - ACTIVITY_LIMIT;
+    for (let i = 0; i < this.records.length && excess > 0; ) {
+      if (isPending(this.records[i].state)) {
+        i++;
+        continue;
+      }
+      this.records.splice(i, 1);
+      excess--;
+    }
+  }
+  entry(rec) {
+    return { id: rec.id, spec: rec.spec, key: rec.key, attempt: rec.attempt, startedAt: rec.startedAt, state: rec.state };
+  }
+  commit() {
+    this.snap = { rev: ++this.rev, entries: this.records.map((r) => this.entry(r)) };
+  }
+};
+function describe3(e) {
+  return errorText(e);
+}
+
+// src/vm/activity.ts
+var SAME_KEY_RETRY = "Retry (same key: gc deduplicates it within 30 min, not across a gc restart)";
+var MAY_REPEAT_RETRY = "Retry (gc cannot deduplicate this: it may happen twice)";
+var REPEATABLE = /* @__PURE__ */ new Set(["session.submit", "session.interrupt", "session.message"]);
+function busyKey(spec2) {
+  return `${spec2.kind}|${targetKey(spec2.target)}`;
+}
+function isBusy(model, spec2) {
+  return model !== null && !REPEATABLE.has(spec2.kind) && model.busy.has(busyKey(spec2));
+}
+function seconds2(ms) {
+  return `${Math.max(0, Math.round(ms / 1e3))} s`;
+}
+function row(e, city, now) {
+  const s = e.state;
+  const base = {
+    id: e.id,
+    kind: e.spec.kind,
+    title: cleanLine(`${e.spec.verb} · ${targetText(e.spec.target)}`),
+    attempt: e.attempt,
+    refresh: false,
+    retry: { kind: "none" }
+  };
+  switch (s.kind) {
+    case "sending":
+      return { ...base, tone: "pending", detail: `sending (${seconds2(now - s.since)})`, requestId: null };
+    case "polling": {
+      const last = s.lastError ? `; last poll: ${errorText(s.lastError)}` : "";
+      return {
+        ...base,
+        tone: "pending",
+        requestId: cleanLine(s.requestId),
+        detail: cleanLine(`accepted, waiting for gc's outcome of request ${s.requestId} (${seconds2(now - s.acceptedAt)})${last}`)
+      };
+    }
+    case "done":
+      return { ...base, tone: "done", detail: cleanLine(s.detail), requestId: s.requestId === null ? null : cleanLine(s.requestId) };
+    case "failed": {
+      const hint = problemHint(s.error) === "answer-pending-prompt" ? " (answer the pending prompt first)" : "";
+      return {
+        ...base,
+        tone: "failed",
+        detail: `${errorText(s.error)}${hint}`,
+        requestId: s.error.kind === "outcome-failed" ? cleanLine(s.error.requestId) : null,
+        retry: { kind: "retry", label: "Retry" }
+      };
+    }
+    case "unknown": {
+      const gate = city ? retryGate(e, city) : { allowed: false, reason: "no city data" };
+      const twice = e.spec.idempotent ? SAME_KEY_RETRY : MAY_REPEAT_RETRY;
+      return {
+        ...base,
+        tone: "unknown",
+        refresh: true,
+        requestId: s.error.requestId === null ? null : cleanLine(s.error.requestId),
+        detail: gate.allowed ? `outcome unknown: ${errorText(s.error)}. The state has been refreshed: check it before retrying.` : `outcome unknown: ${errorText(s.error)}. Refreshing the state before a retry is offered.`,
+        retry: gate.allowed ? { kind: "retry", label: twice } : { kind: "wait", reason: gate.reason }
+      };
+    }
+    case "not-sent":
+      return { ...base, tone: "not-sent", detail: cleanLine(`not sent: ${s.reason}`), requestId: null, retry: { kind: "retry", label: "Retry" } };
+  }
+}
+function activityModel(activity, city, now) {
+  const busy = /* @__PURE__ */ new Set();
+  for (const e of activity.entries) if (isPending(e.state)) busy.add(busyKey(e.spec));
+  return { rows: [...activity.entries].reverse().map((e) => row(e, city, now)), busy };
+}
+
+// src/gc/events.ts
+var BEAD_PAYLOAD_EVENTS = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted"]);
+function eventBead(e) {
+  if (!BEAD_PAYLOAD_EVENTS.has(e.type)) return ok(null);
+  const r = decodeValue(BeadEventPayloadSchema, e.payload, "get-v0-city-by-city-name-events", `event ${e.seq} ${e.type} payload`);
+  return r.ok ? ok(r.value.bead) : r;
+}
+
 // src/sync/closedList.ts
 var INFRASTRUCTURE = new Set(INFRASTRUCTURE_BEAD_TYPES);
 var CLOSED = "closed";
@@ -3264,13 +3966,13 @@ function freshness(slot, now, input) {
 var EVENT_PAGE_LIMIT = 50;
 function readEventPage(cursor, page) {
   if (page.total < cursor) return { cursor: page.total, newer: [], resync: "reset" };
-  const unreadable = new Set(page.unreadable);
-  const length = page.items.length + unreadable.size;
+  const unreadable2 = new Set(page.unreadable);
+  const length = page.items.length + unreadable2.size;
   let next = 0;
   let above = null;
   let unreadableNew = false;
   for (let position = 0; position < length; position++) {
-    if (unreadable.has(position)) {
+    if (unreadable2.has(position)) {
       const isOld = above === null ? page.total <= cursor : above <= cursor + 1;
       if (!isOld) unreadableNew = true;
       continue;
@@ -3355,6 +4057,7 @@ var CityStore = class {
     resyncs: 0
   };
   errors = [];
+  fetchStarts = {};
   last = { events: null, sessions: null, peek: null, sweep: null };
   onScreen;
   step = null;
@@ -3777,6 +4480,7 @@ var CityStore = class {
     return { ok: true, value: out };
   }
   async fetchDomain(step2, d, priority) {
+    const startedAt = this.deps.clock.now();
     const r = await this.load(step2, d, priority);
     if (!this.current(step2)) return;
     this.progress(step2);
@@ -3784,6 +4488,7 @@ var CityStore = class {
     if (this.settle(r, d) && r.ok) {
       slot.value = r.value;
       slot.fetchedAt = this.deps.clock.now();
+      this.fetchStarts[d] = startedAt;
       slot.error = null;
       slot.held = false;
       this.due.delete(d);
@@ -4026,86 +4731,14 @@ var CityStore = class {
       peeks: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
       beads: new Map([...this.lookups].map(([id, b]) => [id, this.slotOf(b, b.due)])),
-      errors: this.errors
+      errors: this.errors,
+      fetchStarts: { ...this.fetchStarts }
     };
   }
   commit() {
     this.snap = this.build(this.snap.rev + 1);
   }
 };
-
-// src/vm/sanitize.ts
-var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
-var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
-function cleanText(text) {
-  return text.replace(/\r\n?/g, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
-}
-function cleanLine(text) {
-  return cleanText(text).replace(/[\n\t]+/g, " ");
-}
-
-// src/vm/errorText.ts
-var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
-function seconds(ms) {
-  return `${Math.round(ms / 1e3)} s`;
-}
-function drift(value) {
-  return isUnrecognized(value) ? value.raw : String(value);
-}
-function errorText(e) {
-  return cleanLine(rawText2(e));
-}
-function rawText2(e) {
-  switch (e.kind) {
-    case "unreachable":
-      return `cannot reach ${e.url}: ${e.cause}`;
-    case "timeout":
-      return `no answer from ${e.url} within ${seconds(e.ms)}`;
-    case "too-large":
-      return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
-    case "http": {
-      const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
-      return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
-    }
-    case "csrf-rejected":
-      return "gc refused a change without X-GC-Request (a bug in the mod)";
-    case "read-only":
-      return `gc serves this API read-only (${e.detail})`;
-    case "write-grant-required":
-      return `this city requires a signed write grant (${e.detail})`;
-    case "read-grant-required":
-      return `this city requires a signed read grant (${e.detail})`;
-    case "city-not-running":
-      return `city "${e.city}" is not running`;
-    case "api-missing":
-      return `gc too old (needs ${e.operationId})${e.raw === void 0 ? "" : `: ${e.raw}`}`;
-    case "decode":
-      return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
-    case "outcome-failed":
-      return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
-    case "outcome-unknown": {
-      const why = e.requestId === null ? e.cause : `${e.cause}, request ${e.requestId}`;
-      const issues = e.issues && e.issues.length > 0 ? `: ${e.issues.join("; ")}` : "";
-      return `outcome of ${e.operationId} unknown (${why})${issues}`;
-    }
-    case "exec":
-      return e.code === null ? `${e.argv.join(" ")} did not run: ${e.stderr}` : `${e.argv.join(" ")} exited with code ${e.code}: ${e.stderr}`;
-    case "host-incompatible":
-      return `this herdr-app lacks ${e.missing.join(", ")}`;
-    case "host-decode":
-      return `unreadable ${e.api}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
-    case "host-call":
-      return `${e.api} failed: ${e.cause}`;
-    case "supervisor-config":
-      return `${e.path} line ${e.line}: ${e.issue}`;
-    case "attach-not-started":
-      return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
-    case "not-loopback":
-      return LOOPBACK_ONLY;
-    case "cancelled":
-      return e.reason === "copy-closed" ? `request to ${e.url} was cancelled: the Gas City view that started it closed` : `request to ${e.url} was dropped before it was sent: nothing waits for its answer any more`;
-  }
-}
 
 // src/vm/region.ts
 function ageText(ms) {
@@ -4139,7 +4772,7 @@ function regionModel(parts) {
 }
 
 // src/vm/status.ts
-var LIFECYCLE = {
+var LIFECYCLE2 = {
   suspended: "suspended",
   quarantined: "quarantined",
   stopped: "stopped",
@@ -4190,14 +4823,14 @@ function liveStatus(x, detail = null) {
 function sessionStatus(s, pending) {
   if (pending !== null) return status("needs-you", `needs you (${pending.kind})`, "pending");
   if (s.state !== ACTIVE) {
-    const known = LIFECYCLE[s.state];
+    const known = LIFECYCLE2[s.state];
     return status("lifecycle", known ?? s.state, "lifecycle", s.reason ?? null, known === void 0 ? `state ${s.state}` : null);
   }
   return liveStatus(s);
 }
 function agentStatus(a) {
   if (a.suspended) return status("lifecycle", "suspended", "lifecycle", a.unavailable_reason ?? null);
-  if (!a.running) return status("lifecycle", LIFECYCLE[a.state] ?? "not running", "lifecycle", a.unavailable_reason ?? null);
+  if (!a.running) return status("lifecycle", LIFECYCLE2[a.state] ?? "not running", "lifecycle", a.unavailable_reason ?? null);
   const unavailable = !a.available ? `unavailable${a.unavailable_reason ? `: ${a.unavailable_reason}` : ""}` : null;
   const live = liveStatus(a, unavailable);
   return unavailable !== null && live.detail === null ? { ...live, detail: cleanLine(unavailable) } : live;
@@ -4261,7 +4894,7 @@ function agentsModel(input) {
   const drift3 = /* @__PURE__ */ new Set();
   const pending = /* @__PURE__ */ new Map();
   for (const p of s.pending.value?.items ?? []) pending.set(p.session_id, { kind: p.kind, requestId: p.request_id });
-  const row = (x) => {
+  const row2 = (x) => {
     const status2 = sessionStatus(x, pending.get(x.id) ?? null);
     if (status2.unrecognized !== null) drift3.add(status2.unrecognized);
     return {
@@ -4280,11 +4913,11 @@ function agentsModel(input) {
   for (const x of sessionList?.items ?? []) {
     const owner = (x.agent_name !== void 0 ? byName.get(x.agent_name) : void 0) ?? byName.get(x.template);
     if (!owner) {
-      other.push(row(x));
+      other.push(row2(x));
       continue;
     }
     const rows = joined.get(owner.name) ?? [];
-    rows.push(row(x));
+    rows.push(row2(x));
     joined.set(owner.name, rows);
   }
   const agentRow2 = (a) => {
@@ -4293,6 +4926,8 @@ function agentsModel(input) {
     if (rows.length === 0 && own2.unrecognized !== null) drift3.add(own2.unrecognized);
     return {
       name: cleanLine(a.name),
+      ref: a.name,
+      suspended: a.suspended,
       label: cleanLine(nonEmpty(a.display_name) ?? a.name),
       pool: poolText(a),
       status: mostUrgent(rows.map((r) => r.status)) ?? own2,
@@ -4310,6 +4945,7 @@ function agentsModel(input) {
   };
   for (const r of rigs) {
     group(rigKey(r.name), () => ({
+      rig: r.name,
       title: `rig: ${cleanLine(r.name)}`,
       counts: `${r.agent_count} agents · ${r.running_count} running`,
       suspended: r.suspended,
@@ -4317,10 +4953,10 @@ function agentsModel(input) {
     }));
   }
   const unlisted = [...new Set(agents.map((a) => a.rig).filter((r) => r !== void 0 && r !== "" && !groups.has(rigKey(r))))].sort();
-  for (const r of unlisted) group(rigKey(r), () => ({ title: `rig: ${cleanLine(r)}`, counts: null, suspended: false, listed: false }));
+  for (const r of unlisted) group(rigKey(r), () => ({ rig: null, title: `rig: ${cleanLine(r)}`, counts: null, suspended: false, listed: false }));
   for (const a of agents) {
     const key = a.rig !== void 0 && a.rig !== "" ? rigKey(a.rig) : CITY_GROUP;
-    const g = group(key, () => ({ title: "city", counts: null, suspended: false, listed: true }));
+    const g = group(key, () => ({ rig: null, title: "city", counts: null, suspended: false, listed: true }));
     if (!g.collapsed) g.agents.push(agentRow2(a));
   }
   const banners = [];
@@ -4331,7 +4967,7 @@ function agentsModel(input) {
   banners.push(...partialBanner("agent", s.agents.value?.partial, s.agents.value?.partial_errors ?? []));
   banners.push(...partialBanner("session", sessionList?.partial, sessionList?.partialErrors ?? []));
   banners.push(...partialBanner("pending", s.pending.value?.partial, s.pending.value?.partial_errors ?? []));
-  const unreadable = [
+  const unreadable2 = [
     ...unreadableRows("rig", s.rigs.value?.unreadable ?? []),
     ...unreadableRows("agent", s.agents.value?.unreadable ?? []),
     ...unreadableRows("session", sessionList?.unreadable ?? []),
@@ -4347,7 +4983,7 @@ function agentsModel(input) {
     region,
     groups: [...groups.values()],
     other,
-    unreadable,
+    unreadable: unreadable2,
     banners,
     needsYou: pending.size,
     drift: [...drift3]
@@ -4407,15 +5043,15 @@ function boardModel(input) {
   const column2 = (slot, title, name, empty, f) => {
     const region = regionModel([[name, f]]);
     const cards = shown(slot.value?.items ?? []).map(card3);
-    const unreadable = unreadableRows2(slot.value?.unreadable ?? []);
+    const unreadable2 = unreadableRows2(slot.value?.unreadable ?? []);
     const read = slot.value?.items.length ?? 0;
-    const rows = read + unreadable.length;
+    const rows = read + unreadable2.length;
     return {
       title,
       count: rows >= BOARD_LIMIT ? `${rows}+` : `${cards.length}`,
       region,
-      empty: region.kind === "ok" && cards.length === 0 && unreadable.length === 0 ? empty : null,
-      unreadable,
+      empty: region.kind === "ok" && cards.length === 0 && unreadable2.length === 0 ? empty : null,
+      unreadable: unreadable2,
       banners: [],
       cards
     };
@@ -4550,7 +5186,8 @@ function pendingView(s) {
     requestId: cleanLine(p.request_id),
     promptKind: cleanLine(p.kind),
     prompt: p.prompt === void 0 ? null : cleanText(p.prompt),
-    options: p.options.map(cleanLine)
+    options: p.options.map(cleanLine),
+    answer: { requestId: p.request_id, options: [...p.options] }
   };
 }
 function detailModel(input) {
@@ -4567,12 +5204,14 @@ function detailModel(input) {
   return {
     kind: "session",
     id: cleanLine(x.id),
+    ref: x.id,
     title: cleanLine(`${x.agent_name ?? x.template} / ${label2}`),
     status: sessionStatus(x, p ? { kind: p.kind, requestId: p.request_id } : null),
     facts: facts(x),
     output: { text: output === null ? null : output === "" ? "(no output)" : output, region: regionModel([["output", peekFreshness]]) },
     wakeReasons: wakeText(detail?.wakeReasons),
-    pending: pendingView(detail?.pending)
+    pending: pendingView(detail?.pending),
+    canInterrupt: x.submission_capabilities?.supports_interrupt_now === true
   };
 }
 
@@ -4595,9 +5234,9 @@ function iso(ms) {
 }
 function diagnosticsModel(input) {
   const failures = [...input.entries].sort((a, b) => b.at - a.at).slice(0, DIAGNOSTICS_LIMIT).map((e) => ({ at: iso(e.at), source: cleanLine(e.source), text: syncErrorText(e.error) }));
-  const unreadable = (input.unreadable ?? []).map((u) => ({ at: null, source: "gc", text: cleanLine(u) }));
+  const unreadable2 = (input.unreadable ?? []).map((u) => ({ at: null, source: "gc", text: cleanLine(u) }));
   const drift3 = input.drift.map((d) => ({ at: null, source: "gc", text: cleanLine(`value this version does not know: ${d}`) }));
-  return [...failures, ...unreadable, ...drift3];
+  return [...failures, ...unreadable2, ...drift3];
 }
 
 // src/vm/header.ts
@@ -4803,9 +5442,18 @@ function probeDocument(input) {
       status: detail.status.label,
       output: detail.output.text,
       wake_reasons: detail.wakeReasons,
-      pending: detail.pending
+      // The cleaned prompt the pane shows; the raw answer values stay out of the file.
+      pending: detail.pending.kind === "prompt" ? { kind: "prompt", requestId: detail.pending.requestId, promptKind: detail.pending.promptKind, prompt: detail.pending.prompt, options: detail.pending.options } : detail.pending
     },
-    actions: [],
+    actions: (input.activity?.rows ?? []).map((r) => ({
+      id: r.id,
+      action: r.kind,
+      title: r.title,
+      state: r.tone,
+      detail: r.detail,
+      request_id: r.requestId,
+      attempt: r.attempt
+    })),
     exec_log: input.execLog.map((e) => ({ at: e.at, kind: e.kind, argv: [...e.argv] })),
     errors: [...input.diagnostics],
     refresh_count: input.refreshCount,
@@ -4839,6 +5487,9 @@ var CopyController = class {
   beadWatch = null;
   signature = "";
   closed = false;
+  confirming = null;
+  creating = null;
+  notice = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   applied = /* @__PURE__ */ new WeakSet();
   /** Discovers gc's API and the cities; run it in a task of this copy (init). */
@@ -4879,6 +5530,7 @@ var CopyController = class {
       this.machineVersion(),
       this.citiesRev,
       this.city?.snapshot().rev ?? -1,
+      this.city?.activity().rev ?? -1,
       this.onScreen,
       this.selected,
       this.selectedBead
@@ -4914,6 +5566,9 @@ var CopyController = class {
       board,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
       detail: s ? detailModel({ snapshot: s, now, selected: this.selected }) : { kind: "none" },
+      activity: this.city ? activityModel(this.city.activity(), s, now) : null,
+      dialog: this.dialog(),
+      notice: this.notice,
       diagnostics: diagnosticsModel({
         entries: [
           ...s?.errors ?? [],
@@ -4965,6 +5620,127 @@ var CopyController = class {
   }
   toggleDiagnostics() {
     this.diagnosticsOpen = !this.diagnosticsOpen;
+  }
+  /**
+   * The person asks for an action. A destructive one asks first; one already
+   * under way is not sent again; otherwise it is sent now, in this copy's turn.
+   */
+  request(spec2) {
+    if (spec2.confirm !== null) {
+      this.creating = null;
+      this.confirming = { specs: [spec2], retryOf: null };
+      return;
+    }
+    this.send(spec2);
+  }
+  /** Kill asks first, offering a plain and a forced kill. */
+  requestKill(sessionId) {
+    this.creating = null;
+    this.confirming = { specs: [sessionKill(sessionId, false), sessionKill(sessionId, true)], retryOf: null };
+  }
+  /** The person confirmed the dialog with its `choice`-th action. */
+  confirm(choice) {
+    const c = this.confirming;
+    const spec2 = c?.specs[choice];
+    this.confirming = null;
+    if (!c || !spec2) return;
+    if (c.retryOf !== null) this.retryNow(c.retryOf);
+    else this.send(spec2);
+  }
+  /** Closes the dialog without acting. */
+  cancelDialog() {
+    this.confirming = null;
+    this.creating = null;
+  }
+  /** Retries an action from the activity log (a destructive one asks again). */
+  retryAction(id) {
+    const entry = this.city?.activity().entries.find((e) => e.id === id);
+    if (!entry) return;
+    if (entry.spec.confirm !== null) {
+      this.creating = null;
+      this.confirming = { specs: [entry.spec], retryOf: id };
+      return;
+    }
+    this.retryNow(id);
+  }
+  /** Refetches what an action changed, so its state can be checked before a retry. */
+  refreshAction(id) {
+    this.city?.refreshAction(id);
+  }
+  /** Sends text to the open session; returns whether it was sent (the caller then clears its input). */
+  sendInput(text, mode) {
+    const id = this.selectedRef();
+    if (id === null) return this.refuse("open a session first");
+    if (text.trim() === "") return this.refuse("type a message first");
+    const spec2 = mode === "message" ? sessionMessage(id, text) : sessionSubmit(id, text, mode);
+    return this.send(spec2);
+  }
+  /**
+   * Answers the open session's pending prompt `requestId` with `option`, both
+   * exactly as the button showing them was drawn. If gc's current prompt is a
+   * different one (or no longer lists that option), nothing is sent: the
+   * person must see the prompt they answer.
+   */
+  answer(requestId, option) {
+    const s = this.city?.snapshot();
+    const id = this.selectedRef();
+    const d = s && id !== null ? s.details.get(id)?.pending.value?.pending : void 0;
+    if (!d || id === null) {
+      this.refuse("that prompt is no longer pending");
+      return;
+    }
+    if (d.request_id !== requestId || !d.options.includes(option)) {
+      this.refuse("the prompt changed: review it before answering");
+      return;
+    }
+    this.send(sessionRespond(id, requestId, option));
+  }
+  /** Opens the new-session form for an agent (gc's qualified name). */
+  openNewSession(agent) {
+    this.confirming = null;
+    this.creating = { agent };
+  }
+  /** Starts a session of the form's agent; `alias` may be empty. Returns whether it was sent. */
+  createSession(alias) {
+    const c = this.creating;
+    if (!c) return false;
+    this.creating = null;
+    return this.send(sessionNew(c.agent, alias.trim() === "" ? null : alias.trim()));
+  }
+  // ---- actions ----------------------------------------------------------------------
+  send(spec2) {
+    if (!this.city) return this.refuse("no running city to act on");
+    const activity = this.city ? activityModel(this.city.activity(), null, this.deps.clock.now()) : null;
+    if (isBusy(activity, spec2)) return this.refuse(`${spec2.verb} is already under way`);
+    this.notice = null;
+    this.city.act(spec2);
+    return true;
+  }
+  retryNow(id) {
+    if (!this.city) {
+      this.refuse("no running city to act on");
+      return;
+    }
+    const r = this.city.retryAction(id);
+    this.notice = r.ok ? null : `not retried: ${r.error}`;
+  }
+  refuse(why) {
+    this.notice = why;
+    return false;
+  }
+  /** The open session's id as gc sent it, if gc still lists it. */
+  selectedRef() {
+    const id = this.selected;
+    if (id === null) return null;
+    return this.city?.snapshot().sessions.value?.items.some((x) => x.id === id) ? id : null;
+  }
+  dialog() {
+    if (this.creating) return { kind: "new-session", agent: cleanLine(this.creating.agent) };
+    const c = this.confirming;
+    const first = c?.specs[0];
+    if (!c || !first?.confirm) return null;
+    const choices = c.specs.map((x) => ({ label: cleanLine(x.verb), detail: cleanLine(x.confirm?.detail ?? "") }));
+    return { kind: "confirm", question: cleanLine(c.retryOf === null ? first.confirm.question : `Retry: ${first.confirm.question}`), choices };
   }
   // ---- subscriptions --------------------------------------------------------------
   readVisibility() {
@@ -5060,6 +5836,7 @@ var CopyController = class {
       board: v.board,
       beadDetail: v.beadDetail,
       detail: v.detail,
+      activity: v.activity,
       diagnostics: v.diagnostics,
       execLog: this.deps.host.execLog(),
       refreshCount: this.refreshCount,
@@ -5577,9 +6354,9 @@ var Endpoint = class _Endpoint {
     const made = createGcClient(options);
     return made.ok ? made.value : { baseUrl: this.baseUrl, call: () => Promise.resolve(made) };
   }
-  /** Drops the group's queued requests (they reject as cancelled and are never sent). Starts nothing. */
+  /** Drops the group's queued requests (they reject as cancelled and are never sent). Starts nothing. Returns how many. */
   dropQueued(group) {
-    this.budget.dropQueued(group);
+    return this.budget.dropQueued(group);
   }
   addListener(l) {
     this.listeners.add(l);
@@ -5775,11 +6552,21 @@ var SyncRegistry = class {
         },
         onError: (k, e) => this.deps.onError?.(k, e)
       });
-      entry = { store, subs: 0 };
+      const ep = endpoint.value;
+      const ledger = new ActionLedger({
+        city: key.city,
+        clock: this.clock,
+        client: (priority, group) => ep.client(priority, group),
+        dropQueued: (group) => ep.dropQueued(group),
+        refresh: (domains) => store.refresh(domains),
+        refreshDetail: (sessionId) => store.refreshDetail(sessionId),
+        newKey: this.deps.newKey ?? (() => newIdempotencyKey())
+      });
+      entry = { store, ledger, subs: 0 };
       this.stores.set(id, entry);
     }
     entry.subs++;
-    return ok(this.subscription(id, entry.store, endpoint.value));
+    return ok(this.subscription(id, entry.store, entry.ledger, endpoint.value));
   }
   /** Subscribes a copy to a loopback gc API's shared city list; `not-loopback` otherwise. */
   subscribeCities(apiUrl) {
@@ -5867,7 +6654,7 @@ var SyncRegistry = class {
     endpoint.dispose();
     this.endpoints.delete(endpoint.baseUrl);
   }
-  subscription(id, store, endpoint) {
+  subscription(id, store, ledger, endpoint) {
     const owner = {};
     const watches = /* @__PURE__ */ new Set();
     let active = true;
@@ -5876,10 +6663,12 @@ var SyncRegistry = class {
       active = false;
       for (const release of [...watches]) release();
       watches.clear();
+      ledger.ownerGone(owner);
       store.abandonStartedBy(owner);
       const entry = this.stores.get(id);
       if (entry && --entry.subs <= 0) {
         this.stores.delete(id);
+        ledger.dispose();
         store.dispose();
         this.releaseEndpoint(endpoint, store);
       }
@@ -5899,6 +6688,7 @@ var SyncRegistry = class {
         if (active) {
           this.budget.reclaim();
           store.tick(owner);
+          ledger.tick(owner);
         }
         return store.snapshot().rev;
       },
@@ -5916,6 +6706,12 @@ var SyncRegistry = class {
         if (active) store.refresh(domains);
       },
       client: () => endpoint.client("mutation"),
+      act: (spec2) => active ? ledger.start(owner, spec2) : -1,
+      retryAction: (actionId) => active ? ledger.retry(owner, actionId, store.snapshot()) : err("this view has closed"),
+      refreshAction: (actionId) => {
+        if (active) ledger.refreshFor(actionId);
+      },
+      activity: () => ledger.snapshot(),
       unsubscribe
     };
   }
@@ -5928,11 +6724,65 @@ function sharedRegistry(create) {
 
 // src/view/panel.ts
 import { div as div6 } from "gpui-kit";
-import { h_flex as h_flex5, v_flex as v_flex5 } from "gpui-base";
+import { h_flex as h_flex6, v_flex as v_flex6 } from "gpui-base";
 
 // src/view/agents.ts
 import { div as div2 } from "gpui-kit";
-import { h_flex, v_flex } from "gpui-base";
+import { h_flex as h_flex2, v_flex as v_flex2 } from "gpui-base";
+
+// src/actions/agent.ts
+function operationFor(name) {
+  return name.includes("/") ? "post-v0-city-by-city-name-agent-by-dir-by-base-by-action" : "post-v0-city-by-city-name-agent-by-base-by-action";
+}
+function agentAction2(name, action) {
+  const operationId = operationFor(name);
+  return {
+    kind: action === "suspend" ? "agent.suspend" : "agent.resume",
+    verb: action === "suspend" ? "Suspend agent" : "Resume agent",
+    target: { kind: "agent", name },
+    operationId,
+    idempotent: OPERATIONS[operationId].idempotencyKey,
+    confirm: action === "suspend" ? { question: `Suspend agent ${name}?`, detail: "gc suspends the agent and does not run its sessions until it is resumed." } : null,
+    refresh: ["agents", "sessions"],
+    send: async (c, city) => {
+      const r = await agentAction(c, city, name, action);
+      return r.ok ? ok({ kind: "done", detail: statusDetail(r.value) }) : r;
+    }
+  };
+}
+function agentSuspend(name) {
+  return agentAction2(name, "suspend");
+}
+function agentResume(name) {
+  return agentAction2(name, "resume");
+}
+
+// src/actions/rig.ts
+var OP = "post-v0-city-by-city-name-rig-by-name-by-action";
+function rigAction2(name, action) {
+  return {
+    kind: action === "suspend" ? "rig.suspend" : "rig.resume",
+    verb: action === "suspend" ? "Suspend rig" : "Resume rig",
+    target: { kind: "rig", name },
+    operationId: OP,
+    idempotent: OPERATIONS[OP].idempotencyKey,
+    confirm: action === "suspend" ? { question: `Suspend rig ${name}?`, detail: "gc suspends the rig and may stop its running sessions; they do not run again until the rig is resumed." } : null,
+    refresh: ["rigs", "agents", "sessions"],
+    send: async (c, city) => {
+      const r = await rigAction(c, city, name, action);
+      return r.ok ? ok({ kind: "done", detail: rigDetail(r.value) }) : r;
+    }
+  };
+}
+function rigSuspend(name) {
+  return rigAction2(name, "suspend");
+}
+function rigResume(name) {
+  return rigAction2(name, "resume");
+}
+
+// src/view/dialogs.ts
+import { Input, h_flex, v_flex } from "gpui-base";
 
 // src/view/text.ts
 import { div } from "gpui-kit";
@@ -5953,9 +6803,60 @@ function themedRoot(theme2, el) {
   return tinted(tinted(el, colors.background, (e, c) => e.bg(c)), colors.foreground, (e, c) => e.text_color(c));
 }
 
+// src/view/dialogs.ts
+function button(id, text, onClick) {
+  return label(id, `[${text}]`).on_click((_, cx) => onClick(cx));
+}
+function waiting(id, text, why, theme2) {
+  return muted(label(id, `[${text}: ${why}]`), theme2);
+}
+function renderDialog(d, theme2, actions, alias) {
+  if (d === null) return null;
+  const cancel = button("gascity-dialog-cancel", "Cancel", (cx) => actions.cancelDialog(cx));
+  if (d.kind === "new-session") {
+    let form = v_flex().id("gascity-dialog").gap(4).child(label("gascity-dialog-question", `New session of agent ${d.agent}`));
+    if (alias !== null) form = form.child(h_flex().id("gascity-dialog-alias").gap(4).child(label("gascity-dialog-alias-label", "Alias (optional):")).child(Input.new(alias)));
+    return form.child(h_flex().id("gascity-dialog-buttons").gap(8).child(button("gascity-dialog-create", "Start session", (cx) => actions.createSession(cx))).child(cancel));
+  }
+  let el = v_flex().id("gascity-dialog").gap(4).child(label("gascity-dialog-question", d.question));
+  d.choices.forEach((c, i) => {
+    el = el.child(muted(label(`gascity-dialog-detail-${i}`, d.choices.length > 1 ? `${c.label}: ${c.detail}` : c.detail), theme2));
+  });
+  const buttons = d.choices.map((c, i) => button(`gascity-dialog-confirm-${i}`, c.label, (cx) => actions.confirm(i, cx)));
+  return el.child(h_flex().id("gascity-dialog-buttons").gap(8).children([...buttons, cancel]));
+}
+function renderNotice(notice) {
+  return notice === null ? null : label("gascity-notice", notice);
+}
+var TONES = {
+  pending: "pending",
+  done: "done",
+  failed: "failed",
+  unknown: "outcome unknown",
+  "not-sent": "not sent"
+};
+function activityRow(r, theme2, actions) {
+  const id = `gascity-activity-${r.id}`;
+  const attempt = r.attempt > 1 ? ` (attempt ${r.attempt})` : "";
+  const request = r.requestId === null ? "" : ` · request ${r.requestId}`;
+  let el = h_flex().id(id).gap(8).child(label(`${id}-text`, `${r.title}${attempt} → ${TONES[r.tone]}: ${r.detail}${request}`));
+  if (r.refresh) el = el.child(button(`${id}-refresh`, "Refresh state", (cx) => actions.refreshAction(r.id, cx)));
+  if (r.retry.kind === "retry") el = el.child(button(`${id}-retry`, r.retry.label, (cx) => actions.retryAction(r.id, cx)));
+  if (r.retry.kind === "wait") el = el.child(waiting(`${id}-retry`, "Retry", r.retry.reason, theme2));
+  return r.tone === "done" ? muted(el, theme2) : el;
+}
+function renderActivity(m, theme2, actions) {
+  if (m === null || m.rows.length === 0) return null;
+  return v_flex().id("gascity-activity").gap(2).child(label("gascity-activity-title", "Activity")).children(m.rows.map((r) => activityRow(r, theme2, actions)));
+}
+
 // src/view/agents.ts
-function statusText(row) {
-  return row.status.detail === null ? row.status.label : `${row.status.label} · ${row.status.detail}`;
+function actionButton(id, spec2, activity, theme2, actions) {
+  if (isBusy(activity, spec2)) return waiting(id, spec2.verb, "under way", theme2);
+  return button(id, spec2.confirm ? `${spec2.verb}…` : spec2.verb, (cx) => actions.act(spec2, cx));
+}
+function statusText(row2) {
+  return row2.status.detail === null ? row2.status.label : `${row2.status.label} · ${row2.status.detail}`;
 }
 function sessionRow(r, id, theme2, actions) {
   const parts = [r.label, statusText(r)];
@@ -5965,18 +6866,28 @@ function sessionRow(r, id, theme2, actions) {
     parts.push("no active bead");
   }
   if (r.attached) parts.push("terminal attached");
-  const row = h_flex().id(id).gap(8).on_click((_, cx) => actions.selectSession(r.selected ? null : r.id, cx)).child(label(`${id}-text`, `${r.selected ? "▸ " : ""}session ${r.id}: ${parts.join(" · ")}`));
-  return r.selected ? row : muted(row, theme2);
+  const row2 = h_flex2().id(id).gap(8).on_click((_, cx) => actions.selectSession(r.selected ? null : r.id, cx)).child(label(`${id}-text`, `${r.selected ? "▸ " : ""}session ${r.id}: ${parts.join(" · ")}`));
+  return r.selected ? row2 : muted(row2, theme2);
 }
-function agentRow(a, id, theme2, actions) {
+function agentRow(a, id, theme2, actions, activity) {
   const head = [a.label];
   if (a.pool !== null) head.push(a.pool);
+  if (a.suspended) head.push("agent suspended");
   head.push(statusText(a));
-  const el = v_flex().id(id).gap(2).child(label(`${id}-head`, head.join(" · ")));
+  const toggle = a.suspended ? agentResume(a.ref) : agentSuspend(a.ref);
+  const bar = h_flex2().id(`${id}-actions`).gap(8).child(label(`${id}-head`, head.join(" · "))).child(button(`${id}-new`, "New session…", (cx) => actions.openNewSession(a.ref, cx))).child(actionButton(`${id}-${a.suspended ? "resume" : "suspend"}`, toggle, activity, theme2, actions));
+  const el = v_flex2().id(id).gap(2).child(bar);
   return el.children(a.sessions.map((r, k) => sessionRow(r, `${id}-session-${k}`, theme2, actions)));
 }
-function renderAgents(m, theme2, actions) {
-  let region = v_flex().id("gascity-agents").gap(6).child(label("gascity-agents-title", "Agents"));
+function groupHead(g, i, theme2, actions, activity) {
+  const counts = g.counts === null ? g.listed ? "" : " (not in gc's rig list)" : ` · ${g.counts}`;
+  const title = label(`gascity-group-${i}`, `${g.collapsed ? "▸" : "▾"} ${g.title}${g.suspended ? " (suspended)" : ""}${counts}`).on_click((_, cx) => actions.toggleGroup(g.key, cx));
+  if (g.rig === null) return title;
+  const spec2 = g.suspended ? rigResume(g.rig) : rigSuspend(g.rig);
+  return h_flex2().id(`gascity-group-${i}-head`).gap(8).child(title).child(actionButton(`gascity-group-${i}-${g.suspended ? "resume" : "suspend"}`, spec2, activity, theme2, actions));
+}
+function renderAgents(m, theme2, actions, activity = null) {
+  let region = v_flex2().id("gascity-agents").gap(6).child(label("gascity-agents-title", "Agents"));
   const state = m.region;
   if (state.kind === "loading") region = region.child(muted(label("gascity-agents-loading", "loading…"), theme2));
   if (state.age !== null) region = region.child(muted(label("gascity-agents-age", state.stale ? `${state.age} (may be out of date)` : state.age), theme2));
@@ -5984,17 +6895,13 @@ function renderAgents(m, theme2, actions) {
   m.banners.forEach((b, i) => {
     region = region.child(label(`gascity-agents-banner-${i}`, b));
   });
-  const groups = m.groups.map((g, i) => {
-    const counts = g.counts === null ? g.listed ? "" : " (not in gc's rig list)" : ` · ${g.counts}`;
-    const head = label(`gascity-group-${i}`, `${g.collapsed ? "▸" : "▾"} ${g.title}${g.suspended ? " (suspended)" : ""}${counts}`).on_click((_, cx) => actions.toggleGroup(g.key, cx));
-    return v_flex().id(`gascity-group-${i}-body`).gap(4).child(head).children(g.agents.map((a, j) => agentRow(a, `gascity-agent-${i}-${j}`, theme2, actions)));
-  });
-  let body = v_flex().id("gascity-agents-body").gap(6).children(groups);
+  const groups = m.groups.map((g, i) => v_flex2().id(`gascity-group-${i}-body`).gap(4).child(groupHead(g, i, theme2, actions, activity)).children(g.agents.map((a, j) => agentRow(a, `gascity-agent-${i}-${j}`, theme2, actions, activity))));
+  let body = v_flex2().id("gascity-agents-body").gap(6).children(groups);
   if (m.other.length > 0) {
-    body = body.child(v_flex().id("gascity-other").gap(2).child(label("gascity-other-title", "Other sessions")).children(m.other.map((r, k) => sessionRow(r, `gascity-other-${k}`, theme2, actions))));
+    body = body.child(v_flex2().id("gascity-other").gap(2).child(label("gascity-other-title", "Other sessions")).children(m.other.map((r, k) => sessionRow(r, `gascity-other-${k}`, theme2, actions))));
   }
   if (m.unreadable.length > 0) {
-    body = body.child(v_flex().id("gascity-unreadable").gap(2).children(m.unreadable.map((u, k) => label(`gascity-unreadable-${k}`, u.text))));
+    body = body.child(v_flex2().id("gascity-unreadable").gap(2).children(m.unreadable.map((u, k) => label(`gascity-unreadable-${k}`, u.text))));
   }
   if (state.kind === "ok" && m.groups.length === 0 && m.other.length === 0) body = body.child(muted(label("gascity-agents-empty", "gc lists no agents"), theme2));
   return region.child(greyedIf(div2().id("gascity-agents-data").child(body), state.stale, theme2));
@@ -6002,7 +6909,7 @@ function renderAgents(m, theme2, actions) {
 
 // src/view/board.ts
 import { div as div3 } from "gpui-kit";
-import { h_flex as h_flex2, v_flex as v_flex2 } from "gpui-base";
+import { h_flex as h_flex3, v_flex as v_flex3 } from "gpui-base";
 function cardText(c) {
   const parts = [c.id];
   if (c.priority !== null) parts.push(c.priority);
@@ -6018,7 +6925,7 @@ function card2(c, id, theme2, actions) {
 }
 function column(key, m, body, theme2) {
   const id = `gascity-col-${key}`;
-  let el = v_flex2().id(id).flex_1().gap(4).child(label(`${id}-title`, `${m.title} (${m.count})`));
+  let el = v_flex3().id(id).flex_1().gap(4).child(label(`${id}-title`, `${m.title} (${m.count})`));
   const state = m.region;
   if (state.kind === "loading") el = el.child(muted(label(`${id}-loading`, "loading…"), theme2));
   if (state.age !== null) el = el.child(muted(label(`${id}-age`, state.stale ? `${state.age} (may be out of date)` : state.age), theme2));
@@ -6026,7 +6933,7 @@ function column(key, m, body, theme2) {
   m.banners.forEach((b, i) => {
     el = el.child(label(`${id}-banner-${i}`, b));
   });
-  let data = v_flex2().id(`${id}-data`).gap(2).children(body);
+  let data = v_flex3().id(`${id}-data`).gap(2).children(body);
   m.unreadable.forEach((u, i) => {
     data = data.child(label(`${id}-unreadable-${i}`, u));
   });
@@ -6036,12 +6943,12 @@ function column(key, m, body, theme2) {
 function beadDetail(m, theme2, actions) {
   if (m.kind === "none") return null;
   const close = div3().id("gascity-bead-close").on_click((_, cx) => actions.selectBead(null, cx)).child("Close");
-  if (m.kind === "missing") return v_flex2().id("gascity-bead-detail").gap(4).child(label("gascity-bead-missing", m.text)).child(close);
-  let el = v_flex2().id("gascity-bead-detail").gap(4).child(h_flex2().id("gascity-bead-head").gap(8).child(label("gascity-bead-title", `Bead ${m.id}: "${m.title}"`)).child(close)).child(muted(label("gascity-bead-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2));
+  if (m.kind === "missing") return v_flex3().id("gascity-bead-detail").gap(4).child(label("gascity-bead-missing", m.text)).child(close);
+  let el = v_flex3().id("gascity-bead-detail").gap(4).child(h_flex3().id("gascity-bead-head").gap(8).child(label("gascity-bead-title", `Bead ${m.id}: "${m.title}"`)).child(close)).child(muted(label("gascity-bead-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2));
   if (m.closeReason !== null) el = el.child(label("gascity-bead-reason", `Close reason: ${m.closeReason}`));
   if (m.region.age !== null) el = el.child(muted(label("gascity-bead-age", m.region.stale ? `${m.region.age} (may be out of date)` : m.region.age), theme2));
   if (m.region.error !== null) el = el.child(label("gascity-bead-error", m.region.error));
-  let description = v_flex2().id("gascity-bead-description").gap(0);
+  let description = v_flex3().id("gascity-bead-description").gap(0);
   if (m.description === null) description = description.child(muted(label("gascity-bead-description-note", m.descriptionNote ?? ""), theme2));
   else description = description.children(m.description.split("\n").map((line, i) => label(`gascity-bead-line-${i}`, line)));
   return el.child(greyedIf(description, m.region.stale, theme2));
@@ -6056,7 +6963,7 @@ function renderBoard(m, detail, theme2, actions) {
     closedBody.push(...m.closed.earlier.map((c, i) => card2(c, `gascity-card-earlier-${i}`, theme2, actions)));
   }
   const closed2 = column("closed", m.closed, closedBody, theme2);
-  let el = v_flex2().id("gascity-work").flex_1().gap(6).child(label("gascity-work-title", "Work")).child(muted(label("gascity-work-filter", filter), theme2)).child(h_flex2().id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed2));
+  let el = v_flex3().id("gascity-work").flex_1().gap(6).child(label("gascity-work-title", "Work")).child(muted(label("gascity-work-filter", filter), theme2)).child(h_flex3().id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed2));
   const d = beadDetail(detail, theme2, actions);
   if (d !== null) el = el.child(d);
   return el;
@@ -6064,7 +6971,7 @@ function renderBoard(m, detail, theme2, actions) {
 
 // src/view/detail.ts
 import { div as div4 } from "gpui-kit";
-import { h_flex as h_flex3, v_flex as v_flex3 } from "gpui-base";
+import { Input as Input2, h_flex as h_flex4, v_flex as v_flex4 } from "gpui-base";
 function pendingText(p) {
   switch (p.kind) {
     case "loading":
@@ -6078,20 +6985,48 @@ function pendingText(p) {
     case "prompt":
       return [
         `Pending ${p.promptKind} (request ${p.requestId}): ${p.prompt ?? "(no prompt text)"}`,
-        `Options from gc: ${p.options.length > 0 ? p.options.join(", ") : "(none)"}`
+        p.options.length > 0 ? "Answer with one of gc's options:" : "gc lists no options for this prompt"
       ];
   }
 }
-function renderDetail(m, theme2, actions) {
+function actionBar(id, ctx, theme2, actions) {
+  const specs = [
+    ["wake", sessionWake(id)],
+    ["suspend", sessionSuspend(id)],
+    ["stop", sessionStop(id)],
+    ["pin", sessionPin(id)],
+    ["unpin", sessionUnpin(id)],
+    ["close", sessionClose(id)]
+  ];
+  const buttons = specs.map(([key, spec2]) => isBusy(ctx.activity, spec2) ? waiting(`gascity-action-${key}`, spec2.verb, "under way", theme2) : button(`gascity-action-${key}`, spec2.confirm ? `${spec2.verb}…` : spec2.verb, (cx) => actions.act(spec2, cx)));
+  const kill = isBusy(ctx.activity, sessionKill(id, false)) || isBusy(ctx.activity, sessionKill(id, true)) ? waiting("gascity-action-kill", "Kill", "under way", theme2) : button("gascity-action-kill", "Kill…", (cx) => actions.requestKill(id, cx));
+  return h_flex4().id("gascity-detail-actions").gap(8).children([...buttons, kill]);
+}
+function answers(p, actions) {
+  if (p.kind !== "prompt" || p.options.length === 0) return null;
+  const { requestId, options } = p.answer;
+  return h_flex4().id("gascity-detail-answers").gap(8).children(options.map((raw, i) => button(`gascity-answer-${i}`, p.options[i] ?? "", (cx) => actions.answer(requestId, raw, cx))));
+}
+function sendBox(canInterrupt, ctx, actions) {
+  let row2 = h_flex4().id("gascity-send").gap(8);
+  if (ctx.message !== null) row2 = row2.child(Input2.new(ctx.message));
+  row2 = row2.child(button("gascity-send-default", "Send", (cx) => actions.send("default", cx)));
+  if (canInterrupt) row2 = row2.child(button("gascity-send-interrupt", "Interrupt and send", (cx) => actions.send("interrupt_now", cx)));
+  return row2.child(button("gascity-send-message", "Send as message", (cx) => actions.send("message", cx)));
+}
+function renderDetail(m, theme2, actions, ctx) {
   if (m.kind === "none") return null;
   const close = div4().id("gascity-detail-close").on_click((_, cx) => actions.close(cx)).child("Close");
-  if (m.kind === "gone") return v_flex3().id("gascity-detail").gap(4).child(label("gascity-detail-gone", m.text)).child(close);
-  let el = v_flex3().id("gascity-detail").gap(4).child(h_flex3().id("gascity-detail-head").gap(8).child(label("gascity-detail-title", `Detail: ${m.title}`)).child(close)).child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`)).child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2)).child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`));
+  if (m.kind === "gone") return v_flex4().id("gascity-detail").gap(4).child(label("gascity-detail-gone", m.text)).child(close);
+  let el = v_flex4().id("gascity-detail").gap(4).child(h_flex4().id("gascity-detail-head").gap(8).child(label("gascity-detail-title", `Detail: ${m.title}`)).child(close)).child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`)).child(actionBar(m.ref, ctx, theme2, actions)).child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2)).child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`));
   pendingText(m.pending).forEach((t, i) => {
     el = el.child(label(`gascity-detail-pending-${i}`, t));
   });
+  const answer = answers(m.pending, actions);
+  if (answer !== null) el = el.child(answer);
+  el = el.child(sendBox(m.canInterrupt, ctx, actions));
   const out = m.output;
-  let output = v_flex3().id("gascity-detail-output").gap(0);
+  let output = v_flex4().id("gascity-detail-output").gap(0);
   if (out.region.age !== null) output = output.child(muted(label("gascity-detail-output-age", `output, ${out.region.age}`), theme2));
   if (out.region.error !== null) output = output.child(label("gascity-detail-output-error", out.region.error));
   if (out.text === null) {
@@ -6104,10 +7039,10 @@ function renderDetail(m, theme2, actions) {
 
 // src/view/header.ts
 import { div as div5 } from "gpui-kit";
-import { h_flex as h_flex4, v_flex as v_flex4 } from "gpui-base";
+import { h_flex as h_flex5, v_flex as v_flex5 } from "gpui-base";
 function renderHeader(h, theme2, actions) {
   const out = [];
-  let status2 = h_flex4().id("gascity-status").gap(8).child(label("gascity-chip", h.chip.text));
+  let status2 = h_flex5().id("gascity-status").gap(8).child(label("gascity-chip", h.chip.text));
   if (h.needsYou !== null) status2 = status2.child(label("gascity-needs-you", h.needsYou));
   if (h.age !== null) status2 = status2.child(muted(label("gascity-age", h.age), theme2));
   if (h.canRetry) status2 = status2.child(div5().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now"));
@@ -6121,12 +7056,12 @@ function renderHeader(h, theme2, actions) {
   }
   if (h.choices !== null && h.choices.length > 0) {
     const heading = h.city === null ? "Choose a city:" : "Switch to:";
-    const list = v_flex4().id("gascity-choices").gap(4).child(label("gascity-choices-heading", heading));
+    const list = v_flex5().id("gascity-choices").gap(4).child(label("gascity-choices-heading", heading));
     out.push(list.children(h.choices.map((c, i) => label(`gascity-choose-${i}`, `${c.name} (${c.label})`).on_click((_, cx) => actions.select(c.name, cx)))));
   }
   if (h.diagnostics.length > 0) {
     const lines = h.diagnostics.map((line, i) => muted(label(`gascity-diagnostic-${i}`, line), theme2));
-    out.push(v_flex4().id("gascity-diagnostics").gap(2).child(label("gascity-diagnostics-heading", "Discovery:")).children(lines));
+    out.push(v_flex5().id("gascity-diagnostics").gap(2).child(label("gascity-diagnostics-heading", "Discovery:")).children(lines));
   }
   return out;
 }
@@ -6148,26 +7083,32 @@ function diagnostics(model) {
   const toggle = div6().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
   if (!view.diagnosticsOpen) return toggle;
   const lines = view.diagnostics.map((d, i) => muted(label(`gascity-diag-${i}`, `${d.at ?? ""} ${d.source}: ${d.text}`.trim()), theme2));
-  return v_flex5().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
+  return v_flex6().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
 }
 function renderPanel(model) {
   const title = div6().id("gascity-title").text_size(16).font_semibold().child(TITLE);
   if (model.kind === "host-incompatible") {
-    const root2 = v_flex5().id("gascity-root").size_full().p(12).gap(8);
+    const root2 = v_flex6().id("gascity-root").size_full().p(12).gap(8);
     return root2.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  let root = themedRoot(model.theme, v_flex5().id("gascity-root").size_full().p(12).gap(8)).child(title);
+  let root = themedRoot(model.theme, v_flex6().id("gascity-root").size_full().p(12).gap(8)).child(title);
   if (model.kind === "copy-invalid") {
     return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
-  const { view, theme: theme2, actions } = model;
+  const { view, theme: theme2, actions, inputs } = model;
   root = root.children(renderHeader(view.header, theme2, actions));
+  const dialog = renderDialog(view.dialog, theme2, actions, inputs?.alias ?? null);
+  if (dialog !== null) root = root.child(dialog);
+  const notice = renderNotice(view.notice);
+  if (notice !== null) root = root.child(notice);
   const regions = [];
-  if (view.agents !== null) regions.push(div6().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme2, actions)));
+  if (view.agents !== null) regions.push(div6().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme2, actions, view.activity)));
   if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions));
-  if (regions.length > 0) root = root.child(h_flex5().id("gascity-main").gap(12).children(regions));
-  const detail = renderDetail(view.detail, theme2, actions);
+  if (regions.length > 0) root = root.child(h_flex6().id("gascity-main").gap(12).children(regions));
+  const detail = renderDetail(view.detail, theme2, actions, { activity: view.activity, message: inputs?.message ?? null });
   if (detail !== null) root = root.child(detail);
+  const activity = renderActivity(view.activity, theme2, actions);
+  if (activity !== null) root = root.child(activity);
   const diag = diagnostics(model);
   if (diag !== null) root = root.child(diag);
   return themeIssues(root, theme2);
@@ -6208,7 +7149,20 @@ function setUp() {
   });
   return { kind: "ready", copy };
 }
-function actionsFor(copy) {
+function inputsFor(copy) {
+  const message = InputState.new({ placeholder: "Message to the session" });
+  const alias = InputState.new({ placeholder: "alias (optional)" });
+  message.on("submit", (_, cx) => {
+    if (copy.sendInput(message.value(), "default")) message.set_value("");
+    cx.notify();
+  });
+  alias.on("submit", (_, cx) => {
+    if (copy.createSession(alias.value())) alias.set_value("");
+    cx.notify();
+  });
+  return { message, alias };
+}
+function actionsFor(copy, inputs) {
   return {
     retry: (cx) => {
       cx.spawn((task) => copy.retry(taskOf(task)));
@@ -6237,15 +7191,57 @@ function actionsFor(copy) {
     toggleDiagnostics: (cx) => {
       copy.toggleDiagnostics();
       cx.notify();
+    },
+    act: (spec2, cx) => {
+      copy.request(spec2);
+      cx.notify();
+    },
+    requestKill: (sessionId, cx) => {
+      copy.requestKill(sessionId);
+      cx.notify();
+    },
+    send: (mode, cx) => {
+      if (inputs !== null && copy.sendInput(inputs.message.value(), mode)) inputs.message.set_value("");
+      cx.notify();
+    },
+    answer: (requestId, option, cx) => {
+      copy.answer(requestId, option);
+      cx.notify();
+    },
+    openNewSession: (agent, cx) => {
+      copy.openNewSession(agent);
+      cx.notify();
+    },
+    createSession: (cx) => {
+      if (inputs !== null && copy.createSession(inputs.alias.value())) inputs.alias.set_value("");
+      cx.notify();
+    },
+    confirm: (choice, cx) => {
+      copy.confirm(choice);
+      cx.notify();
+    },
+    cancelDialog: (cx) => {
+      copy.cancelDialog();
+      cx.notify();
+    },
+    retryAction: (id, cx) => {
+      copy.retryAction(id);
+      cx.notify();
+    },
+    refreshAction: (id, cx) => {
+      copy.refreshAction(id);
+      cx.notify();
     }
   };
 }
 var GasCity = class extends View {
   state = { kind: "copy-invalid", error: "init has not run" };
+  inputs = null;
   init(_props, cx) {
     this.state = setUp();
     const state = this.state;
     if (state.kind !== "ready") return;
+    this.inputs = inputsFor(state.copy);
     cx.spawn((task) => state.copy.discover(taskOf(task)));
     cx.timer.every(TICK_MS, (tcx) => {
       if (state.copy.tick()) tcx.notify();
@@ -6259,7 +7255,7 @@ var GasCity = class extends View {
     if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme2 = readTheme();
     if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme: theme2, error: state.error });
-    return renderPanel({ kind: "city", theme: theme2, view: state.copy.view(systemClock.now()), actions: actionsFor(state.copy) });
+    return renderPanel({ kind: "city", theme: theme2, view: state.copy.view(systemClock.now()), actions: actionsFor(state.copy, this.inputs), inputs: this.inputs });
   }
 };
 export {
