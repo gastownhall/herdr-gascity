@@ -4,9 +4,11 @@ name: herdr-app types drift
 # herdr-app release generates (`herdr-app types`, headless, no display) instead
 # of the hand-written subsets in types/. Hourly it only looks for a new release
 # (releases.herdr.dev/app/latest.json) and checks one it has not checked yet;
-# once a day it checks the current release regardless. A failing run is the
-# signal; the job summary shows the type errors and what changed in the host
-# declarations the mod uses since the last checked release.
+# once a day it checks the current release regardless. While the current
+# release's last result is a failure, every hourly run fails at once, so the
+# status stays red until a daily or dispatched check passes. A failing run is
+# the signal; the job summary shows the type errors and what changed in the
+# host declarations the mod uses since the last checked release.
 #
 # This job runs herdr's published install.sh: it is never given a secret.
 
@@ -42,13 +44,14 @@ jobs:
         timeout-minutes: 2
         run: canary/bootstrap-linux.sh resolve
 
-      - name: Was this release checked already?
-        id: seen
+      # Results are a new cache entry per run (entries cannot be overwritten);
+      # the prefix restores the most recent one for this release.
+      - name: This release's last result
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/herdr-canary/host-types
-          key: herdr-host-types-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}
-          lookup-only: true
+          path: ${{ runner.temp }}/herdr-canary/host-result
+          key: herdr-types-result-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: herdr-types-result-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-
 
       - name: Decide
         id: decide
@@ -56,7 +59,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           SCHEDULE: ${{ github.event.schedule }}
           HERDR_APP_VERSION: ${{ steps.resolve.outputs.app }}
-          CHECKED: ${{ steps.seen.outputs.cache-hit }}
         run: canary/types-drift.sh decide
 
       - name: S0 preflight (packages)
@@ -98,6 +100,7 @@ jobs:
         run: canary/spike-linux.sh types
 
       - name: T0 restore the last checked release's declarations
+        id: previous
         if: steps.generate.outcome == 'success'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -115,21 +118,40 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: T1 type-check src/ against the generated declarations
+        id: check
         if: steps.generate.outcome == 'success'
         timeout-minutes: 3
         run: canary/types-drift.sh check
 
-      # Marks the release checked (the hourly run skips it), pass or fail.
+      # The declarations, for the next release's diff: once per release.
       - name: T2 remember this release's declarations
-        if: always() && steps.generate.outcome == 'success' && steps.seen.outputs.cache-hit != 'true'
+        if: always() && steps.generate.outcome == 'success' && steps.previous.outputs.cache-hit != 'true'
         run: canary/types-drift.sh remember
 
       - name: T2 save this release's declarations
-        if: always() && steps.generate.outcome == 'success' && steps.seen.outputs.cache-hit != 'true'
+        if: always() && steps.generate.outcome == 'success' && steps.previous.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/herdr-canary/host-types
           key: herdr-host-types-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}
+
+      # The result: the hourly run skips a pass and fails fast on a failure.
+      # A failure before `herdr-app types` ran (packages, mirror) records
+      # nothing, so the next hourly run tries again.
+      - name: T3 record this run's result
+        id: record
+        if: always() && (steps.generate.outcome == 'failure' || steps.check.outcome == 'success' || steps.check.outcome == 'failure')
+        env:
+          RESULT: ${{ steps.check.outcome == 'success' && 'pass' || 'fail' }}
+          HERDR_APP_VERSION: ${{ steps.resolve.outputs.app }}
+        run: canary/types-drift.sh record "$RESULT"
+
+      - name: T3 save this run's result
+        if: always() && steps.record.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/host-result
+          key: herdr-types-result-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Teardown
         if: always() && steps.decide.outputs.check == 'true'

@@ -135,8 +135,9 @@ the job summary; they need no secrets and only read.
   `scripts/fetch-gc-spec.sh main /tmp/gc.json` then
   `bun run scripts/used-surface-diff.ts --upstream /tmp/gc.json --upstream-commit <sha>`.
 - **herdr-app types drift** (`.github/workflows/types-drift.yml`): hourly it
-  reads herdr-app's `latest.json` and checks a release it has not checked yet;
-  daily it checks the current release regardless. It installs the release the
+  reads herdr-app's `latest.json` and checks a release it has not checked yet,
+  and fails at once while the current release's last check failed (so the
+  status stays red); daily it checks the current release regardless. It installs the release the
   way the canary does (the per-release mirror), runs `herdr-app types`
   headless, and type-checks `src/` against the generated declarations with
   `compat/host-aliases.ts` in place of the subsets in `types/`. The summary
