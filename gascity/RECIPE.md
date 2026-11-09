@@ -56,7 +56,7 @@ secondary text in the theme's muted color.
   there is something to retry. Below it: the API URL, gc's version and where
   the URL came from; `City: <name>`; the other cities with their state; a
   "Choose a city:" list when more than one city runs and none is chosen;
-  the discovery diagnostics when gc was not found.
+  "Discovery:" with each place gc's API was looked for and what it gave.
 - **Agents** (left, takes the free width): one group per rig in gc's order,
   `▾ <rig> · <N> agents · <M> running` with `[Suspend rig…]`;
   then the city's own agents. Each agent row: name, pool limits, status,
