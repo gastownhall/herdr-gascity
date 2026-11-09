@@ -87,7 +87,7 @@ describe("session actions in the detail pane", () => {
   test("the action bar: one button per action; close and kill ask first", async () => {
     const mod = await running();
     await openDetail(mod);
-    expect(text(mod.render(), "gascity-detail-actions")).toBe("[Wake] [Suspend] [Stop turn] [Pin] [Unpin] [Close…] [Kill…]");
+    expect(text(mod.render(), "gascity-detail-actions")).toBe("[Open terminal] [Wake] [Suspend] [Stop turn] [Pin] [Unpin] [Close…] [Kill…]");
   });
 
   test("Wake: one POST with X-GC-Request and an Idempotency-Key; the log shows it pending, then done", async () => {
@@ -291,5 +291,28 @@ describe("unknown outcomes and the copy that closes", () => {
     for (let i = 0; i < 10; i++) await b.tick(1000);
     expect(posts(mod, "/wake")).toHaveLength(1);
     expect(textOf(findById(b.render(), "gascity-activity")!)).toContain("the Gas City view that started it closed");
+  });
+});
+
+describe("Open terminal in the built bundle", () => {
+  test("a running session: no wake, one tab.new with the env -u HC_* attach argv in the local space; the log shows it", async () => {
+    const mod = await running();
+    await openDetail(mod);
+    mod.click("gascity-action-terminal");
+    await mod.tick();
+    // gc says it runs: the tab opens at this copy's next tick.
+    await mod.tick();
+    expect(posts(mod, "/wake")).toEqual([]);
+    const tabNew = mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new").map((c) => c.args[1]);
+    expect(tabNew).toEqual([{
+      space: "s1",
+      name: "frontend/builder/sc-6",
+      argv: ["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET", "gc", "--city", "/scratch/city", "session", "attach", "sc-6"],
+    }]);
+    expect(activityText(mod)).toContain("Open terminal · session sc-6 → pending: tab opened");
+    expect(text(mod.render(), "gascity-action-terminal")).toBe("[Open terminal: under way]");
+    // herdr lists no terminal for it (this fake): not seen within 5 s.
+    for (let i = 0; i < 24; i++) await mod.tick();
+    expect(activityText(mod)).toContain("not opened (not-seen-in-terminals)");
   });
 });

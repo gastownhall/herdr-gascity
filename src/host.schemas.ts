@@ -108,6 +108,30 @@ export function decodeSpaces(value: unknown): Result<HostList<HostSpace>, HostDe
   return hostList("spaces", SpaceSchema, value);
 }
 
+/** What open terminal reads from herdr: every space, pane and terminal. */
+export interface HostScene {
+  spaces: HostSpace[];
+  panes: HostPane[];
+  terminals: HostTerminal[];
+}
+
+/**
+ * Decodes spaces(), panes() and terminals() together. Any unreadable entry
+ * is an error: open terminal decides where a program runs from this data, so
+ * it acts only on data it can read whole.
+ */
+export function decodeScene(raw: { spaces: unknown; panes: unknown; terminals: unknown }): Result<HostScene, HostDecodeError> {
+  const spaces = decodeSpaces(raw.spaces);
+  if (!spaces.ok) return spaces;
+  const panes = decodePanes(raw.panes);
+  if (!panes.ok) return panes;
+  const terminals = decodeTerminals(raw.terminals);
+  if (!terminals.ok) return terminals;
+  const first = spaces.value.errors[0] ?? panes.value.errors[0] ?? terminals.value.errors[0];
+  if (first) return err(first);
+  return ok({ spaces: spaces.value.items, panes: panes.value.items, terminals: terminals.value.items });
+}
+
 /** Decodes focused(); null means nothing is focused. */
 export function decodeFocused(value: unknown): Result<HostFocus | null, HostDecodeError> {
   return hostDecode("focused", FocusSchema, value);

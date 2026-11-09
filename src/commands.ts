@@ -54,6 +54,7 @@ export type Command =
   | InCity<{ verb: "close" | "kill" | "kill-force"; session: string; confirm: boolean }>
   | InCity<{ verb: "submit" | "interrupt" | "message"; session: string; text: string }>
   | InCity<{ verb: "answer"; session: string; requestId: string; option: string }>
+  | InCity<{ verb: "attach"; session: string }>
   | InCity<{ verb: "agent-suspend"; name: string; confirm: boolean }>
   | InCity<{ verb: "rig-suspend"; name: string; confirm: boolean }>
   | InCity<{ verb: "agent-resume" | "rig-resume"; name: string }>
@@ -165,6 +166,11 @@ export const GRAMMAR: Readonly<Record<string, VerbSpec>> = {
     args: [id("session"), id("request"), id("option")],
     summary: "answer a session's pending prompt with one of gc's options (its answer button); the session's detail must show that prompt",
     build: (a) => ({ verb: "answer", city: at(a, 0), session: at(a, 1), requestId: at(a, 2), option: at(a, 3) }),
+  },
+  attach: {
+    mutating: true, args: [id("session")],
+    summary: "open a session's terminal in a herdr tab, waking it through gc first (Open terminal; the t key)",
+    build: (a) => ({ verb: "attach", city: at(a, 0), session: at(a, 1) }),
   },
   "agent-suspend": {
     mutating: true, args: [id("agent")], confirm: true, summary: "suspend an agent (Suspend agent…, then Suspend agent)",
@@ -313,6 +319,7 @@ export function formatCommand(c: Command, nonce: string | null = null): string {
       case "stop":
       case "pin":
       case "unpin":
+      case "attach":
         return [c.verb, c.city, c.session];
       case "bead-reopen":
         return [c.verb, c.city, c.bead];

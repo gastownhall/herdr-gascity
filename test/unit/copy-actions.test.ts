@@ -10,6 +10,7 @@ import { sessionClose, sessionWake } from "../../src/actions/session.ts";
 import { CopyController, type CopyHost } from "../../src/copy.ts";
 import { DiscoveryController } from "../../src/discovery/controller.ts";
 import { ProbeWriter } from "../../src/probe.ts";
+import { decodeScene } from "../../src/host.schemas.ts";
 import { ok } from "../../src/result.ts";
 import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
 import { FakeGc, FakeHost, fixtureBody, type Owner } from "./sync/fakes.ts";
@@ -31,6 +32,12 @@ function setup() {
   gc.emit({ type: "order.fired", subject: "gate-sweep" });
   let keys = 0;
   const registry = new SyncRegistry({ fetch: host.wrap(gc.fetch), clock: host, random: () => 0.5, newKey: () => `key-${++keys}` });
+  const tabs: { space: string; name: string; argv: string[] }[] = [];
+  const terminalScene = {
+    spaces: [{ id: "s1", machine: null, active: true, tabs: [{ id: "t1", active: true }] }],
+    panes: [{ pane: "p1", tab: "t1", mod: "gascity" }],
+    terminals: [],
+  };
   const probe = new ProbeWriter({ path: () => "/p", read: () => Promise.resolve(ok(null)), write: () => Promise.resolve(ok(null)) });
   const copyHost: CopyHost = {
     visibility: () => ok({ windowOpen: false, layoutMods: [], panes: [{ pane: "p1", tab: "t1", mod: "gascity" }], focus: { space: "s", tab: "t1" } }),
@@ -40,6 +47,14 @@ function setup() {
     setProbe: () => {},
     keyboard: () => false,
     focusTarget: () => null,
+    terminal: {
+      scene: () => decodeScene(terminalScene),
+      openTab: (tab) => {
+        tabs.push(tab);
+        return ok(null);
+      },
+      selectTab: () => ok(null),
+    },
   };
   let n = 0;
   const open = async (): Promise<Opened> => {
@@ -66,7 +81,7 @@ function setup() {
   const click = (o: Opened, fn: (c: CopyController) => void) => host.run(o.owner, () => fn(o.copy));
   const close = (o: Opened) => host.close(o.owner, () => o.copy.close());
   const posts = (suffix: string) => gc.seen.filter((r) => r.method === "POST" && r.path.endsWith(suffix));
-  return { host, gc, open, click, close, posts };
+  return { host, gc, open, click, close, posts, tabs };
 }
 
 describe("a copy's actions", () => {
@@ -233,5 +248,64 @@ describe("a copy's actions", () => {
     expect(a.copy.view(host.now()).dialog).toMatchObject({ kind: "confirm", question: "Retry: Close session sc-20?" });
     await click(a, (c) => c.confirm(0));
     expect(posts("/close")).toHaveLength(2);
+  });
+});
+
+describe("open terminal from a copy", () => {
+  const ATTACH = ["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET", "gc", "--city", "/scratch/city", "session", "attach", "sc-20"];
+
+  test("the city path comes from gc's city list, the id from its session list, gc's program from discovery", async () => {
+    const { host, open, click, tabs, posts } = setup();
+    const a = await open();
+    await host.advance(3000);
+    await click(a, (c) => {
+      expect(c.openTerminal("sc-20")).toBe(true);
+    });
+    await host.advance(TICK_MS);
+    // gc lists sc-20 running: no wake.
+    expect(posts("/wake")).toHaveLength(0);
+    expect(tabs).toEqual([{ space: "s1", name: "worker-adhoc-88210e2896/sc-20", argv: ATTACH }]);
+  });
+
+  test("a session gc does not list, or one on a transport without a terminal, is refused and nothing is sent", async () => {
+    const { host, gc, open, click, tabs } = setup();
+    const a = await open();
+    await host.advance(3000);
+    const before = gc.seen.length;
+    await click(a, (c) => {
+      expect(c.openTerminal("sc-404")).toBe(false);
+    });
+    expect(a.copy.view(host.now()).notice).toBe("session sc-404 is not listed by gc");
+    const sessions = fixtureBody("get-v0-city-by-city-name-sessions", "ok") as { items: Record<string, unknown>[] };
+    gc.override = (req) => req.path.endsWith("/sessions")
+      ? { status: 200, body: { ...sessions, items: sessions.items.map((x) => ({ ...x, transport: "acp" })) } }
+      : undefined;
+    await click(a, (c) => c.retry({ notify: () => {}, sleep: (ms) => host.sleep(ms) }));
+    await host.advance(3000);
+    await click(a, (c) => {
+      expect(c.openTerminal("sc-20")).toBe(false);
+    });
+    expect(a.copy.view(host.now()).notice).toContain("acp");
+    expect(a.copy.view(host.now()).detail).toEqual({ kind: "none" });
+    expect(tabs).toHaveLength(0);
+    expect(gc.seen.slice(before).filter((r) => r.path.endsWith("/session/sc-20"))).toHaveLength(0);
+  });
+
+  test("the attach command and the t key call the same method as the button", async () => {
+    const { host, open, click, tabs } = setup();
+    const a = await open();
+    await host.advance(3000);
+    const ui = { focusKeyboard: () => true, retry: () => {}, closeReason: () => {}, beadTitle: () => {} };
+    await click(a, (c) => {
+      expect(c.runCommand("attach:scratch:sc-20", ui).result).toBe("done");
+    });
+    await host.advance(TICK_MS);
+    expect(tabs).toHaveLength(1);
+    await click(a, (c) => {
+      c.selectSession("sc-6");
+      expect(c.key("open-terminal", ui)).toBe(true);
+    });
+    await host.advance(TICK_MS);
+    expect(tabs.map((t) => t.argv.at(-1))).toEqual(["sc-20", "sc-6"]);
   });
 });

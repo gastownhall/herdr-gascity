@@ -60,6 +60,7 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean; herdrVersi
     setProbe: () => {},
     keyboard: () => false,
     focusTarget: () => null,
+    terminal: { scene: () => ok({ spaces: [], panes: [], terminals: [] }), openTab: () => ok(null), selectTab: () => ok(null) },
   };
   let n = 0;
   /** Opens a copy as main.ts does: discovery task and periodic timer, both in the copy's own scope. */

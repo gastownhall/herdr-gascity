@@ -124,6 +124,29 @@ describe("rules", () => {
     expect(rules("a.ts", 'sh("echo $(hc ls)");')).toEqual(["hc"]);
   });
 
+  test("a string only compared (gc's transport value) is data, not a shell command; any other use is still checked", () => {
+    expect(rules("a.ts", 'if (s.transport === "tmux") x();')).toEqual([]);
+    expect(rules("a.ts", 'const attachable = ("tmux" !== t) && t != "hc" && t == "bd";')).toEqual([]);
+    expect(rules("a.ts", 'switch (t) { case "tmux": break; }')).toEqual([]);
+    expect(rules("a.ts", 'const t = "tmux";')).toEqual(["tmux"]);
+    expect(rules("a.ts", 'run(t === "x" ? "tmux" : "sh");')).toEqual(["tmux"]);
+    expect(rules("a.ts", '["tmux"].includes(t);')).toEqual(["tmux"]);
+    expect(rules("a.ts", 'switch ("tmux") { default: }')).toEqual(["tmux"]);
+    expect(rules("a.ts", 'exec(`tmux` === t ? "bd" : "x");')).toEqual(["bd"]);
+    // Only the hc/tmux/bd word check is skipped: a compared terminal command is still a hit.
+    expect(rules("a.ts", 'if (c === "terminal.kill") x();')).toEqual(["terminal-command"]);
+  });
+
+  test("tab.new and the platform opener run only from their wrappers' exact calls", () => {
+    const tabNew = ALLOWLIST.find((e) => e.file === "src/host.ts" && e.rule === "run-command") as AllowEntry;
+    const opens = ALLOWLIST.filter((e) => e.file === "src/host.ts" && e.text.includes("open"));
+    const all = [tabNew, ...opens];
+    const wrapper = `import * as herdr from "herdr";\n${tabNew.text};\n${opens.map((e) => `${e.text};`).join("\n")}`;
+    expect(lintSource("src/host.ts", wrapper, all)).toEqual([]);
+    expect(lintSource("src/host.ts", `${wrapper}\nherdr.run("tab.new", { space, name, argv: ["sh"] });`, all).map((v) => v.rule)).toEqual(["run-command"]);
+    expect(lintSource("src/host.ts", `${wrapper}\nherdr.exec("open", [file], { timeout: OPEN_TIMEOUT_MS });`, all).map((v) => v.rule)).toEqual(["exec-program"]);
+  });
+
   test("terminal commands from herdr's command table, and dynamically built ones", () => {
     for (const command of TERMINAL_DENY) {
       expect(rules("a.ts", `run("${command}", {});`)).toEqual(["terminal-command"]);
@@ -154,12 +177,15 @@ describe("rules", () => {
     expect(hostRules("const { run } = herdr;")).toEqual(["host-access"]);
   });
 
-  test("run takes a literal command from the allowlist; exec a literal program from its allowlist", () => {
-    expect(RUN_COMMANDS).toEqual(["tab.new", "tab.select", "mod.open"]);
-    expect(EXEC_PROGRAMS).toEqual(["xdg-open", "open"]);
+  test("run takes a literal command from the allowlist; exec a literal program from its allowlist (none)", () => {
+    expect(RUN_COMMANDS).toEqual(["tab.select", "mod.open"]);
+    expect(EXEC_PROGRAMS).toEqual([]);
     for (const command of RUN_COMMANDS) expect(hostRules(`herdr.run("${command}", {});`)).toEqual([]);
-    for (const program of EXEC_PROGRAMS) expect(hostRules(`herdr.exec("${program}", [url]);`)).toEqual([]);
-    expect(hostRules("herdr.run(`tab.new`, {});")).toEqual([]);
+    expect(hostRules("herdr.run(`tab.select`, {});")).toEqual([]);
+    // tab.new and the platform opener run only from their wrappers (ALLOWLIST).
+    expect(hostRules('herdr.run("tab.new", { argv });')).toEqual(["run-command"]);
+    expect(hostRules('herdr.exec("open", [file]);')).toEqual(["exec-program"]);
+    expect(hostRules('herdr.exec("xdg-open", [url]);')).toEqual(["exec-program"]);
     expect(hostRules('herdr.run("space.close", {});')).toEqual(["run-command"]);
     expect(hostRules("herdr.run(command, {});")).toEqual(["run-command"]);
     expect(hostRules("herdr.run();")).toEqual(["run-command"]);
@@ -265,22 +291,25 @@ describe("rules", () => {
 
 describe("the one allowlisted exec: gcBin supervisor status --json", () => {
   const GC_STATUS_CALL = 'herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS })';
+  /** The gc status entries alone (the other src/host.ts entries would be stale in these snippets). */
+  const GC_STATUS_ONLY = ALLOWLIST.filter((e) => e.text === GC_STATUS_CALL);
 
-  test("the allowlist is exactly that call, in the source and in the bundle, and zod's plain-object check, each with a reason", () => {
-    expect(ALLOWLIST.map(({ file, rule }) => ({ file, rule }))).toEqual([
-      { file: "src/host.ts", rule: "exec-program" },
-      { file: "gascity/main.js", rule: "exec-program" },
-      { file: "gascity/main.js", rule: "constructor-read" },
+  test("the allowlist is exactly the wrappers' calls, in the source and (where bundled) in the bundle, and zod's plain-object check, each with a reason", () => {
+    expect(ALLOWLIST.map(({ file, rule, text }) => ({ file, rule, text }))).toEqual([
+      { file: "src/host.ts", rule: "exec-program", text: GC_STATUS_CALL },
+      { file: "gascity/main.js", rule: "exec-program", text: GC_STATUS_CALL },
+      { file: "src/host.ts", rule: "run-command", text: 'herdr.run("tab.new", { space: tab.space, name, argv })' },
+      { file: "gascity/main.js", rule: "run-command", text: 'herdr.run("tab.new", { space: tab.space, name, argv })' },
+      { file: "src/host.ts", rule: "exec-program", text: 'herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS })' },
+      { file: "src/host.ts", rule: "exec-program", text: 'herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS })' },
+      { file: "gascity/main.js", rule: "constructor-read", text: expect.stringMatching(/^const ctor = o\.constructor;/) },
     ]);
-    expect(ALLOWLIST[0]?.text).toBe(GC_STATUS_CALL);
-    expect(ALLOWLIST[1]?.text).toBe(GC_STATUS_CALL);
-    expect(ALLOWLIST[2]?.text).toStartWith("const ctor = o.constructor;");
     for (const e of ALLOWLIST) expect(e.reason.length).toBeGreaterThan(40);
     expect(GC_STATUS_CALL).toContain(JSON.stringify(GC_STATUS_ARGS).replaceAll(",", ", "));
   });
 
   test("any other argv, program or options is still a hit (fixture exec-gc-status.ts)", async () => {
-    const violations = lintSource("src/host.ts", await fixture("exec-gc-status.ts"), ALLOWLIST);
+    const violations = lintSource("src/host.ts", await fixture("exec-gc-status.ts"), GC_STATUS_ONLY);
     expect(violations.map((v) => [v.rule, v.line])).toEqual([
       ["exec-program", 6], ["exec-program", 7], ["exec-program", 8], ["exec-program", 9],
     ]);
@@ -288,7 +317,7 @@ describe("the one allowlisted exec: gcBin supervisor status --json", () => {
 
   test("the entry pins one place: the same call a second time in src/host.ts is a hit, and the entry says so", () => {
     const text = `import * as herdr from "herdr";\n${GC_STATUS_CALL};\nexport const again = () => ${GC_STATUS_CALL};`;
-    expect(lintSource("src/host.ts", text, ALLOWLIST).map((v) => [v.rule, v.line])).toEqual([
+    expect(lintSource("src/host.ts", text, GC_STATUS_ONLY).map((v) => [v.rule, v.line])).toEqual([
       ["allowlist-not-unique", 1], ["exec-program", 2], ["exec-program", 3],
     ]);
   });
@@ -321,7 +350,7 @@ describe("allowlist", () => {
   });
 
   test("zod's plain-object check is allowed in the bundle once, and only there", async () => {
-    const zodEntry = ALLOWLIST[2] as AllowEntry;
+    const zodEntry = ALLOWLIST.find((e) => e.rule === "constructor-read") as AllowEntry;
     expect(rules("gascity/main.js", `function isPlainObject(o) {\n  ${zodEntry.text}\n}`, [zodEntry])).toEqual([]);
     expect(rules("gascity/main.js", `function isPlainObject(o) {\n  ${zodEntry.text}\n}\nconst c = o.constructor;`, [zodEntry]))
       .toEqual(["constructor-read"]);

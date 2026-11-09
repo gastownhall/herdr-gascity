@@ -25,6 +25,11 @@ import { formatCommand, parseCommand } from "../../src/commands.ts";
 import { CommandBook } from "../../src/commandBook.ts";
 import { focusToApply, nextFocus } from "../../src/notify/focus.ts";
 import { NeedsYouNotifier } from "../../src/notify/needsYou.ts";
+import { decodeScene } from "../../src/host.schemas.ts";
+import { openUrlIssue, probePathIssue } from "../../src/hostGuards.ts";
+import { attachArgv, attachArgvIssue, supportsNoStart } from "../../src/terminal/argv.ts";
+import { openTerminal, type TerminalHost } from "../../src/terminal/attach.ts";
+import { resolveBinding } from "../../src/terminal/binding.ts";
 
 /** One fixture as the test passes it in. */
 export interface ProbeFixture {
@@ -266,6 +271,93 @@ function commandScenario(): unknown {
   return { roundTrip, refused, toasts, claims, focus: [focusToApply(t2, 0, 2500), focusToApply(t2, 2, 2500)] };
 }
 
+/**
+ * Open terminal on an injected clock: an asleep session is woken through
+ * gc's API, polled until running, then a tab is opened in the local space
+ * (a remote space is active; a running attach there is ignored) and
+ * confirmed in the terminal list; a second open of a session whose attach
+ * still runs selects its tab. Plus the argv, URL and path guards.
+ */
+async function terminalScenario(fixtures: ProbeFixture[]): Promise<unknown> {
+  let now = 2_000_000;
+  const body = (op: string, name: string) => fixtures.find((f) => f.op === op && f.name === name)?.body as Record<string, unknown>;
+  let gets = 0;
+  const paths: string[] = [];
+  const fetch: HostFetch = (url, init) => {
+    const path = url.replace("http://127.0.0.1:8372", "");
+    paths.push(`${init.method} ${path}`);
+    let reply: unknown = { items: [], total: 0 };
+    if (init.method === "POST" && path.endsWith("/wake")) reply = body("post-v0-city-by-city-name-session-by-id-wake", "ok");
+    else if (/\/session\/sc-20$/.test(path)) {
+      const up = ++gets >= 3;
+      reply = { ...body("get-v0-city-by-city-name-session-by-id", "peek"), running: up, state: up ? "active" : "asleep" };
+    } else if (path.includes("/sessions")) reply = body("get-v0-city-by-city-name-sessions", "ok");
+    const text = JSON.stringify(reply);
+    return Promise.resolve({ status: 200, ok: true, url, text: () => Promise.resolve(text) });
+  };
+  const term = (address: string, argv: string[], shell: boolean) => ({ address, argv, labels: {}, state: "live", program: { shell } });
+  const raw = {
+    spaces: [
+      { id: "box/s3", machine: "box", active: true, tabs: [{ id: "box/t9", active: true }] },
+      { id: "s1", machine: null, active: false, tabs: [{ id: "t1", active: false }] },
+    ] as { id: string; machine: string | null; active: boolean; tabs: { id: string; active: boolean }[] }[],
+    panes: [{ pane: "box/p9", tab: "box/t9", terminal: "box/t19" }] as unknown[],
+    terminals: [term("box/t19", attachArgv({ gcBin: "gc", cityPath: "/scratch/city", sessionId: "sc-20" }, false), false)] as unknown[],
+  };
+  const opened: unknown[] = [];
+  const selected: string[] = [];
+  const host: TerminalHost = {
+    scene: () => decodeScene(raw),
+    openTab: (tab) => {
+      opened.push(tab);
+      raw.spaces[1]?.tabs.push({ id: "t2", active: true });
+      raw.panes.push({ pane: "p2", tab: "t2", terminal: "t5" });
+      raw.terminals.push(term("t5", ["/bin/sh", "-ic", '"$@"; exec "$0" -i', "/bin/sh", ...tab.argv], false));
+      return { ok: true, value: null };
+    },
+    selectTab: (tab) => {
+      selected.push(tab);
+      return { ok: true, value: null };
+    },
+  };
+  const registry = new SyncRegistry({ fetch, clock: { now: () => now }, random: () => 0.5, newKey: () => "key-1" });
+  registry.setOnScreen(true);
+  const sub = registry.subscribe({ apiUrl: "http://127.0.0.1:8372", city: "scratch" });
+  if (!sub.ok) return { error: "subscribe" };
+  const advance = async (ms: number) => {
+    const target = now + ms;
+    await settle();
+    while (now + TICK_MS <= target) {
+      now += TICK_MS;
+      sub.value.tick();
+      await settle();
+    }
+    now = target;
+    await settle();
+  };
+  const session = body("get-v0-city-by-city-name-session-by-id", "peek") as never;
+  const binding = resolveBinding({ session, cityPath: "/scratch/city", gcBin: "gc", gcVersion: "v1.6.0" });
+  if (!binding.ok) return { error: binding.error };
+  sub.value.act(openTerminal(binding.value, "worker/sc-20", { host, clock: { now: () => now } }));
+  await advance(12_000);
+  sub.value.act(openTerminal(binding.value, "worker/sc-20", { host, clock: { now: () => now } }));
+  await advance(500);
+  const activity = activityModel(sub.value.activity(), sub.value.snapshot(), now).rows.map((r) => [r.title, r.tone, r.detail]);
+  sub.value.unsubscribe();
+  return {
+    paths: paths.filter((p) => p.includes("/session/sc-20")),
+    opened,
+    selected,
+    activity,
+    guards: {
+      argv: [attachArgvIssue(attachArgv({ gcBin: "gc", cityPath: "/c", sessionId: "sc-20" }, true)), attachArgvIssue(["sh", "-c", "x"]) !== null],
+      noStart: ["1.6.0", "1.5.1", "dev"].map(supportsNoStart),
+      url: [openUrlIssue("http://127.0.0.1:8372/"), openUrlIssue("/tmp/x.command") !== null],
+      path: [probePathIssue("/h/data/gascity-probe/probe.json", "/h"), probePathIssue("/h/mods/x/main.js", "/h") !== null],
+    },
+  };
+}
+
 /** Runs every fixture, plus a malformed body and a host-data decode, and reports the results as JSON. */
 export async function run(fixturesJson: string): Promise<string> {
   const fixtures = JSON.parse(fixturesJson) as ProbeFixture[];
@@ -278,7 +370,8 @@ export async function run(fixturesJson: string): Promise<string> {
     summary: decodeTerminals([{ address: "t1", argv: ["sh"], labels: {}, state: "live", program: { shell: true } }, { address: 2 }]),
   });
   const sync = await syncScenario(fixtures);
-  return JSON.stringify({ jitless: jitlessEnabled(), results, sync, commands: commandScenario() });
+  const terminal = await terminalScenario(fixtures);
+  return JSON.stringify({ jitless: jitlessEnabled(), results, sync, commands: commandScenario(), terminal });
 }
 
 (globalThis as { __gcEngineProbe?: { run: typeof run } }).__gcEngineProbe = { run };

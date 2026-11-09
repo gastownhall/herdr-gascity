@@ -31,6 +31,13 @@
 // declares the header (gc keeps keys in memory for 30 minutes; a gc restart
 // forgets them); where it does not, the retry is a new request.
 //
+// A watched action (activity.ts Watch: open terminal) goes on after gc's
+// answer in steps of its own. Each step starts only from a tick of the copy
+// that started the action, never from another copy's: its next steps act for
+// that copy (a tab opened for its click). So when that copy closes the
+// action ends at once as its Watch says (`abandoned`), and a step in flight
+// is ignored. Every Watch has a deadline (`expired`), so nothing hangs.
+//
 // An action may carry a follow-up (activity.ts FollowUp: create a bead, then
 // sling it). The follow-up is started once, as its own action, from the turn
 // in which the first action is learned to be done — a turn of the copy that
@@ -55,7 +62,8 @@ import type { Clock } from "../sync/clock.ts";
 import type { Domain } from "../sync/invalidate.ts";
 import type { CitySnapshot } from "../sync/store.ts";
 import {
-  isPending, type ActionEntry, type ActionSpec, type ActionState, type ActivitySnapshot, type FollowUpState, type OutcomeUnknown, type Sent,
+  isPending, type ActionEntry, type ActionSpec, type ActionState, type ActivitySnapshot, type FollowUpState, type OutcomeUnknown, type Sent, type Watch,
+  type WatchEnd,
 } from "./activity.ts";
 
 /** Delays before the first outcome polls, each measured from the previous answer… */
@@ -251,6 +259,10 @@ export class ActionLedger {
         // An orphaned outcome poll is taken over by whichever live copy ticks first.
         rec.owner = owner;
         this.poll(rec, s);
+      } else if (s.kind === "watching" && now >= s.watch.deadline) {
+        this.end(rec, s.watch.expired);
+      } else if (s.kind === "watching" && rec.owner === owner && !s.inFlight && now >= s.watch.nextAt) {
+        this.step(rec, s);
       }
     }
   }
@@ -274,6 +286,10 @@ export class ActionLedger {
         rec.token = ++this.tokens;
         rec.state = { ...s, inFlight: false, nextAt: now };
         this.commit();
+      } else if (s.kind === "watching") {
+        // Its next steps were this copy's (a tab for its click): it ends here, and a step in flight is ignored.
+        this.deps.dropQueued(rec.group);
+        this.end(rec, s.watch.abandoned);
       } else if (s.kind === "sending") {
         if (this.deps.dropQueued(rec.group) > 0) {
           this.resolve(rec, { kind: "not-sent", at: now, reason: "the Gas City view that started it closed before it was sent" });
@@ -326,6 +342,10 @@ export class ActionLedger {
       return;
     }
     const sent = r.value;
+    if (sent.kind === "watch") {
+      this.watch(rec, sent.watch);
+      return;
+    }
     if (sent.kind === "done") {
       this.resolve(rec, { kind: "done", at: now, detail: sent.detail, requestId: null });
       this.startFollowUp(rec, sent.created);
@@ -377,6 +397,53 @@ export class ActionLedger {
     } else {
       rec.state = { ...next, lastError: null };
       this.commit();
+    }
+  }
+
+  /** The action goes on as `watch` (from its request's answer, or from its previous step). */
+  private watch(rec: ActionRecord, watch: Watch): void {
+    const s = rec.state;
+    rec.state = { kind: "watching", since: s.kind === "watching" ? s.since : this.deps.clock.now(), watch, inFlight: false };
+    this.commit();
+  }
+
+  /** Runs a watched action's next step, in the turn of the copy that started it. */
+  private step(rec: ActionRecord, s: Extract<ActionState, { kind: "watching" }>): void {
+    const token = rec.token;
+    rec.state = { ...s, inFlight: true };
+    this.commit();
+    let next: Promise<Watch | WatchEnd>;
+    try {
+      next = s.watch.step(this.deps.client("mutation", rec.group), this.deps.city, () => this.live(rec, token) && rec.state.kind === "watching");
+    } catch (cause) {
+      next = Promise.reject(cause);
+    }
+    next.then(
+      (r) => {
+        if (!this.live(rec, token) || rec.state.kind !== "watching") return;
+        if ("step" in r) this.watch(rec, r);
+        else this.end(rec, r);
+      },
+      (cause: unknown) => {
+        if (!this.live(rec, token) || rec.state.kind !== "watching") return;
+        this.end(rec, { kind: "failed", error: { kind: "host-call", api: rec.spec.verb, cause: String(cause) } });
+      },
+    );
+  }
+
+  /** Ends a watched action as its Watch says. */
+  private end(rec: ActionRecord, e: WatchEnd): void {
+    const at = this.deps.clock.now();
+    switch (e.kind) {
+      case "done":
+        this.resolve(rec, { kind: "done", at, detail: e.detail, requestId: null });
+        return;
+      case "failed":
+        this.resolve(rec, { kind: "failed", at, error: e.error });
+        return;
+      case "not-sent":
+        this.resolve(rec, { kind: "not-sent", at, reason: e.reason });
+        return;
     }
   }
 

@@ -9,11 +9,13 @@ import type { HostFetch } from "./gc/client.ts";
 import type { GcError } from "./gc/errors.ts";
 import { GC_STATUS_ARGS } from "./discovery/gcStatus.ts";
 import { SETTINGS_KEY, gcBinIssue } from "./discovery/settings.ts";
-import { decodeFocused, decodePanes, layoutModNames, type HostDecodeError } from "./host.schemas.ts";
+import { decodeFocused, decodePanes, decodeScene, layoutModNames, type HostDecodeError, type HostScene } from "./host.schemas.ts";
+import { openUrlIssue, probeDir, probePathIssue } from "./hostGuards.ts";
 import { FOCUS_KEY, nextFocus } from "./notify/focus.ts";
 import { summaryText, toastText, type NeedsYou, type NeedsYouBatch } from "./notify/needsYou.ts";
 import { windowFlag, windowOpenAt } from "./notify/window.ts";
 import type { ProbeIo } from "./probe.ts";
+import { attachArgvIssue } from "./terminal/argv.ts";
 import { MOD_NAME, type VisibilityInput } from "./sync/visibility.ts";
 import type { ExecRecord } from "./vm/probe.ts";
 import { cleanLine } from "./vm/sanitize.ts";
@@ -21,7 +23,7 @@ import { cleanLine } from "./vm/sanitize.ts";
 /** The herdr exports and script globals this build calls. */
 export const REQUIRED_HOST_EXPORTS = [
   "theme", "props", "shared", "home", "readTextFile", "exec", "fetch", "localStorage", "panes", "focused", "layout", "appHome", "writeTextFile",
-  "setShared", "notify", "nextCommand", "run", "closeOverlay",
+  "setShared", "notify", "nextCommand", "run", "closeOverlay", "terminals", "spaces",
 ] as const;
 export type HostExport = (typeof REQUIRED_HOST_EXPORTS)[number];
 
@@ -46,6 +48,8 @@ export function missingHostExports(): HostExport[] {
     nextCommand: typeof herdr.nextCommand === "function",
     run: typeof herdr.run === "function",
     closeOverlay: typeof herdr.closeOverlay === "function",
+    terminals: typeof herdr.terminals === "function",
+    spaces: typeof herdr.spaces === "function",
   };
   return REQUIRED_HOST_EXPORTS.filter((name) => !present[name]);
 }
@@ -188,10 +192,70 @@ export function postNeedsYou(batch: NeedsYouBatch): { failed: NeedsYou[]; errors
   return { failed, errors };
 }
 
-/** Shows a tab holding a Gas City pane (the window's "Show Gas City tab"). */
-export function selectTab(id: string): void {
+/** Selects a tab: one holding a Gas City pane (the window's "Show Gas City tab"), or one still running an attach. */
+export function selectTab(id: string): Result<null, GcError> {
   logRecord("run", ["tab.select", id]);
-  herdr.run("tab.select", { id });
+  try {
+    herdr.run("tab.select", { id });
+    return ok(null);
+  } catch (cause) {
+    return err({ kind: "host-call", api: "run(tab.select)", cause: messageOf(cause) });
+  }
+}
+
+/** Every space, pane and terminal herdr lists, decoded (open terminal); a host-call error when herdr throws. */
+export function readTerminalScene(): Result<HostScene, GcError> {
+  let raw: { spaces: unknown; panes: unknown; terminals: unknown };
+  try {
+    raw = { spaces: herdr.spaces(), panes: herdr.panes(), terminals: herdr.terminals() };
+  } catch (cause) {
+    return err({ kind: "host-call", api: "spaces()/panes()/terminals()", cause: messageOf(cause) });
+  }
+  return decodeScene(raw);
+}
+
+/** A new tab's name is a label: one line, at most this long. */
+const TAB_NAME_LIMIT = 60;
+
+/**
+ * Opens a terminal tab in `space` running `argv`, which must be an attach
+ * argv (`env -u HC_* <gc> --city <path> session attach <id> [--no-start]`,
+ * terminal/argv.ts); anything else is refused before herdr sees it. This is
+ * the only tab.new the mod runs.
+ */
+export function openAttachTab(tab: { space: string; name: string; argv: readonly string[] }): Result<null, GcError> {
+  const issue = attachArgvIssue(tab.argv) ?? (tab.space === "" ? "no space given" : null);
+  if (issue !== null) return err({ kind: "host-call", api: "run(tab.new)", cause: `refused: ${issue}` });
+  const name = cleanLine(tab.name).slice(0, TAB_NAME_LIMIT);
+  const argv = [...tab.argv];
+  logRecord("run", ["tab.new", ...argv]);
+  try {
+    herdr.run("tab.new", { space: tab.space, name, argv });
+    return ok(null);
+  } catch (cause) {
+    return err({ kind: "host-call", api: "run(tab.new)", cause: messageOf(cause) });
+  }
+}
+
+/** How long the platform opener may run. */
+export const OPEN_TIMEOUT_MS = 10_000;
+
+/**
+ * Opens an http(s) URL on this computer (the gc dashboard) with the platform
+ * opener; any other argument is refused before anything is spawned (a file
+ * would be opened by its default handler, which runs a macOS .command file).
+ */
+export async function openUrl(opener: "xdg-open" | "open", url: string): Promise<Result<null, GcError>> {
+  const refused = openUrlIssue(url);
+  if (refused !== null) return err({ kind: "exec", argv: [opener, url], code: null, stderr: refused });
+  logRecord("exec", [opener, url]);
+  const running = opener === "open"
+    ? herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS })
+    : herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS });
+  return running.then(
+    (r): Result<null, GcError> => r.code === 0 ? ok(null) : err({ kind: "exec", argv: [opener, url], code: r.code, stderr: r.stderr.trim().slice(0, STDERR_LIMIT) }),
+    (cause: unknown): Result<null, GcError> => err({ kind: "exec", argv: [opener, url], code: null, stderr: messageOf(cause) }),
+  );
 }
 
 /** Closes this copy's overlay window. */
@@ -220,7 +284,7 @@ export function readHerdrVersion(): Result<string | null, GcError> {
 
 /** The probe file's host calls: path under the app home, read, compare-and-swap write. */
 export const probeIo: ProbeIo = {
-  path: () => `${herdr.appHome().replace(/\/+$/, "")}/data/gascity-probe/probe.json`,
+  path: () => `${probeDir(herdr.appHome())}/probe.json`,
   read: async (path) => {
     try {
       return ok(await herdr.readTextFile(path));
@@ -229,6 +293,9 @@ export const probeIo: ProbeIo = {
     }
   },
   write: async (path, text, expected) => {
+    // The only file the mod writes: a path outside the probe directory (under mods/, it would be code no lint saw) is refused.
+    const refused = probePathIssue(path, herdr.appHome());
+    if (refused !== null) return err({ kind: "host-call", api: `writeTextFile(${path})`, cause: refused });
     try {
       await herdr.writeTextFile(path, text, expected);
       return ok(null);

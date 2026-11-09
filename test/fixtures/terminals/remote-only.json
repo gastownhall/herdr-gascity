@@ -1,0 +1,32 @@
+{
+  "spaces": [
+    {
+      "id": "box/s3",
+      "index": 1,
+      "name": "box/s3",
+      "named": false,
+      "folder": "/home/person",
+      "machine": "box",
+      "branch": null,
+      "active": true,
+      "status": null,
+      "tabs": [
+        {
+          "id": "box/t9",
+          "index": 1,
+          "name": "box/t9",
+          "named": false,
+          "active": true,
+          "status": null,
+          "panes": 1,
+          "zoomed": false,
+          "settled": false,
+          "settled_at": null,
+          "changed_at": null
+        }
+      ]
+    }
+  ],
+  "panes": [],
+  "terminals": []
+}

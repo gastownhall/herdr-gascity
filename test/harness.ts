@@ -311,6 +311,10 @@ export interface FakeHostOptions {
   exec?: (command: string, args: string[], options: unknown) => Promise<FakeExecResult>;
   /** panes() and focused(): by default one gascity pane in the focused tab (on screen). */
   panes?: unknown[];
+  /** spaces(): by default one local space s1 (active) holding tab t1. */
+  spaces?: unknown[];
+  /** terminals(): by default none. */
+  terminals?: unknown[];
   focus?: unknown;
   /** Files writeTextFile writes (compare-and-swap against this map). */
   written?: Map<string, string>;
@@ -405,6 +409,8 @@ export function fakeHerdr(options: FakeHostOptions = {}, router = new CommandRou
     exec: (command, args, opts) => (options.exec ?? DEFAULT_EXEC)(command as string, args as string[], opts),
     panes: () => structuredClone(options.panes ?? [{ pane: "p1", tab: "t1", mod: "gascity", title: "gascity", focused: true }]),
     focused: () => structuredClone(options.focus === undefined ? { space: "s1", tab: "t1", pane: "p1", terminal: null } : options.focus),
+    spaces: () => structuredClone(options.spaces ?? [{ id: "s1", machine: null, active: true, tabs: [{ id: "t1", active: true }] }]),
+    terminals: () => structuredClone(options.terminals ?? []),
     layout: () => ({ type: "column", children: [] }),
     appHome: () => `${FAKE_HOME}/.config/herdr-app`,
     writeTextFile: (path, text, expected) => {

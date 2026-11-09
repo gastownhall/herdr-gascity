@@ -16,8 +16,10 @@
 // - only src/host.ts imports `herdr`, and only as `import * as herdr`;
 // - the namespace is used only as `herdr.<export>`;
 // - `herdr.run` and `herdr.exec` are called directly with a string literal
-//   first argument from RUN_COMMANDS / EXEC_PROGRAMS (the one exception is
-//   in ALLOWLIST, matched by exact text that must occur exactly once);
+//   first argument from RUN_COMMANDS / EXEC_PROGRAMS; the calls that take
+//   arguments a wrapper must check (tab.new, the platform opener, discovery's
+//   gc call) are in ALLOWLIST instead, each matched by exact text that must
+//   occur exactly once, so each can only be the wrapper's own call;
 // - `herdr.notify` is called directly with an object literal: a toast's
 //   `action` is a second way to run an app command (the toast runs
 //   run(action.name, action.args) when clicked), so an action must be an
@@ -25,7 +27,11 @@
 // - modules other than gpui-kit, gpui-base, herdr, zod and relative paths are
 //   not imported (the host's `process` module and global can spawn programs).
 // String literals are also checked for hc/tmux/bd anywhere in a shell command
-// and for the denied terminal commands, as defence in depth.
+// and for the denied terminal commands, as defence in depth. A string that is
+// only compared (an operand of ===, !==, == or !=, or a `case` label) is data
+// read from gc, not a command (gc's `transport` value "tmux"), so the
+// hc/tmux/bd word check skips it; every other use (an argument, an argv
+// element, a variable, a template) is still checked.
 //
 // Files are parsed with the TypeScript parser, so comments never count. The
 // lint scans src/**/*.ts and the built gascity/**/*.js.
@@ -106,10 +112,30 @@ const ZOD_PLAIN_OBJECT = [
   "  const prot = ctor.prototype;",
 ].join("\n");
 
+/**
+ * The one tab.new: src/host.ts openAttachTab, which refuses any argv but an
+ * attach argv (terminal/argv.ts attachArgvIssue) before this call.
+ */
+const TAB_NEW_CALL = 'herdr.run("tab.new", { space: tab.space, name, argv })';
+const TAB_NEW_REASON = "open terminal's tab.new, in openAttachTab, after attachArgvIssue refused every argv but `env -u HC_* <gc> --city <path> session attach <id>`";
+
+/**
+ * The platform opener, in src/host.ts openUrl only, after openUrlIssue
+ * refused everything but an http(s) URL on this computer (a file would be
+ * opened by its default handler, and macOS runs a .command file).
+ */
+const OPEN_CALL = 'herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS })';
+const XDG_OPEN_CALL = 'herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS })';
+const OPEN_REASON = "openUrl runs the platform opener on one argument, after openUrlIssue refused all but an http(s) URL on this computer";
+
 /** The allowlist for this repo. */
 export const ALLOWLIST: readonly AllowEntry[] = [
   { file: "src/host.ts", rule: "exec-program", text: GC_STATUS_CALL, reason: GC_STATUS_REASON },
   { file: "gascity/main.js", rule: "exec-program", text: GC_STATUS_CALL, reason: GC_STATUS_REASON },
+  { file: "src/host.ts", rule: "run-command", text: TAB_NEW_CALL, reason: TAB_NEW_REASON },
+  { file: "gascity/main.js", rule: "run-command", text: TAB_NEW_CALL, reason: TAB_NEW_REASON },
+  { file: "src/host.ts", rule: "exec-program", text: OPEN_CALL, reason: OPEN_REASON },
+  { file: "src/host.ts", rule: "exec-program", text: XDG_OPEN_CALL, reason: OPEN_REASON },
   {
     file: "gascity/main.js",
     rule: "constructor-read",
@@ -124,11 +150,11 @@ export const HOST_MODULE = "src/host.ts";
 export const ZOD_MODULE = "src/gc/zod.ts";
 
 /**
- * The herdr app commands the mod may run: open a tab (a mod tab, or a terminal
- * tab running `gc session attach`), select a tab, open the mod's overlay.
+ * The herdr app commands the mod may run with any arguments: select a tab,
+ * open the mod's overlay. (tab.new runs only from its wrapper: ALLOWLIST.)
  * Adding one is a deliberate, reviewed change to this list.
  */
-export const RUN_COMMANDS: readonly string[] = ["tab.new", "tab.select", "mod.open"];
+export const RUN_COMMANDS: readonly string[] = ["tab.select", "mod.open"];
 
 /**
  * The app commands a toast's action may run when clicked: open the mod's
@@ -136,8 +162,11 @@ export const RUN_COMMANDS: readonly string[] = ["tab.new", "tab.select", "mod.op
  */
 export const NOTIFY_ACTIONS: readonly string[] = ["mod.open"];
 
-/** The programs the mod may exec: the platform opener for the gc dashboard URL. */
-export const EXEC_PROGRAMS: readonly string[] = ["xdg-open", "open"];
+/**
+ * The programs the mod may exec with any arguments: none. Every exec is a
+ * wrapper's own call in ALLOWLIST (discovery's gc call, the platform opener).
+ */
+export const EXEC_PROGRAMS: readonly string[] = [];
 
 /**
  * Terminal commands the mod must never name: every command in herdr-app's
@@ -194,9 +223,10 @@ interface Hit {
   end: number;
 }
 
-function stringRules(value: string): RuleId[] {
+/** `compared`: the literal is only compared (isComparedOnly), so it is data, not a shell command. */
+function stringRules(value: string, compared: boolean): RuleId[] {
   const out: RuleId[] = [];
-  for (const word of value.split(SHELL_SPLIT)) {
+  for (const word of compared ? [] : value.split(SHELL_SPLIT)) {
     const rule = PROGRAMS.get(word.slice(word.lastIndexOf("/") + 1).toLowerCase());
     if (rule && !out.includes(rule)) out.push(rule);
   }
@@ -204,6 +234,19 @@ function stringRules(value: string): RuleId[] {
   if (exact) out.push(exact);
   if (TERMINAL_COMMAND.test(value) || TERMINAL_PREFIX.test(value)) out.push("terminal-command");
   return out;
+}
+
+const EQUALITY = new Set([
+  ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken,
+]);
+
+/** Is this literal only compared: an operand of ===/!==/==/!=, or a `case` label? */
+function isComparedOnly(node: ts.Node): boolean {
+  let outer: ts.Node = node;
+  while (ts.isParenthesizedExpression(outer.parent)) outer = outer.parent;
+  const p = outer.parent;
+  if (ts.isBinaryExpression(p)) return EQUALITY.has(p.operatorToken.kind);
+  return ts.isCaseClause(p) && p.expression === outer;
 }
 
 function isModuleSpecifier(node: ts.Node): boolean {
@@ -405,7 +448,7 @@ export function lintSource(file: string, text: string, allowlist: readonly Allow
       if (rule) add(rule, node);
       if (namespaces.has(node.text)) checkHostUse(node, add);
     } else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateLiteralToken(node)) {
-      if (!isModuleSpecifier(node)) for (const rule of stringRules(node.text)) add(rule, node);
+      if (!isModuleSpecifier(node)) for (const rule of stringRules(node.text, isComparedOnly(node))) add(rule, node);
     } else if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
       checkModule(node);
     } else if (ts.isCallExpression(node) || ts.isNewExpression(node)) {

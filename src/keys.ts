@@ -12,6 +12,8 @@ export type KeyAction =
   | "prev-session"
   /** Retry now: refetch everything. */
   | "refresh"
+  /** Open the open session's terminal (Open terminal). */
+  | "open-terminal"
   /** Close the open question or form (Cancel), else the open session's detail (Close). */
   | "back";
 
@@ -22,6 +24,7 @@ export const KEY_MAP: Readonly<Record<string, KeyAction>> = {
   k: "prev-session",
   up: "prev-session",
   r: "refresh",
+  t: "open-terminal",
   escape: "back",
 };
 

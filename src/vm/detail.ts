@@ -14,6 +14,7 @@ import { errorText } from "./errorText.ts";
 import { regionModel, type RegionModel } from "./region.ts";
 import { cleanLine, cleanText } from "./sanitize.ts";
 import { sessionStatus, type Status } from "./status.ts";
+import { attachRefusal } from "../terminal/binding.ts";
 
 /** The pending prompt part of the pane. */
 export type PendingView =
@@ -50,6 +51,8 @@ export type DetailModel =
     pending: PendingView;
     /** gc says the session's provider can interrupt the running turn with new input. */
     canInterrupt: boolean;
+    /** Why Open terminal is not offered (the session's transport has no terminal), or null. */
+    noTerminal: string | null;
   };
 
 export interface DetailInput {
@@ -126,5 +129,6 @@ export function detailModel(input: DetailInput): DetailModel {
     wakeReasons: wakeText(detail?.wakeReasons),
     pending: pendingView(detail?.pending),
     canInterrupt: x.submission_capabilities?.supports_interrupt_now === true,
+    noTerminal: attachRefusal(x.transport),
   };
 }

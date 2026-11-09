@@ -471,6 +471,17 @@ describe("needs-you toasts and the window, with the Gas City tab hidden", () => 
     expect(mod.herdrCalls.filter((c) => c.name === "run").map((c) => c.args)).toEqual([["tab.select", { id: "t1" }]]);
   });
 
+  test("Show Gas City tab that herdr refuses says so in the window, not only in herdr's log", async () => {
+    const mod = await running({ route: world().route, ...HIDDEN });
+    const win = await openWindow(mod);
+    mod.hostFails.set("run", "no such tab");
+    win.click("gascity-window-tab-0");
+    mod.hostFails.delete("run");
+    expect(text(win.render(), "gascity-notice")).toBe("could not show the Gas City tab: run(tab.select) failed: no such tab");
+    win.click("gascity-window-tab-0");
+    expect(text(win.render(), "gascity-notice")).toBeUndefined();
+  });
+
   test("two copies of the city post each toast once", async () => {
     const w = world();
     const mod = await running({ route: w.route, ...HIDDEN });

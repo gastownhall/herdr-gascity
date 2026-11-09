@@ -1,0 +1,121 @@
+{
+  "spaces": [
+    {
+      "id": "s1",
+      "index": 1,
+      "name": "s1",
+      "named": false,
+      "folder": "/home/person",
+      "machine": null,
+      "branch": null,
+      "active": true,
+      "status": null,
+      "tabs": [
+        {
+          "id": "t1",
+          "index": 1,
+          "name": "t1",
+          "named": false,
+          "active": true,
+          "status": null,
+          "panes": 1,
+          "zoomed": false,
+          "settled": false,
+          "settled_at": null,
+          "changed_at": null
+        },
+        {
+          "id": "t2",
+          "index": 1,
+          "name": "t2",
+          "named": false,
+          "active": false,
+          "status": null,
+          "panes": 1,
+          "zoomed": false,
+          "settled": false,
+          "settled_at": null,
+          "changed_at": null
+        }
+      ]
+    },
+    {
+      "id": "box/s3",
+      "index": 1,
+      "name": "box/s3",
+      "named": false,
+      "folder": "/home/person",
+      "machine": "box",
+      "branch": null,
+      "active": false,
+      "status": null,
+      "tabs": [
+        {
+          "id": "box/t9",
+          "index": 1,
+          "name": "box/t9",
+          "named": false,
+          "active": false,
+          "status": null,
+          "panes": 1,
+          "zoomed": false,
+          "settled": false,
+          "settled_at": null,
+          "changed_at": null
+        }
+      ]
+    }
+  ],
+  "panes": [
+    {
+      "pane": "p1",
+      "terminal": null,
+      "mod": "gascity",
+      "tab": "t1",
+      "title": "Gas City",
+      "focused": true,
+      "zoomed": false
+    },
+    {
+      "pane": "p2",
+      "terminal": "t5",
+      "tab": "t2",
+      "title": "zsh",
+      "cwd": "/home/person",
+      "branch": null,
+      "status": null,
+      "app": null,
+      "program": {},
+      "focused": false,
+      "zoomed": false,
+      "movable": true
+    }
+  ],
+  "terminals": [
+    {
+      "address": "t5",
+      "argv": [
+        "/bin/zsh"
+      ],
+      "labels": {
+        "herdr.space": "s1",
+        "herdr.tab": "t2"
+      },
+      "cwd": "/home/person",
+      "state": "live",
+      "created_ms": 1762689600000,
+      "status": null,
+      "report": null,
+      "program": {
+        "key": "shell",
+        "name": "zsh",
+        "icon": null,
+        "tint": false,
+        "tile": null,
+        "color": null,
+        "shell": true,
+        "agent": false
+      }
+    }
+  ]
+}

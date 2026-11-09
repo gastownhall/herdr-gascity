@@ -40,6 +40,7 @@ function setup() {
     setProbe: () => {},
     keyboard: () => false,
     focusTarget: () => null,
+    terminal: { scene: () => ok({ spaces: [], panes: [], terminals: [] }), openTab: () => ok(null), selectTab: () => ok(null) },
   };
   let n = 0;
   const open = async (): Promise<Opened> => {
