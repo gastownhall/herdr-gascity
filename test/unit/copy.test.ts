@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { DiscoveryController } from "../../src/discovery/controller.ts";
 import { CopyController, type CopyHost } from "../../src/copy.ts";
-import { ok } from "../../src/result.ts";
+import { err, ok } from "../../src/result.ts";
 import { ProbeWriter, type ProbeIo } from "../../src/probe.ts";
 import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
 import type { VisibilityInput } from "../../src/sync/visibility.ts";
@@ -28,7 +28,7 @@ afterEach(() => {
   opened = [];
 });
 
-function setup(opts: { visibility?: VisibilityInput; probe?: boolean } = {}) {
+function setup(opts: { visibility?: VisibilityInput; probe?: boolean; herdrVersion?: CopyHost["herdrVersion"] } = {}) {
   const host = new FakeHost();
   const gc = new FakeGc(host);
   gc.emit({ type: "order.fired", subject: "gate-sweep" });
@@ -44,10 +44,14 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean } = {}) {
   };
   const probe = new ProbeWriter(io);
   let visibility: VisibilityInput = opts.visibility ?? { windowOpen: false, layoutMods: [], panes: [{ pane: "p1", tab: "t1", mod: "gascity" }], focus: { space: "s", tab: "t1" } };
+  let visibilityThrows: string | null = null;
   const copyHost: CopyHost = {
-    visibility: () => ok(visibility),
+    visibility: () => {
+      if (visibilityThrows !== null) throw new Error(visibilityThrows);
+      return ok(visibility);
+    },
     probeEnabled: () => opts.probe ?? false,
-    herdrVersion: () => "0.1.14",
+    herdrVersion: opts.herdrVersion ?? (() => ok("0.1.14")),
     execLog: () => [],
   };
   let n = 0;
@@ -75,7 +79,11 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean } = {}) {
     return o;
   };
   const close = (o: Opened) => host.close(o.owner, () => o.copy.close());
-  return { host, gc, registry, open, close, files, setVisibility: (v: VisibilityInput) => { visibility = v; } };
+  return {
+    host, gc, registry, open, close, files,
+    setVisibility: (v: VisibilityInput) => { visibility = v; },
+    throwFromVisibility: (message: string | null) => { visibilityThrows = message; },
+  };
 }
 
 describe("a copy", () => {
@@ -270,6 +278,38 @@ describe("a copy", () => {
     expect(a.copy.view(host.now()).header.chip.text).toMatch(/^gc not reachable/);
     gc.override = null;
     await host.run(a.owner, () => a.copy.retry({ notify: () => {}, sleep: (ms) => host.sleep(ms) }));
+    await host.advance(3000);
+    expect(a.copy.view(host.now()).header.chip.text).toBe("connected");
+  });
+});
+
+describe("failures inside a copy's own work reach its diagnostics", () => {
+  test("herdr's version that cannot be read is recorded once (not swallowed); the probe says null", async () => {
+    let reads = 0;
+    const { host, open, files } = setup({
+      probe: true,
+      herdrVersion: () => {
+        reads++;
+        return err({ kind: "host-call", api: "updates()", cause: "updates is not a function" });
+      },
+    });
+    const a = await open();
+    await host.advance(6000);
+    expect(reads).toBeGreaterThan(1);
+    const lines = a.copy.view(host.now()).diagnostics.filter((d) => d.source === "herdr");
+    expect(lines.map((d) => d.text)).toEqual(["updates() failed: updates is not a function"]);
+    expect(JSON.parse(files.get("/app/data/gascity-probe/probe.json") ?? "{}").herdr_version).toBeNull();
+  });
+
+  test("an exception thrown inside a tick is recorded in the diagnostics, and the next tick carries on", async () => {
+    const { host, open, throwFromVisibility } = setup();
+    const a = await open();
+    await host.advance(3000);
+    throwFromVisibility("panes() exploded");
+    await host.advance(1000);
+    const crashed = a.copy.view(host.now()).diagnostics.filter((d) => d.source === "tick");
+    expect(crashed.map((d) => d.text)).toEqual(["a periodic update failed: panes() exploded"]);
+    throwFromVisibility(null);
     await host.advance(3000);
     expect(a.copy.view(host.now()).header.chip.text).toBe("connected");
   });

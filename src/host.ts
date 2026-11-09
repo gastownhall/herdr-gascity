@@ -117,14 +117,17 @@ export function readProbeEnabled(): boolean {
   return herdr.shared(PROBE_KEY) === true;
 }
 
-/** herdr-app's version, when this herdr-app reports it (an optional export). */
-export function readHerdrVersion(): string | null {
+/**
+ * herdr-app's version: null when this herdr-app does not export `updates`
+ * (it is optional) or reports no version; an error when the call throws.
+ */
+export function readHerdrVersion(): Result<string | null, GcError> {
+  if (typeof herdr.updates !== "function") return ok(null);
   try {
-    if (typeof herdr.updates !== "function") return null;
     const v: unknown = herdr.updates()?.app?.version;
-    return typeof v === "string" ? v : null;
-  } catch {
-    return null;
+    return ok(typeof v === "string" ? v : null);
+  } catch (cause) {
+    return err({ kind: "host-call", api: "updates()", cause: messageOf(cause) });
   }
 }
 

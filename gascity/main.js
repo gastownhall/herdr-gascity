@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:2a5616293812b6b9e6f6145b03f1e02186915bc294cf88704fe9e37d9dff15bf over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:17f034d2702122acf23f5350019868732d699e9f5b11b8be611bce0c2e3c619f over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2782,12 +2782,12 @@ function readProbeEnabled() {
   return herdr.shared(PROBE_KEY) === true;
 }
 function readHerdrVersion() {
+  if (typeof herdr.updates !== "function") return ok(null);
   try {
-    if (typeof herdr.updates !== "function") return null;
     const v = herdr.updates()?.app?.version;
-    return typeof v === "string" ? v : null;
-  } catch {
-    return null;
+    return ok(typeof v === "string" ? v : null);
+  } catch (cause) {
+    return err({ kind: "host-call", api: "updates()", cause: messageOf2(cause) });
   }
 }
 var probeIo = {
@@ -5424,6 +5424,8 @@ function syncErrorText(e) {
       return cleanLine(`an app-wide listener failed: ${e.message}`);
     case "step-crashed":
       return cleanLine(`a refresh step crashed: ${e.message}`);
+    case "tick-crashed":
+      return cleanLine(`a periodic update failed: ${e.message}`);
     case "step-stalled":
       return `a refresh step made no progress for ${Math.round(e.idleMs / 1e3)} s and was abandoned`;
     default:
@@ -5668,6 +5670,10 @@ function isCityScoped(e) {
   return e !== null && CITY_SCOPED.has(e.kind);
 }
 var HOST_ERROR_LIMIT = 20;
+var COPY_ERROR_LIMIT = 20;
+function messageOf5(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 var CopyController = class {
   constructor(deps) {
     this.deps = deps;
@@ -5698,6 +5704,8 @@ var CopyController = class {
   notice = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   applied = /* @__PURE__ */ new WeakSet();
+  /** Failures of this copy's own work, oldest first (diagnostics). */
+  failures = [];
   /** Discovers gc's API and the cities; run it in a task of this copy (init). */
   discover(task) {
     return this.deps.discovery.run(task);
@@ -5706,10 +5714,19 @@ var CopyController = class {
    * This copy's periodic timer (every TICK_MS) and nothing else calls this:
    * subscribes and unsubscribes as the machine says, ticks the shared city
    * list and city store, and writes the probe. Returns true when the view
-   * should be redrawn.
+   * should be redrawn. An exception inside is recorded in the diagnostics
+   * (and the view redrawn to show it); the next tick starts over.
    */
   tick() {
     if (this.closed) return false;
+    try {
+      return this.step();
+    } catch (cause) {
+      this.recordFailure("tick", { kind: "tick-crashed", message: messageOf5(cause) });
+      return true;
+    }
+  }
+  step() {
     const { registry: registry3, discovery, clock } = this.deps;
     this.readVisibility();
     registry3.setOnScreen(this.onScreen);
@@ -5779,7 +5796,8 @@ var CopyController = class {
         entries: [
           ...s?.errors ?? [],
           ...citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : [],
-          ...this.deps.probe.errors()
+          ...this.deps.probe.errors(),
+          ...this.failures
         ],
         drift: [...agents?.drift ?? [], ...board?.drift ?? []],
         unreadable: [...agents?.unreadable.map((u) => u.text) ?? [], ...board?.unreadable ?? []]
@@ -6141,11 +6159,23 @@ var CopyController = class {
     const m = this.deps.discovery.machine;
     return `${m.state.phase}:${selectedCity(m.state) ?? ""}:${machineIds.get(m) ?? remember(m)}:${this.deps.discovery.hostErrors.length}`;
   }
+  /** Records a failure of this copy's own work; one identical to the newest is not recorded again (a tick fails every 250 ms). */
+  recordFailure(source, error) {
+    const last = this.failures.at(-1);
+    if (last && last.source === source && JSON.stringify(last.error) === JSON.stringify(error)) return;
+    this.failures = [...this.failures, { at: this.deps.clock.now(), source, error }].slice(-COPY_ERROR_LIMIT);
+  }
+  herdrVersion() {
+    const v = this.deps.host.herdrVersion();
+    if (v.ok) return v.value;
+    this.recordFailure("herdr", v.error);
+    return null;
+  }
   writeProbe(now) {
     const v = this.view(now);
     this.deps.probe.offer(probeDocument({
       modVersion: MOD_VERSION,
-      herdrVersion: this.deps.host.herdrVersion(),
+      herdrVersion: this.herdrVersion(),
       machine: this.deps.discovery.machine,
       header: v.header,
       onScreen: this.onScreen,

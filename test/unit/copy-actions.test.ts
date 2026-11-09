@@ -35,7 +35,7 @@ function setup() {
   const copyHost: CopyHost = {
     visibility: () => ok({ windowOpen: false, layoutMods: [], panes: [{ pane: "p1", tab: "t1", mod: "gascity" }], focus: { space: "s", tab: "t1" } }),
     probeEnabled: () => false,
-    herdrVersion: () => "0.1.14",
+    herdrVersion: () => ok("0.1.14"),
     execLog: () => [],
   };
   let n = 0;

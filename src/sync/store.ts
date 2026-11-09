@@ -158,12 +158,13 @@ export interface EventsState {
   readonly resyncs: number;
 }
 
-/** A failure the store records: a gc call's, an app-wide hook that threw, or a step that crashed or stalled. */
+/** A failure the store (or a copy) records: a gc call's, an app-wide hook that threw, a step that crashed or stalled, a copy's tick that threw. */
 export type SyncError =
   | GcError
   | { kind: "listener-failed"; message: string }
   | { kind: "step-crashed"; message: string }
-  | { kind: "step-stalled"; idleMs: number };
+  | { kind: "step-stalled"; idleMs: number }
+  | { kind: "tick-crashed"; message: string };
 
 /** One diagnostics entry: when, where (a domain, "events", "bead:<id>", "listener", "step", …) and what. */
 export interface ErrorEntry {

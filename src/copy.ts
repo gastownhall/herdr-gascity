@@ -35,6 +35,7 @@ import type { HostDecodeError } from "./host.schemas.ts";
 import type { ProbeWriter } from "./probe.ts";
 import type { Result } from "./result.ts";
 import type { Clock } from "./sync/clock.ts";
+import type { ErrorEntry, SyncError } from "./sync/store.ts";
 import type { CitiesSubscription, Subscription, SyncRegistry } from "./sync/registry.ts";
 import { ALL_DOMAINS } from "./sync/invalidate.ts";
 import { mayBeOnScreen, type VisibilityInput } from "./sync/visibility.ts";
@@ -52,7 +53,8 @@ import { cleanLine } from "./vm/sanitize.ts";
 export interface CopyHost {
   visibility(): Result<VisibilityInput, HostDecodeError>;
   probeEnabled(): boolean;
-  herdrVersion(): string | null;
+  /** herdr-app's version (null when it reports none), or why it could not be read. */
+  herdrVersion(): Result<string | null, GcError>;
   execLog(): readonly ExecRecord[];
 }
 
@@ -117,6 +119,12 @@ function isCityScoped(e: GcError | null): e is CityScopedError {
 
 /** The host errors a copy keeps for its banners. */
 const HOST_ERROR_LIMIT = 20;
+/** The failures of a copy's own work (its ticks, its host reads) kept for the diagnostics. */
+const COPY_ERROR_LIMIT = 20;
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 /** One copy of the mod. */
 export class CopyController {
@@ -145,6 +153,8 @@ export class CopyController {
   private notice: string | null = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   private applied = new WeakSet<object>();
+  /** Failures of this copy's own work, oldest first (diagnostics). */
+  private failures: ErrorEntry[] = [];
 
   constructor(private readonly deps: CopyDeps) {}
 
@@ -157,10 +167,20 @@ export class CopyController {
    * This copy's periodic timer (every TICK_MS) and nothing else calls this:
    * subscribes and unsubscribes as the machine says, ticks the shared city
    * list and city store, and writes the probe. Returns true when the view
-   * should be redrawn.
+   * should be redrawn. An exception inside is recorded in the diagnostics
+   * (and the view redrawn to show it); the next tick starts over.
    */
   tick(): boolean {
     if (this.closed) return false;
+    try {
+      return this.step();
+    } catch (cause) {
+      this.recordFailure("tick", { kind: "tick-crashed", message: messageOf(cause) });
+      return true;
+    }
+  }
+
+  private step(): boolean {
     const { registry, discovery, clock } = this.deps;
     this.readVisibility();
     registry.setOnScreen(this.onScreen);
@@ -234,6 +254,7 @@ export class CopyController {
           ...(s?.errors ?? []),
           ...(citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : []),
           ...this.deps.probe.errors(),
+          ...this.failures,
         ],
         drift: [...(agents?.drift ?? []), ...(board?.drift ?? [])],
         unreadable: [...(agents?.unreadable.map((u) => u.text) ?? []), ...(board?.unreadable ?? [])],
@@ -643,11 +664,25 @@ export class CopyController {
     return `${m.state.phase}:${selectedCity(m.state) ?? ""}:${machineIds.get(m) ?? remember(m)}:${this.deps.discovery.hostErrors.length}`;
   }
 
+  /** Records a failure of this copy's own work; one identical to the newest is not recorded again (a tick fails every 250 ms). */
+  private recordFailure(source: string, error: SyncError): void {
+    const last = this.failures.at(-1);
+    if (last && last.source === source && JSON.stringify(last.error) === JSON.stringify(error)) return;
+    this.failures = [...this.failures, { at: this.deps.clock.now(), source, error }].slice(-COPY_ERROR_LIMIT);
+  }
+
+  private herdrVersion(): string | null {
+    const v = this.deps.host.herdrVersion();
+    if (v.ok) return v.value;
+    this.recordFailure("herdr", v.error);
+    return null;
+  }
+
   private writeProbe(now: number): void {
     const v = this.view(now);
     this.deps.probe.offer(probeDocument({
       modVersion: MOD_VERSION,
-      herdrVersion: this.deps.host.herdrVersion(),
+      herdrVersion: this.herdrVersion(),
       machine: this.deps.discovery.machine,
       header: v.header,
       onScreen: this.onScreen,
