@@ -442,6 +442,74 @@ describe("deadlines and the retry gate", () => {
   });
 });
 
+describe("once an attempt may have landed, every retry keeps its key", () => {
+  test("unknown (key-1) → same-key retry dropped unsent when its copy closes → the next retry still sends key-1", async () => {
+    const { host, gc, reg, open, close, act, retry, entry, sent } = setup();
+    const a = await open();
+    const b = await open();
+    await host.advance(3000);
+    let mode = "reset";
+    gc.override = (req) => {
+      if (req.method === "POST") return mode === "reset" ? { reject: "error sending request: connection reset by peer" } : { status: 202, body: ACCEPTED_SUBMIT };
+      if (mode === "busy" && req.path === "/health") return { hold: true };
+      return undefined;
+    };
+    const id = await act(a, session.sessionSubmit("sc-20", "deploy now", "default"));
+    await host.advance(6000);
+    expect(entry(a, id).state.kind).toBe("unknown");
+    // Both budget slots fill, so the same-key retry queues; then its copy closes.
+    mode = "busy";
+    const probe = reg.probeFetch();
+    await host.run(b.owner, () => {
+      void probe.fetch(`${API}/health`, { method: "GET", headers: {} }).catch(() => {});
+      void probe.fetch(`${API}/health`, { method: "GET", headers: {} }).catch(() => {});
+    });
+    expect((await retry(a, id)).ok).toBe(true);
+    await close(a);
+    expect(entry(b, id)).toMatchObject({ state: { kind: "not-sent" }, keyPinned: true });
+    mode = "accept";
+    while (gc.heldCount() > 0) gc.release(200, fixtureBody("get-health", "ok"));
+    await host.advance(1000);
+    expect((await retry(b, id)).ok).toBe(true);
+    await host.advance(500);
+    expect(sent("POST", "/submit").map((p) => p.init.headers["Idempotency-Key"])).toEqual(["key-1", "key-1"]);
+  });
+
+  test("a later definite refusal does not release the key: the earlier attempt may still have landed", async () => {
+    const { host, gc, open, act, retry, entry, sent } = setup();
+    const a = await open();
+    await host.advance(3000);
+    const answers: FakeReply[] = [
+      { reject: "connection reset" },
+      { status: 409, body: { title: "Session State Conflict", status: 409, code: "session-conflict", detail: "pending_interaction: answer first" } },
+      { status: 200, body: { status: "ok", id: "sc-20" } },
+    ];
+    let n = 0;
+    gc.override = (req) => (req.method === "POST" ? answers[n++] : undefined);
+    const id = await act(a, session.sessionStop("sc-20"));
+    await host.advance(6000);
+    await retry(a, id);
+    await host.advance(500);
+    expect(entry(a, id)).toMatchObject({ state: { kind: "failed" }, keyPinned: true });
+    await retry(a, id);
+    await host.advance(500);
+    expect(sent("POST", "/stop").map((p) => p.init.headers["Idempotency-Key"])).toEqual(["key-1", "key-1", "key-1"]);
+  });
+
+  test("a definite refusal of an action that never was uncertain still gets a new key", async () => {
+    const { host, gc, open, act, retry, entry, sent } = setup();
+    const a = await open();
+    await host.advance(3000);
+    gc.override = (req) => (req.method === "POST" ? { status: 409, body: { title: "Conflict", status: 409, code: "session-conflict", detail: "x" } } : undefined);
+    const id = await act(a, session.sessionStop("sc-20"));
+    await host.advance(500);
+    expect(entry(a, id).keyPinned).toBe(false);
+    await retry(a, id);
+    await host.advance(500);
+    expect(sent("POST", "/stop").map((p) => p.init.headers["Idempotency-Key"])).toEqual(["key-1", "key-2"]);
+  });
+});
+
 describe("herdr ownership: the copy that started an action closes", () => {
   test("while the request is in flight: unknown at once, the late answer is ignored, nothing is re-sent", async () => {
     const { host, gc, open, close, act, entry, sent } = setup();

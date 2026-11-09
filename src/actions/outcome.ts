@@ -89,6 +89,8 @@ interface ActionRecord {
   attempt: number;
   startedAt: number;
   state: ActionState;
+  /** An attempt ended unknown: it may have landed, so every retry keeps the key (ActionEntry.keyPinned). */
+  keyPinned: boolean;
   /** The copy whose turn sent the current attempt; null once it closed while the outcome is being polled (any copy's tick polls it). */
   owner: object | null;
   /** The current attempt's requests, for dropping them from the queue. */
@@ -181,7 +183,7 @@ export class ActionLedger {
     const now = this.deps.clock.now();
     const rec: ActionRecord = {
       id: ++this.seq, spec, key: this.deps.newKey(), attempt: 1, startedAt: now,
-      state: { kind: "sending", since: now }, owner, group: {}, token: 0,
+      state: { kind: "sending", since: now }, owner, group: {}, token: 0, keyPinned: false,
     };
     this.records.push(rec);
     this.trim();
@@ -199,9 +201,11 @@ export class ActionLedger {
     if (!rec) return err("the action is no longer in the activity log");
     const gate = retryGate(this.entry(rec), snapshot);
     if (!gate.allowed) return err(gate.reason);
-    // After an unknown outcome the first request may have been applied: the
-    // same key lets gc deduplicate it. After a refusal it was not: a new key.
-    if (!(rec.state.kind === "unknown" && rec.spec.idempotent)) rec.key = this.deps.newKey();
+    // Once any attempt ended unknown it may have been applied: every retry
+    // keeps that key so gc can deduplicate it, even after a later attempt was
+    // refused or never sent. Without such an attempt a refusal means nothing
+    // was applied: a new key.
+    if (!(rec.keyPinned && rec.spec.idempotent)) rec.key = this.deps.newKey();
     rec.attempt++;
     rec.startedAt = this.deps.clock.now();
     this.send(rec, owner);
@@ -365,6 +369,7 @@ export class ActionLedger {
   private resolve(rec: ActionRecord, state: Extract<ActionState, { kind: "done" | "failed" | "unknown" | "not-sent" }>): void {
     rec.token = ++this.tokens;
     rec.state = state;
+    if (state.kind === "unknown") rec.keyPinned = true;
     this.refreshAfter(rec);
     this.trim();
     this.commit();
@@ -389,7 +394,7 @@ export class ActionLedger {
   }
 
   private entry(rec: ActionRecord): ActionEntry {
-    return { id: rec.id, spec: rec.spec, key: rec.key, attempt: rec.attempt, startedAt: rec.startedAt, state: rec.state };
+    return { id: rec.id, spec: rec.spec, key: rec.key, attempt: rec.attempt, startedAt: rec.startedAt, state: rec.state, keyPinned: rec.keyPinned };
   }
 
   private commit(): void {

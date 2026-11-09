@@ -70,6 +70,20 @@ function seconds(ms: number): string {
   return `${Math.max(0, Math.round(ms / 1000))} s`;
 }
 
+/** After an attempt that may have landed, a later failure or unsent attempt says what a retry does. */
+function pinnedNote(e: ActionEntry): string {
+  if (!e.keyPinned) return "";
+  return e.spec.idempotent
+    ? ". An earlier attempt may have landed, so a retry keeps its key."
+    : ". An earlier attempt may have landed, and gc cannot deduplicate this: a retry may make it happen twice.";
+}
+
+/** A failed or unsent action's retry: a plain "Retry" (new key) unless an earlier attempt may have landed. */
+function retryLabel(e: ActionEntry): string {
+  if (!e.keyPinned) return "Retry";
+  return e.spec.idempotent ? SAME_KEY_RETRY : MAY_REPEAT_RETRY;
+}
+
 function row(e: ActionEntry, city: CitySnapshot | null, now: number): ActivityRow {
   const s = e.state;
   const base = {
@@ -95,9 +109,9 @@ function row(e: ActionEntry, city: CitySnapshot | null, now: number): ActivityRo
     case "failed": {
       const hint = problemHint(s.error) === "answer-pending-prompt" ? " (answer the pending prompt first)" : "";
       return {
-        ...base, tone: "failed", detail: `${errorText(s.error)}${hint}`,
+        ...base, tone: "failed", detail: `${errorText(s.error)}${hint}${pinnedNote(e)}`,
         requestId: s.error.kind === "outcome-failed" ? cleanLine(s.error.requestId) : null,
-        retry: { kind: "retry", label: "Retry" },
+        retry: { kind: "retry", label: retryLabel(e) },
       };
     }
     case "unknown": {
@@ -113,7 +127,7 @@ function row(e: ActionEntry, city: CitySnapshot | null, now: number): ActivityRo
       };
     }
     case "not-sent":
-      return { ...base, tone: "not-sent", detail: cleanLine(`not sent: ${s.reason}`), requestId: null, retry: { kind: "retry", label: "Retry" } };
+      return { ...base, tone: "not-sent", detail: cleanLine(`not sent: ${s.reason}${pinnedNote(e)}`), requestId: null, retry: { kind: "retry", label: retryLabel(e) } };
   }
 }
 
