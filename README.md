@@ -2,11 +2,13 @@
 
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
-**Status: scaffold, gc client, discovery, sync engine, agents panel.** The
-mod finds the gc API, lists the cities, and shows the copy's city: its
-connection state, and its rigs, agents and sessions with live status, pending
-prompts and active beads, plus a detail pane for one session. It only reads;
-actions (answer, send, wake, open a terminal) and the work board come next.
+**Status: scaffold, gc client, discovery, sync engine, agents panel, work
+board.** The mod finds the gc API, lists the cities, and shows the copy's
+city: its connection state, its rigs, agents and sessions with live status,
+pending prompts and active beads, a detail pane for one session, and the work
+board (ready, in progress, recently closed) with a detail pane for one bead.
+It only reads; actions (answer, send, wake, open a terminal, sling, close)
+come next.
 
 ## Layout
 
@@ -14,7 +16,7 @@ actions (answer, send, wake, open a terminal) and the work board come next.
 |---|---|
 | `src/` | TypeScript source of the mod. `main.ts` is the `View`; `copy.ts` wires one copy to discovery and the shared sync registry; `host.ts` is the only module that touches herdr-app's host APIs; `host.schemas.ts` decodes the host data the mod reads; `probe.ts` writes the probe file; `view/` draws from a model and does no I/O. |
 | `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
-| `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
+| `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `board.ts` (the work board and bead detail), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
 | `src/sync/` | The sync engine: one shared store per gc city per app, its poll loop, the event watcher, the fetch budget, backoff, visibility and staleness (see below). |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
@@ -280,11 +282,42 @@ it unsubscribes and starts nothing; the other copies keep updating.
   never as markdown or links.
 - **Probe.** While the shared value `gascity.probe` is `true`, the copy's
   tick writes `<app home>/data/gascity-probe/probe.json`
-  (`gascity-herdr-probe/2`): connection, discovery, city, visibility,
-  sessions with their status, board, detail, exec log, errors and the budget
-  high-water mark. It serializes the same view-models the panel draws. Writes
+  (`gascity-herdr-probe/3`): connection, discovery, city, visibility,
+  sessions with their status, the board (each column's cards, the closes
+  seen in events with their seq and `close_reason`, the seed, the filter and
+  the columns' errors), the selected bead, the session detail, exec log,
+  errors and the budget high-water mark. It serializes the same view-models the panel draws. Writes
   are herdr's compare-and-swap, at most one in flight, on change or every
   5 s.
+
+## The work board
+
+The work board sits beside the agents panel and reads the same shared store;
+it adds no polling of its own.
+
+- **Ready** and **In progress** are gc's `/work/ready` lists (open, and
+  `status=in_progress`), at most 50 each, in gc's own order (priority, then
+  creation). gc's work list has no total, so a full column says "50+". Each
+  card shows the id, priority, title, state in words ("in progress",
+  "blocked" when gc says so), type, assignee, labels.
+- **Recently closed** lists the closes the store saw in `bead.closed` events,
+  newest close first (the event's seq: gc has no close time), with gc's
+  `close_reason`. Below an "earlier (by creation time)" divider follows the
+  one-time seed (`status=closed&sort=newest&limit=20`). A bead is listed
+  once, at its latest close; one that is back in Ready or In progress was
+  reopened and is not listed as closed. At most 20 in all; when closes came
+  faster than they could be fetched the list says it may be incomplete.
+- **Infrastructure beads** (`session`, `message`, `molecule`, `gate`;
+  `INFRASTRUCTURE_BEAD_TYPES` in `src/gc/ops.ts`) are hidden. gc filters the
+  columns (`exclude_type`) but not the closes learned from events, so the
+  board filters every column too; the chip says what is hidden and how many.
+- **Bead detail.** Clicking a card opens its facts at once; the store then
+  fetches the bead by id for its description (the columns carry none), and
+  again on an event about it. Two copies showing the same bead fetch it once.
+- **Errors and staleness** work as in the agents panel: each column says how
+  old its data is (event-driven columns are confirmed by each good event
+  poll), keeps stale cards greyed with the error above them, and lists
+  entries gc sent that cannot be read; every bead string is plain text.
 
 ## Develop
 

@@ -84,6 +84,10 @@ function actionsFor(copy: CopyController): PanelActions {
       copy.selectSession(id);
       cx.notify();
     },
+    selectBead: (id, cx) => {
+      copy.selectBead(id);
+      cx.notify();
+    },
     toggleGroup: (key, cx) => {
       copy.toggleGroup(key);
       cx.notify();

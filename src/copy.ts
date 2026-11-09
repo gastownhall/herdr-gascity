@@ -29,6 +29,7 @@ import { ALL_DOMAINS } from "./sync/invalidate.ts";
 import { mayBeOnScreen, type VisibilityInput } from "./sync/visibility.ts";
 import { MOD_VERSION } from "./version.ts";
 import { agentsModel, type AgentsModel } from "./vm/agents.ts";
+import { beadDetailModel, boardModel, type BeadDetailModel, type BoardModel } from "./vm/board.ts";
 import { detailModel, type DetailModel } from "./vm/detail.ts";
 import { diagnosticsModel, type DiagnosticLine } from "./vm/diagnostics.ts";
 import { headerModel, type HeaderModel } from "./vm/header.ts";
@@ -55,6 +56,9 @@ export interface CopyView {
   header: HeaderModel;
   /** Null until a running city is subscribed. */
   agents: AgentsModel | null;
+  /** Null until a running city is subscribed. */
+  board: BoardModel | null;
+  beadDetail: BeadDetailModel;
   detail: DetailModel;
   diagnostics: DiagnosticLine[];
   diagnosticsOpen: boolean;
@@ -74,6 +78,7 @@ const HOST_ERROR_LIMIT = 20;
 /** One copy of the mod. */
 export class CopyController {
   private selected: string | null = null;
+  private selectedBead: string | null = null;
   private readonly collapsed = new Set<string>();
   private diagnosticsOpen = false;
   private refreshCount = 0;
@@ -82,6 +87,7 @@ export class CopyController {
   private citiesRev = -1;
   private city: Subscription | null = null;
   private peek: { id: string; release: () => void } | null = null;
+  private beadWatch: { id: string; release: () => void } | null = null;
   private signature = "";
   private closed = false;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
@@ -114,6 +120,7 @@ export class CopyController {
     const running = state.phase === "city-running" && endpoint !== null ? state.city.name : null;
     this.followCity(endpoint !== null && running !== null ? { apiUrl: endpoint.url, city: running } : null);
     this.followDetail();
+    this.followBead();
 
     const s = this.city?.snapshot();
     if (s && running !== null) {
@@ -130,7 +137,7 @@ export class CopyController {
     if (this.deps.host.probeEnabled()) this.writeProbe(clock.now());
 
     const signature = [
-      this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.onScreen, this.selected,
+      this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.onScreen, this.selected, this.selectedBead,
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -143,6 +150,8 @@ export class CopyController {
     this.closed = true;
     this.peek?.release();
     this.peek = null;
+    this.beadWatch?.release();
+    this.beadWatch = null;
     this.city?.unsubscribe();
     this.city = null;
     this.cities?.unsubscribe();
@@ -154,11 +163,14 @@ export class CopyController {
     const { discovery } = this.deps;
     const s = this.city?.snapshot() ?? null;
     const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed }) : null;
+    const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
     return {
       header: headerModel(discovery.machine, discovery.hostErrors, live),
       agents,
+      board,
+      beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
       detail: s ? detailModel({ snapshot: s, now, selected: this.selected }) : { kind: "none" },
       diagnostics: diagnosticsModel({
         entries: [
@@ -166,8 +178,8 @@ export class CopyController {
           ...(citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : []),
           ...this.deps.probe.errors(),
         ],
-        drift: agents?.drift ?? [],
-        unreadable: agents?.unreadable.map((u) => u.text) ?? [],
+        drift: [...(agents?.drift ?? []), ...(board?.drift ?? [])],
+        unreadable: [...(agents?.unreadable.map((u) => u.text) ?? []), ...(board?.unreadable ?? [])],
       }),
       diagnosticsOpen: this.diagnosticsOpen,
       refreshCount: this.refreshCount,
@@ -203,6 +215,12 @@ export class CopyController {
   selectSession(id: string | null): void {
     this.selected = id;
     this.followDetail();
+  }
+
+  /** Opens (or, with null, closes) the detail of a bead on the board. */
+  selectBead(id: string | null): void {
+    this.selectedBead = id;
+    this.followBead();
   }
 
   /** Collapses or expands a rig group. */
@@ -263,6 +281,8 @@ export class CopyController {
     if (cur && (key === null || cur.key.city !== key.city || cur.key.apiUrl !== key.apiUrl)) {
       this.peek?.release();
       this.peek = null;
+      this.beadWatch?.release();
+      this.beadWatch = null;
       cur.unsubscribe();
       this.city = null;
     }
@@ -287,6 +307,15 @@ export class CopyController {
     if (!this.peek && want !== null && this.city) this.peek = { id: want, release: this.city.watchPeek(want) };
   }
 
+  private followBead(): void {
+    const want = this.city !== null ? this.selectedBead : null;
+    if (this.beadWatch && this.beadWatch.id !== want) {
+      this.beadWatch.release();
+      this.beadWatch = null;
+    }
+    if (!this.beadWatch && want !== null && this.city) this.beadWatch = { id: want, release: this.city.watchBead(want) };
+  }
+
   private machineVersion(): string {
     const m = this.deps.discovery.machine;
     return `${m.state.phase}:${selectedCity(m.state) ?? ""}:${machineIds.get(m) ?? remember(m)}:${this.deps.discovery.hostErrors.length}`;
@@ -294,7 +323,6 @@ export class CopyController {
 
   private writeProbe(now: number): void {
     const v = this.view(now);
-    const s = this.city?.snapshot() ?? null;
     this.deps.probe.offer(probeDocument({
       modVersion: MOD_VERSION,
       herdrVersion: this.deps.host.herdrVersion(),
@@ -303,7 +331,8 @@ export class CopyController {
       onScreen: this.onScreen,
       keyboard: false,
       agents: v.agents,
-      snapshot: s,
+      board: v.board,
+      beadDetail: v.beadDetail,
       detail: v.detail,
       diagnostics: v.diagnostics,
       execLog: this.deps.host.execLog(),

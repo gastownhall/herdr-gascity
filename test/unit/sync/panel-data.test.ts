@@ -155,6 +155,59 @@ describe("active beads", () => {
   });
 });
 
+describe("a selected bead", () => {
+  test("is fetched by id even when the board shows it (the board has no description), once, and again on an event about it", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    const start = gc.seen.length;
+    a.sub.watchBead("sc-74");
+    await host.advance(3000);
+    expect(gc.count("/bead/sc-74", start)).toBe(1);
+    expect(a.sub.snapshot().beads.get("sc-74")?.value?.description).toBe("recorded for the herdr-gascity contract fixtures");
+    await host.advance(10_000);
+    expect(gc.count("/bead/sc-74", start)).toBe(1);
+    gc.emit({ type: "bead.updated", subject: "sc-74" });
+    await host.advance(3000);
+    expect(gc.count("/bead/sc-74", start)).toBe(2);
+  });
+
+  test("two copies watching one bead fetch it once; the last release forgets it, and an unsubscribe releases", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    const b = await open();
+    await host.advance(3000);
+    const ra = a.sub.watchBead("fe-1");
+    b.sub.watchBead("fe-1");
+    await host.advance(3000);
+    expect(gc.count("/bead/fe-1")).toBe(1);
+    ra();
+    ra();
+    expect(a.sub.snapshot().beads.has("fe-1")).toBe(true);
+    b.sub.unsubscribe();
+    expect(a.sub.snapshot().beads.has("fe-1")).toBe(false);
+  });
+
+  test("closing the copy that watched it while its fetch hangs starts nothing; the surviving copy fetches it again", async () => {
+    const { host, gc, open, close } = setup();
+    const a = await open();
+    const b = await open();
+    await host.advance(3000);
+    b.sub.watchBead("fe-1");
+    let hold = true;
+    gc.override = (req) => (req.path === "/v0/city/scratch/bead/fe-1" && hold ? { hold: true } : undefined);
+    await host.run(a.owner, () => a.sub.watchBead("fe-1"));
+    await host.advance(TICK_MS);
+    expect(gc.count("/bead/fe-1")).toBe(1);
+    const starts = host.starts.length;
+    await close(a);
+    expect(host.starts.slice(starts)).toEqual([]);
+    hold = false;
+    await host.advance(RECLAIM_AFTER_MS * 5);
+    expect(b.sub.snapshot().beads.get("fe-1")?.value?.id).toBe("fe-1");
+  });
+});
+
 describe("requests a closed copy took with it", () => {
   test("a step abandoned at close drops its queued request: it is never sent, and the close starts nothing", async () => {
     const { host, gc, open, close } = setup();

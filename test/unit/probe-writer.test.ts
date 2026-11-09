@@ -44,7 +44,7 @@ function fakeIo(initial: string | null = null) {
   };
 }
 
-const body = (n: number) => ({ schema: "gascity-herdr-probe/2", n }) as never;
+const body = (n: number) => ({ schema: "gascity-herdr-probe/3", n }) as never;
 
 describe("ProbeWriter", () => {
   test("nothing is read or written while the probe is off", async () => {
@@ -63,7 +63,7 @@ describe("ProbeWriter", () => {
     w.offer(body(2), 1100, true);
     await flush();
     expect(f.calls).toEqual([`read ${PATH}`, `write ${PATH} expected=current`, `write ${PATH} expected=current`]);
-    expect(JSON.parse(f.file()!)).toEqual({ schema: "gascity-herdr-probe/2", n: 2, seq: 2, ts: "1970-01-01T00:00:01.100Z" });
+    expect(JSON.parse(f.file()!)).toEqual({ schema: "gascity-herdr-probe/3", n: 2, seq: 2, ts: "1970-01-01T00:00:01.100Z" });
   });
 
   test("an unchanged document is written again only when the heartbeat is due", async () => {

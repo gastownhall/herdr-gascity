@@ -37,7 +37,8 @@
 // prompt (when the detail opens and whenever the city's pending list changes
 // for that session). Active beads that the board does not carry are fetched
 // by id, at most BEAD_FETCHES_PER_STEP per step, and again on an event about
-// them or at the sweep.
+// them or at the sweep. So is a watched bead (a copy's open bead detail), even
+// when the board shows it: the board's columns carry no description.
 //
 // A request the step was waiting for may be cancelled under it: dropped from
 // the fetch queue when the step is abandoned, or taken with the copy whose
@@ -304,6 +305,8 @@ export class CityStore implements EndpointListener {
   private closedQueue: ClosedRef[] = [];
   private readonly peeks = new Map<string, Watch>();
   private readonly lookups = new Map<string, OnDemand<T.Bead>>();
+  /** Watched beads (open bead details) and how many watches each has. */
+  private readonly beadWatches = new Map<string, number>();
   private seed: MutableSlot<WorkList> & { due: boolean } = { ...freshSlot<WorkList>(), due: true };
   private recent: ClosedBead[] = [];
   private incomplete = false;
@@ -406,6 +409,23 @@ export class CityStore implements EndpointListener {
         this.peeks.delete(sessionId);
         this.commit();
       }
+    };
+  }
+
+  /** Starts (or joins) watching a bead: fetched by id, and again on an event about it or at the sweep; returns the release. */
+  watchBead(beadId: string): () => void {
+    this.beadWatches.set(beadId, (this.beadWatches.get(beadId) ?? 0) + 1);
+    this.syncLookups();
+    this.commit();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const n = (this.beadWatches.get(beadId) ?? 0) - 1;
+      if (n > 0) this.beadWatches.set(beadId, n);
+      else this.beadWatches.delete(beadId);
+      this.syncLookups();
+      this.commit();
     };
   }
 
@@ -939,14 +959,14 @@ export class CityStore implements EndpointListener {
     }
   }
 
-  /** Keeps a lookup for every active bead of a session or agent that the board does not carry, and only those. */
+  /** Keeps a lookup for every watched bead and every active bead of a session or agent that the board does not carry, and only those. */
   private syncLookups(): void {
     const onBoard = new Set<string>();
     for (const list of [this.slots.ready.value, this.slots.inProgress.value, this.seed.value]) {
       for (const b of list?.items ?? []) onBoard.add(b.id);
     }
     for (const c of this.recent) onBoard.add(c.bead.id);
-    const wanted = new Set<string>();
+    const wanted = new Set<string>(this.beadWatches.keys());
     for (const x of [...(this.slots.sessions.value?.items ?? []), ...(this.slots.agents.value?.items ?? [])]) {
       if (x.active_bead !== undefined && x.active_bead !== "" && !onBoard.has(x.active_bead)) wanted.add(x.active_bead);
     }

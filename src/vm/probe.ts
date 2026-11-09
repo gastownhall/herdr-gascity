@@ -3,15 +3,15 @@
 // (src/probe.ts) adds `seq` and `ts` and writes it.
 
 import type { CityMachine } from "../discovery/city.ts";
-import type { CitySnapshot } from "../sync/store.ts";
 import type { AgentsModel, SessionRow } from "./agents.ts";
+import type { BeadCard, BeadDetailModel, BoardModel, ClosedCard } from "./board.ts";
+import { cleanLine } from "./sanitize.ts";
 import type { DetailModel } from "./detail.ts";
 import type { DiagnosticLine } from "./diagnostics.ts";
 import type { HeaderModel } from "./header.ts";
-import { cleanLine } from "./sanitize.ts";
 
 /** The probe's schema name; bumped on an incompatible change. */
-export const PROBE_SCHEMA = "gascity-herdr-probe/2";
+export const PROBE_SCHEMA = "gascity-herdr-probe/3";
 
 /** A program the mod ran or an app command it ran, as the exec/run log keeps it. */
 export interface ExecRecord {
@@ -29,7 +29,9 @@ export interface ProbeInput {
   /** This copy holds the keyboard (set by the focus command in a later change). */
   keyboard: boolean;
   agents: AgentsModel | null;
-  snapshot: CitySnapshot | null;
+  /** Null until a running city is subscribed. */
+  board: BoardModel | null;
+  beadDetail: BeadDetailModel;
   detail: DetailModel;
   diagnostics: readonly DiagnosticLine[];
   execLog: readonly ExecRecord[];
@@ -50,6 +52,11 @@ export interface ProbeSession {
   active_bead: string | null;
 }
 
+export interface ProbeColumn {
+  count: string;
+  cards: { id: string; title: string; state: string; priority: string | null; assignee: string | null }[];
+}
+
 /** The probe document without the writer's `seq` and `ts`. */
 export interface ProbeBody {
   schema: typeof PROBE_SCHEMA;
@@ -64,11 +71,22 @@ export interface ProbeBody {
   needs_you: number;
   data_age: string | null;
   sessions: ProbeSession[];
-  board: {
-    ready: { id: string; title: string }[];
-    in_progress: { id: string; title: string }[];
-    closed_ring: { id: string; seq: number; title: string; close_reason: string | null }[];
+  board: null | {
+    filter: string;
+    hidden: number;
+    ready: ProbeColumn;
+    in_progress: ProbeColumn;
+    closed: {
+      incomplete: boolean;
+      /** Closes seen in events, newest close first. */
+      recent: { id: string; title: string; seq: number; close_reason: string | null; assignee: string | null }[];
+      /** The seed, by creation time. */
+      earlier: { id: string; title: string; close_reason: string | null; assignee: string | null }[];
+    };
+    /** Each column's error line. */
+    errors: string[];
   };
+  bead_detail: null | { id: string; title: string; state: string; close_reason: string | null; description: string | null };
   detail: null | {
     session: string;
     status: string;
@@ -105,11 +123,33 @@ function sessionsOf(agents: AgentsModel | null): ProbeSession[] {
   return out;
 }
 
-const card = (b: { id: string; title: string }) => ({ id: cleanLine(b.id), title: cleanLine(b.title) });
+const card = (c: BeadCard) => ({ id: c.id, title: c.title, state: c.state, priority: c.priority, assignee: c.assignee });
+const closed = (c: ClosedCard) => ({ id: c.id, title: c.title, close_reason: c.closeReason, assignee: c.assignee });
+
+function probeBoard(b: BoardModel | null): ProbeBody["board"] {
+  if (b === null) return null;
+  return {
+    filter: b.filter,
+    hidden: b.hidden,
+    ready: { count: b.ready.count, cards: b.ready.cards.map(card) },
+    in_progress: { count: b.inProgress.count, cards: b.inProgress.cards.map(card) },
+    closed: {
+      incomplete: b.closed.banners.length > 0,
+      recent: b.closed.recent.map((c) => ({ id: c.id, title: c.title, seq: c.seq, close_reason: c.closeReason, assignee: c.assignee })),
+      earlier: b.closed.earlier.map(closed),
+    },
+    errors: [b.ready.region.error, b.inProgress.region.error, b.closed.region.error].filter((e): e is string => e !== null),
+  };
+}
+
+function probeBeadDetail(d: BeadDetailModel): ProbeBody["bead_detail"] {
+  if (d.kind !== "bead") return null;
+  return { id: d.id, title: d.title, state: d.state, close_reason: d.closeReason, description: d.description };
+}
 
 /** The probe document for one copy. */
 export function probeDocument(input: ProbeInput): ProbeBody {
-  const { machine, header, snapshot: s, detail } = input;
+  const { machine, header, detail } = input;
   const state = machine.state;
   const endpoint = "endpoint" in state ? state.endpoint : null;
   return {
@@ -125,13 +165,8 @@ export function probeDocument(input: ProbeInput): ProbeBody {
     needs_you: input.agents?.needsYou ?? 0,
     data_age: input.agents?.region.age ?? null,
     sessions: sessionsOf(input.agents),
-    board: {
-      ready: (s?.ready.value?.items ?? []).map(card),
-      in_progress: (s?.inProgress.value?.items ?? []).map(card),
-      closed_ring: (s?.closed.recent ?? []).map((c) => ({
-        ...card(c.bead), seq: c.seq, close_reason: c.bead.close_reason === undefined ? null : cleanLine(c.bead.close_reason),
-      })),
-    },
+    board: probeBoard(input.board),
+    bead_detail: probeBeadDetail(input.beadDetail),
     detail: detail.kind !== "session" ? null : {
       session: detail.id,
       status: detail.status.label,

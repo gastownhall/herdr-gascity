@@ -14,6 +14,7 @@ import { decodeTerminals } from "../../src/host.schemas.ts";
 import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
 import type { EventBatch } from "../../src/sync/store.ts";
 import { agentsModel } from "../../src/vm/agents.ts";
+import { beadDetailModel, boardModel } from "../../src/vm/board.ts";
 import { detailModel } from "../../src/vm/detail.ts";
 import { errorText } from "../../src/vm/errorText.ts";
 import { cleanLine, cleanText } from "../../src/vm/sanitize.ts";
@@ -55,8 +56,9 @@ async function settle(): Promise<void> {
 
 /**
  * The sync engine on an injected clock, serving the recorded fixtures: two
- * copies of one city, a driver hand-off, events that invalidate, and a gc
- * outage with backoff. Reports what it requested and what it holds.
+ * copies of one city, a driver hand-off, events that invalidate (a bead
+ * closes: it leaves Ready and heads Recently closed), a watched bead, and a
+ * gc outage with backoff. Reports what it requested and what it holds.
  */
 async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   let now = 1_000_000;
@@ -75,6 +77,7 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   };
   const body = (op: string, name: string) => fixtures.find((f) => f.op === op && f.name === name)?.body;
   const events: { seq: number; type: string; subject: string }[] = [{ seq: 1, type: "order.fired", subject: "gate-sweep" }];
+  const closedIds = () => new Set(events.filter((e) => e.type === "bead.closed").map((e) => e.subject));
   const paths: string[] = [];
   let down = false;
   const fetch: HostFetch = (url) => {
@@ -89,8 +92,14 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
     } else if (path.includes("/sessions")) reply = body("get-v0-city-by-city-name-sessions", "ok");
     else if (path.includes("/rigs")) reply = body("get-v0-city-by-city-name-rigs", "ok");
     else if (path.includes("/agents")) reply = body("get-v0-city-by-city-name-agents", "ok");
-    else if (path.includes("/work/ready")) reply = body("get-v0-city-by-city-name-work-ready", path.includes("closed") ? "closed-seed" : "ready");
-    else if (path.includes("/bead/")) reply = { ...(body("get-v0-city-by-city-name-bead-by-id", "ok") as object), id: path.split("/").at(-1) };
+    else if (path.includes("/work/ready")) {
+      const page = body("get-v0-city-by-city-name-work-ready", path.includes("closed") ? "closed-seed" : "ready") as { items: { id: string }[] };
+      reply = path.includes("closed") ? page : { items: page.items.filter((x) => !closedIds().has(x.id)) };
+    } else if (path.includes("/bead/")) {
+      const id = path.split("/").at(-1) ?? "";
+      const closed = closedIds().has(id) ? { status: "closed", close_reason: "closed\u0007 in the scenario" } : {};
+      reply = { ...(body("get-v0-city-by-city-name-bead-by-id", "ok") as object), id, ...closed };
+    }
     const text = JSON.stringify(reply);
     return Promise.resolve({ status: 200, ok: true, url, text: () => Promise.resolve(text) });
   };
@@ -116,14 +125,20 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   await advance(20_000);
   const outage = b.value.snapshot().connection;
   down = false;
+  const releaseBead = b.value.watchBead("sc-74");
   await advance(40_000);
   const s = b.value.snapshot();
   const agents = agentsModel({ snapshot: s, now, selected: "sc-20", collapsed: new Set() });
   const detail = detailModel({ snapshot: s, now, selected: "sc-20" });
+  const board = boardModel({ snapshot: s, now, selected: "sc-74" });
+  const beadDetail = beadDetailModel({ snapshot: s, now, selected: "sc-74" });
+  releaseBead();
   b.value.unsubscribe();
   return {
     agents,
     detail,
+    board,
+    beadDetail,
     sanitized: [
       cleanLine("a\u0000b\u001b[31mc\u001b]8;;http://x\u0007d\u202ee\r\nf"),
       cleanText("\u001b[1mline\u001b[0m\r\nnext\u0007"),

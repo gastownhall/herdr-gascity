@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:c59c3d8ac1ce6c5ec1a8ed73fdd80e11a3cf4c38dc4435eaa26e7d23aa435e8a over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:19c09e59859aa9d0729f01276da476d5d4c5dc4cbd5a69c4b43bfc8be791ce96 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2904,7 +2904,7 @@ var BOARD_CHANGES = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "be
 var PENDING = /* @__PURE__ */ new Set(["session.pending", "session.pending_cleared"]);
 function invalidationFor(events, known) {
   const inv = { domains: /* @__PURE__ */ new Set(), closed: [], cities: false };
-  const closed = /* @__PURE__ */ new Map();
+  const closed2 = /* @__PURE__ */ new Map();
   for (const e of events) {
     const t = e.type;
     const subject = e.subject;
@@ -2919,14 +2919,14 @@ function invalidationFor(events, known) {
         inv.domains.add("ready");
         inv.domains.add("inProgress");
       }
-      if (t === "bead.closed" && subject !== void 0) closed.set(subject, Math.max(closed.get(subject) ?? -Infinity, e.seq));
+      if (t === "bead.closed" && subject !== void 0) closed2.set(subject, Math.max(closed2.get(subject) ?? -Infinity, e.seq));
     } else if (t.startsWith("city.")) {
       inv.cities = true;
       inv.domains.add("rigs");
       inv.domains.add("agents");
     }
   }
-  inv.closed = [...closed].map(([id, seq]) => ({ id, seq })).sort((a, b) => a.seq - b.seq);
+  inv.closed = [...closed2].map(([id, seq]) => ({ id, seq })).sort((a, b) => a.seq - b.seq);
   return inv;
 }
 
@@ -3275,6 +3275,8 @@ var CityStore = class {
   closedQueue = [];
   peeks = /* @__PURE__ */ new Map();
   lookups = /* @__PURE__ */ new Map();
+  /** Watched beads (open bead details) and how many watches each has. */
+  beadWatches = /* @__PURE__ */ new Map();
   seed = { ...freshSlot(), due: true };
   recent = [];
   incomplete = false;
@@ -3371,6 +3373,22 @@ var CityStore = class {
         this.peeks.delete(sessionId);
         this.commit();
       }
+    };
+  }
+  /** Starts (or joins) watching a bead: fetched by id, and again on an event about it or at the sweep; returns the release. */
+  watchBead(beadId) {
+    this.beadWatches.set(beadId, (this.beadWatches.get(beadId) ?? 0) + 1);
+    this.syncLookups();
+    this.commit();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const n = (this.beadWatches.get(beadId) ?? 0) - 1;
+      if (n > 0) this.beadWatches.set(beadId, n);
+      else this.beadWatches.delete(beadId);
+      this.syncLookups();
+      this.commit();
     };
   }
   /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
@@ -3862,16 +3880,16 @@ var CityStore = class {
       w.pending.held = false;
     }
   }
-  /** Keeps a lookup for every active bead of a session or agent that the board does not carry, and only those. */
+  /** Keeps a lookup for every watched bead and every active bead of a session or agent that the board does not carry, and only those. */
   syncLookups() {
-    const onBoard = /* @__PURE__ */ new Set();
+    const onBoard2 = /* @__PURE__ */ new Set();
     for (const list of [this.slots.ready.value, this.slots.inProgress.value, this.seed.value]) {
-      for (const b of list?.items ?? []) onBoard.add(b.id);
+      for (const b of list?.items ?? []) onBoard2.add(b.id);
     }
-    for (const c of this.recent) onBoard.add(c.bead.id);
-    const wanted = /* @__PURE__ */ new Set();
+    for (const c of this.recent) onBoard2.add(c.bead.id);
+    const wanted = new Set(this.beadWatches.keys());
     for (const x of [...this.slots.sessions.value?.items ?? [], ...this.slots.agents.value?.items ?? []]) {
-      if (x.active_bead !== void 0 && x.active_bead !== "" && !onBoard.has(x.active_bead)) wanted.add(x.active_bead);
+      if (x.active_bead !== void 0 && x.active_bead !== "" && !onBoard2.has(x.active_bead)) wanted.add(x.active_bead);
     }
     for (const id of [...this.lookups.keys()]) if (!wanted.has(id)) this.lookups.delete(id);
     for (const id of wanted) if (!this.lookups.has(id)) this.lookups.set(id, onDemand());
@@ -4107,8 +4125,8 @@ function boardTitles(s) {
 function activeBead(id, titles, beads) {
   if (id === void 0 || id === "") return null;
   const clean = cleanLine(id);
-  const onBoard = titles.get(id);
-  if (onBoard !== void 0) return { id: clean, title: cleanLine(onBoard), note: null };
+  const onBoard2 = titles.get(id);
+  if (onBoard2 !== void 0) return { id: clean, title: cleanLine(onBoard2), note: null };
   const fetched = beads.get(id);
   if (fetched?.value) return { id: clean, title: cleanLine(fetched.value.title), note: null };
   if (fetched?.error) return { id: clean, title: null, note: `title unavailable: ${errorText(fetched.error)}` };
@@ -4224,6 +4242,165 @@ function agentsModel(input) {
     banners,
     needsYou: pending.size,
     drift: [...drift3]
+  };
+}
+
+// src/vm/board.ts
+var EARLIER_DIVIDER = "earlier (by creation time)";
+var INFRASTRUCTURE = new Set(INFRASTRUCTURE_BEAD_TYPES);
+var STATES = { open: "open", in_progress: "in progress", blocked: "blocked", closed: "closed" };
+function beadState(status2, isBlocked) {
+  if (isBlocked === true) return { text: "blocked", unrecognized: null };
+  const known = STATES[status2];
+  if (known !== void 0) return { text: known, unrecognized: null };
+  const raw = cleanLine(status2);
+  return { text: raw, unrecognized: `bead status ${raw}` };
+}
+function optional2(v) {
+  return v === void 0 || v.trim() === "" ? null : cleanLine(v);
+}
+function priorityText(p) {
+  return p === void 0 ? null : `P${p}`;
+}
+function isInfrastructure(b) {
+  return INFRASTRUCTURE.has(b.issue_type);
+}
+function unreadableRows2(list) {
+  return list.map((u) => `unreadable bead ${u.id === null ? `(entry ${u.index})` : cleanLine(u.id)}: ${errorText(u.error)}`);
+}
+function closedFreshness(s, now) {
+  return freshness(s.closed.seed, now, { intervalMs: intervalOf("events", s.onScreen) ?? 0, confirmedAt: s.events.error ? null : s.events.polledAt });
+}
+function boardModel(input) {
+  const { snapshot: s, now, selected } = input;
+  const drift3 = /* @__PURE__ */ new Set();
+  let hidden = 0;
+  const card3 = (b) => {
+    const state = beadState(b.status, b.is_blocked);
+    if (state.unrecognized !== null) drift3.add(state.unrecognized);
+    return {
+      id: cleanLine(b.id),
+      title: cleanLine(b.title),
+      state: state.text,
+      priority: priorityText(b.priority),
+      type: cleanLine(b.issue_type),
+      assignee: optional2(b.assignee),
+      labels: b.labels.map(cleanLine),
+      selected: b.id === selected
+    };
+  };
+  const closedCard = (b) => ({ ...card3(b), closeReason: optional2(b.close_reason) });
+  const shown = (items) => {
+    const kept = items.filter((b) => !isInfrastructure(b));
+    hidden += items.length - kept.length;
+    return kept;
+  };
+  const column2 = (slot, title, name, empty, f) => {
+    const region = regionModel([[name, f]]);
+    const cards = shown(slot.value?.items ?? []).map(card3);
+    const unreadable = unreadableRows2(slot.value?.unreadable ?? []);
+    const read = slot.value?.items.length ?? 0;
+    const rows = read + unreadable.length;
+    return {
+      title,
+      count: rows >= BOARD_LIMIT ? `${rows}+` : `${cards.length}`,
+      region,
+      empty: region.kind === "ok" && cards.length === 0 && unreadable.length === 0 ? empty : null,
+      unreadable,
+      banners: [],
+      cards
+    };
+  };
+  const ready = column2(s.ready, "Ready", "ready", "nothing ready", domainFreshness(s, "ready", now));
+  const inProgress = column2(s.inProgress, "In progress", "in progress", "nothing in progress", domainFreshness(s, "inProgress", now));
+  const open = /* @__PURE__ */ new Set();
+  for (const b of [...s.ready.value?.items ?? [], ...s.inProgress.value?.items ?? []]) open.add(b.id);
+  const latest = /* @__PURE__ */ new Map();
+  for (const c of s.closed.recent) {
+    const cur = latest.get(c.bead.id);
+    if (!cur || c.seq > cur.seq) latest.set(c.bead.id, c);
+  }
+  const recent = shown([...latest.values()].map((c) => ({ ...c.bead, seq: c.seq }))).filter((b) => !open.has(b.id)).sort((a, b) => b.seq - a.seq).slice(0, MAX_CLOSED_RECENT).map((b) => ({ ...closedCard(b), seq: b.seq }));
+  const listed = /* @__PURE__ */ new Set([...latest.keys()]);
+  const earlier = shown(s.closed.seed.value?.items ?? []).filter((b) => !listed.has(b.id) && !open.has(b.id)).slice(0, MAX_CLOSED_RECENT - recent.length).map(closedCard);
+  const closedRegion = regionModel([["closed", closedFreshness(s, now)]]);
+  const closedUnreadable = unreadableRows2(s.closed.seed.value?.unreadable ?? []);
+  const closed2 = {
+    title: "Recently closed",
+    count: `${recent.length + earlier.length}`,
+    region: closedRegion,
+    empty: closedRegion.kind === "ok" && recent.length + earlier.length === 0 && closedUnreadable.length === 0 ? "nothing closed yet" : null,
+    unreadable: closedUnreadable,
+    banners: s.closed.incomplete ? ["may be incomplete: some closes were not fetched"] : [],
+    recent,
+    earlier,
+    divider: EARLIER_DIVIDER
+  };
+  return {
+    filter: `hiding infrastructure beads (${INFRASTRUCTURE_BEAD_TYPES.join(", ")})`,
+    hidden,
+    ready,
+    inProgress,
+    closed: closed2,
+    unreadable: [...ready.unreadable, ...inProgress.unreadable, ...closed2.unreadable],
+    drift: [...drift3]
+  };
+}
+function onBoard(s, id) {
+  for (const list of [s.ready.value, s.inProgress.value]) {
+    const hit = list?.items.find((b) => b.id === id);
+    if (hit) return hit;
+  }
+  let newest;
+  for (const c of s.closed.recent) if (c.bead.id === id && (!newest || c.seq > newest.seq)) newest = c;
+  return newest?.bead ?? s.closed.seed.value?.items.find((b) => b.id === id);
+}
+function detailFacts(b, state) {
+  const out = [["status", state]];
+  const p = priorityText(b.priority);
+  if (p !== null) out.push(["priority", p]);
+  out.push(["type", b.issue_type]);
+  if (b.assignee !== void 0 && b.assignee !== "") out.push(["assignee", b.assignee]);
+  if (b.labels.length > 0) out.push(["labels", b.labels.join(", ")]);
+  out.push(["created", b.created_at]);
+  if (b.updated_at !== void 0) out.push(["updated", b.updated_at]);
+  return out.map(([k, v]) => [k, cleanLine(v)]);
+}
+function beadDetailModel(input) {
+  const { snapshot: s, now, selected } = input;
+  if (selected === null) return { kind: "none" };
+  const id = cleanLine(selected);
+  const fetched = s.beads.get(selected);
+  const card3 = onBoard(s, selected);
+  const full = fetched?.value ?? null;
+  const source = full ? { ...full, is_blocked: card3?.is_blocked } : card3 ?? null;
+  if (source === null) {
+    return { kind: "missing", id, text: `bead ${id}: ${fetched?.error ? errorText(fetched.error) : "loading"}` };
+  }
+  let description = null;
+  let descriptionNote;
+  if (full) {
+    const text = full.description === void 0 ? "" : cleanText(full.description);
+    if (text.trim() === "") descriptionNote = "no description";
+    else {
+      description = text;
+      descriptionNote = null;
+    }
+  } else {
+    descriptionNote = fetched?.error ? `description unavailable: ${errorText(fetched.error)}` : "loading description";
+  }
+  const state = beadState(source.status, source.is_blocked).text;
+  const f = fetched ? freshness(fetched, now, { intervalMs: intervalOf("events", s.onScreen) ?? 0, confirmedAt: s.events.error ? null : s.events.polledAt }) : { kind: "never", error: null };
+  return {
+    kind: "bead",
+    id,
+    title: cleanLine(source.title),
+    state,
+    facts: detailFacts(source, state),
+    closeReason: optional2(source.close_reason),
+    description,
+    descriptionNote,
+    region: regionModel([["bead", f]])
   };
 }
 
@@ -4450,7 +4627,7 @@ function headerModel(m, hostErrors = [], live = null) {
 }
 
 // src/vm/probe.ts
-var PROBE_SCHEMA = "gascity-herdr-probe/2";
+var PROBE_SCHEMA = "gascity-herdr-probe/3";
 function probeSession(r, agent, group) {
   return {
     id: r.id,
@@ -4471,9 +4648,29 @@ function sessionsOf(agents) {
   for (const r of agents.other) out.push(probeSession(r, null, null));
   return out;
 }
-var card = (b) => ({ id: cleanLine(b.id), title: cleanLine(b.title) });
+var card = (c) => ({ id: c.id, title: c.title, state: c.state, priority: c.priority, assignee: c.assignee });
+var closed = (c) => ({ id: c.id, title: c.title, close_reason: c.closeReason, assignee: c.assignee });
+function probeBoard(b) {
+  if (b === null) return null;
+  return {
+    filter: b.filter,
+    hidden: b.hidden,
+    ready: { count: b.ready.count, cards: b.ready.cards.map(card) },
+    in_progress: { count: b.inProgress.count, cards: b.inProgress.cards.map(card) },
+    closed: {
+      incomplete: b.closed.banners.length > 0,
+      recent: b.closed.recent.map((c) => ({ id: c.id, title: c.title, seq: c.seq, close_reason: c.closeReason, assignee: c.assignee })),
+      earlier: b.closed.earlier.map(closed)
+    },
+    errors: [b.ready.region.error, b.inProgress.region.error, b.closed.region.error].filter((e) => e !== null)
+  };
+}
+function probeBeadDetail(d) {
+  if (d.kind !== "bead") return null;
+  return { id: d.id, title: d.title, state: d.state, close_reason: d.closeReason, description: d.description };
+}
 function probeDocument(input) {
-  const { machine, header, snapshot: s, detail } = input;
+  const { machine, header, detail } = input;
   const state = machine.state;
   const endpoint = "endpoint" in state ? state.endpoint : null;
   return {
@@ -4489,15 +4686,8 @@ function probeDocument(input) {
     needs_you: input.agents?.needsYou ?? 0,
     data_age: input.agents?.region.age ?? null,
     sessions: sessionsOf(input.agents),
-    board: {
-      ready: (s?.ready.value?.items ?? []).map(card),
-      in_progress: (s?.inProgress.value?.items ?? []).map(card),
-      closed_ring: (s?.closed.recent ?? []).map((c) => ({
-        ...card(c.bead),
-        seq: c.seq,
-        close_reason: c.bead.close_reason === void 0 ? null : cleanLine(c.bead.close_reason)
-      }))
-    },
+    board: probeBoard(input.board),
+    bead_detail: probeBeadDetail(input.beadDetail),
     detail: detail.kind !== "session" ? null : {
       session: detail.id,
       status: detail.status.label,
@@ -4525,6 +4715,7 @@ var CopyController = class {
   }
   deps;
   selected = null;
+  selectedBead = null;
   collapsed = /* @__PURE__ */ new Set();
   diagnosticsOpen = false;
   refreshCount = 0;
@@ -4533,6 +4724,7 @@ var CopyController = class {
   citiesRev = -1;
   city = null;
   peek = null;
+  beadWatch = null;
   signature = "";
   closed = false;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
@@ -4559,6 +4751,7 @@ var CopyController = class {
     const running = state.phase === "city-running" && endpoint !== null ? state.city.name : null;
     this.followCity(endpoint !== null && running !== null ? { apiUrl: endpoint.url, city: running } : null);
     this.followDetail();
+    this.followBead();
     const s = this.city?.snapshot();
     if (s && running !== null) {
       for (const slot of [s.rigs, s.agents, s.sessions, s.pending, s.events]) {
@@ -4575,7 +4768,8 @@ var CopyController = class {
       this.citiesRev,
       this.city?.snapshot().rev ?? -1,
       this.onScreen,
-      this.selected
+      this.selected,
+      this.selectedBead
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -4587,6 +4781,8 @@ var CopyController = class {
     this.closed = true;
     this.peek?.release();
     this.peek = null;
+    this.beadWatch?.release();
+    this.beadWatch = null;
     this.city?.unsubscribe();
     this.city = null;
     this.cities?.unsubscribe();
@@ -4597,11 +4793,14 @@ var CopyController = class {
     const { discovery } = this.deps;
     const s = this.city?.snapshot() ?? null;
     const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed }) : null;
+    const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
     return {
       header: headerModel(discovery.machine, discovery.hostErrors, live),
       agents,
+      board,
+      beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
       detail: s ? detailModel({ snapshot: s, now, selected: this.selected }) : { kind: "none" },
       diagnostics: diagnosticsModel({
         entries: [
@@ -4609,8 +4808,8 @@ var CopyController = class {
           ...citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : [],
           ...this.deps.probe.errors()
         ],
-        drift: agents?.drift ?? [],
-        unreadable: agents?.unreadable.map((u) => u.text) ?? []
+        drift: [...agents?.drift ?? [], ...board?.drift ?? []],
+        unreadable: [...agents?.unreadable.map((u) => u.text) ?? [], ...board?.unreadable ?? []]
       }),
       diagnosticsOpen: this.diagnosticsOpen,
       refreshCount: this.refreshCount,
@@ -4642,6 +4841,11 @@ var CopyController = class {
   selectSession(id) {
     this.selected = id;
     this.followDetail();
+  }
+  /** Opens (or, with null, closes) the detail of a bead on the board. */
+  selectBead(id) {
+    this.selectedBead = id;
+    this.followBead();
   }
   /** Collapses or expands a rig group. */
   toggleGroup(key) {
@@ -4692,6 +4896,8 @@ var CopyController = class {
     if (cur && (key === null || cur.key.city !== key.city || cur.key.apiUrl !== key.apiUrl)) {
       this.peek?.release();
       this.peek = null;
+      this.beadWatch?.release();
+      this.beadWatch = null;
       cur.unsubscribe();
       this.city = null;
     }
@@ -4714,13 +4920,20 @@ var CopyController = class {
     }
     if (!this.peek && want !== null && this.city) this.peek = { id: want, release: this.city.watchPeek(want) };
   }
+  followBead() {
+    const want = this.city !== null ? this.selectedBead : null;
+    if (this.beadWatch && this.beadWatch.id !== want) {
+      this.beadWatch.release();
+      this.beadWatch = null;
+    }
+    if (!this.beadWatch && want !== null && this.city) this.beadWatch = { id: want, release: this.city.watchBead(want) };
+  }
   machineVersion() {
     const m = this.deps.discovery.machine;
     return `${m.state.phase}:${selectedCity(m.state) ?? ""}:${machineIds.get(m) ?? remember(m)}:${this.deps.discovery.hostErrors.length}`;
   }
   writeProbe(now) {
     const v = this.view(now);
-    const s = this.city?.snapshot() ?? null;
     this.deps.probe.offer(probeDocument({
       modVersion: MOD_VERSION,
       herdrVersion: this.deps.host.herdrVersion(),
@@ -4729,7 +4942,8 @@ var CopyController = class {
       onScreen: this.onScreen,
       keyboard: false,
       agents: v.agents,
-      snapshot: s,
+      board: v.board,
+      beadDetail: v.beadDetail,
       detail: v.detail,
       diagnostics: v.diagnostics,
       execLog: this.deps.host.execLog(),
@@ -5540,13 +5754,13 @@ var SyncRegistry = class {
   }
   subscription(id, store, endpoint) {
     const owner = {};
-    const peeks = /* @__PURE__ */ new Set();
+    const watches = /* @__PURE__ */ new Set();
     let active = true;
     const unsubscribe = () => {
       if (!active) return;
       active = false;
-      for (const release of [...peeks]) release();
-      peeks.clear();
+      for (const release of [...watches]) release();
+      watches.clear();
       store.abandonStartedBy(owner);
       const entry = this.stores.get(id);
       if (entry && --entry.subs <= 0) {
@@ -5554,6 +5768,14 @@ var SyncRegistry = class {
         store.dispose();
         this.releaseEndpoint(endpoint, store);
       }
+    };
+    const watch = (release) => {
+      const once = () => {
+        watches.delete(once);
+        release();
+      };
+      watches.add(once);
+      return once;
     };
     return {
       key: store.key,
@@ -5565,16 +5787,9 @@ var SyncRegistry = class {
         }
         return store.snapshot().rev;
       },
-      watchPeek: (sessionId) => {
-        if (!active) return () => {
-        };
-        const release = store.watchPeek(sessionId);
-        const once = () => {
-          peeks.delete(once);
-          release();
-        };
-        peeks.add(once);
-        return once;
+      watchPeek: (sessionId) => active ? watch(store.watchPeek(sessionId)) : () => {
+      },
+      watchBead: (beadId) => active ? watch(store.watchBead(beadId)) : () => {
       },
       refreshDetail: (sessionId) => {
         if (active) store.refreshDetail(sessionId);
@@ -5597,8 +5812,8 @@ function sharedRegistry(create) {
 }
 
 // src/view/panel.ts
-import { div as div5 } from "gpui-kit";
-import { v_flex as v_flex4 } from "gpui-base";
+import { div as div6 } from "gpui-kit";
+import { h_flex as h_flex5, v_flex as v_flex5 } from "gpui-base";
 
 // src/view/agents.ts
 import { div as div2 } from "gpui-kit";
@@ -5670,9 +5885,71 @@ function renderAgents(m, theme2, actions) {
   return region.child(greyedIf(div2().id("gascity-agents-data").child(body), state.stale, theme2));
 }
 
-// src/view/detail.ts
+// src/view/board.ts
 import { div as div3 } from "gpui-kit";
 import { h_flex as h_flex2, v_flex as v_flex2 } from "gpui-base";
+function cardText(c) {
+  const parts = [c.id];
+  if (c.priority !== null) parts.push(c.priority);
+  parts.push(`"${c.title}"`, c.state, c.type);
+  if (c.assignee !== null) parts.push(`→ ${c.assignee}`);
+  if (c.labels.length > 0) parts.push(`[${c.labels.join(", ")}]`);
+  if ("closeReason" in c && c.closeReason !== null) parts.push(`reason: ${c.closeReason}`);
+  return `${c.selected ? "▸ " : ""}${parts.join(" · ")}`;
+}
+function card2(c, id, theme2, actions) {
+  const el = label(id, cardText(c)).on_click((_, cx) => actions.selectBead(c.selected ? null : c.id, cx));
+  return c.selected ? el : muted(el, theme2);
+}
+function column(key, m, body, theme2) {
+  const id = `gascity-col-${key}`;
+  let el = v_flex2().id(id).flex_1().gap(4).child(label(`${id}-title`, `${m.title} (${m.count})`));
+  const state = m.region;
+  if (state.kind === "loading") el = el.child(muted(label(`${id}-loading`, "loading…"), theme2));
+  if (state.age !== null) el = el.child(muted(label(`${id}-age`, state.stale ? `${state.age} (may be out of date)` : state.age), theme2));
+  if (state.error !== null) el = el.child(label(`${id}-error`, state.error));
+  m.banners.forEach((b, i) => {
+    el = el.child(label(`${id}-banner-${i}`, b));
+  });
+  let data = v_flex2().id(`${id}-data`).gap(2).children(body);
+  m.unreadable.forEach((u, i) => {
+    data = data.child(label(`${id}-unreadable-${i}`, u));
+  });
+  if (m.empty !== null) data = data.child(muted(label(`${id}-empty`, m.empty), theme2));
+  return el.child(greyedIf(data, state.stale, theme2));
+}
+function beadDetail(m, theme2, actions) {
+  if (m.kind === "none") return null;
+  const close = div3().id("gascity-bead-close").on_click((_, cx) => actions.selectBead(null, cx)).child("Close");
+  if (m.kind === "missing") return v_flex2().id("gascity-bead-detail").gap(4).child(label("gascity-bead-missing", m.text)).child(close);
+  let el = v_flex2().id("gascity-bead-detail").gap(4).child(h_flex2().id("gascity-bead-head").gap(8).child(label("gascity-bead-title", `Bead ${m.id}: "${m.title}"`)).child(close)).child(muted(label("gascity-bead-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2));
+  if (m.closeReason !== null) el = el.child(label("gascity-bead-reason", `Close reason: ${m.closeReason}`));
+  if (m.region.age !== null) el = el.child(muted(label("gascity-bead-age", m.region.stale ? `${m.region.age} (may be out of date)` : m.region.age), theme2));
+  if (m.region.error !== null) el = el.child(label("gascity-bead-error", m.region.error));
+  let description = v_flex2().id("gascity-bead-description").gap(0);
+  if (m.description === null) description = description.child(muted(label("gascity-bead-description-note", m.descriptionNote ?? ""), theme2));
+  else description = description.children(m.description.split("\n").map((line, i) => label(`gascity-bead-line-${i}`, line)));
+  return el.child(greyedIf(description, m.region.stale, theme2));
+}
+function renderBoard(m, detail, theme2, actions) {
+  const filter = m.hidden > 0 ? `${m.filter} · ${m.hidden} hidden` : m.filter;
+  const ready = column("ready", m.ready, m.ready.cards.map((c, i) => card2(c, `gascity-card-ready-${i}`, theme2, actions)), theme2);
+  const inProgress = column("inprogress", m.inProgress, m.inProgress.cards.map((c, i) => card2(c, `gascity-card-inprogress-${i}`, theme2, actions)), theme2);
+  const closedBody = m.closed.recent.map((c, i) => card2(c, `gascity-card-closed-${i}`, theme2, actions));
+  if (m.closed.earlier.length > 0) {
+    closedBody.push(muted(label("gascity-col-closed-divider", m.closed.divider), theme2));
+    closedBody.push(...m.closed.earlier.map((c, i) => card2(c, `gascity-card-earlier-${i}`, theme2, actions)));
+  }
+  const closed2 = column("closed", m.closed, closedBody, theme2);
+  let el = v_flex2().id("gascity-work").flex_1().gap(6).child(label("gascity-work-title", "Work")).child(muted(label("gascity-work-filter", filter), theme2)).child(h_flex2().id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed2));
+  const d = beadDetail(detail, theme2, actions);
+  if (d !== null) el = el.child(d);
+  return el;
+}
+
+// src/view/detail.ts
+import { div as div4 } from "gpui-kit";
+import { h_flex as h_flex3, v_flex as v_flex3 } from "gpui-base";
 function pendingText(p) {
   switch (p.kind) {
     case "loading":
@@ -5692,14 +5969,14 @@ function pendingText(p) {
 }
 function renderDetail(m, theme2, actions) {
   if (m.kind === "none") return null;
-  const close = div3().id("gascity-detail-close").on_click((_, cx) => actions.close(cx)).child("Close");
-  if (m.kind === "gone") return v_flex2().id("gascity-detail").gap(4).child(label("gascity-detail-gone", m.text)).child(close);
-  let el = v_flex2().id("gascity-detail").gap(4).child(h_flex2().id("gascity-detail-head").gap(8).child(label("gascity-detail-title", `Detail: ${m.title}`)).child(close)).child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`)).child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2)).child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`));
+  const close = div4().id("gascity-detail-close").on_click((_, cx) => actions.close(cx)).child("Close");
+  if (m.kind === "gone") return v_flex3().id("gascity-detail").gap(4).child(label("gascity-detail-gone", m.text)).child(close);
+  let el = v_flex3().id("gascity-detail").gap(4).child(h_flex3().id("gascity-detail-head").gap(8).child(label("gascity-detail-title", `Detail: ${m.title}`)).child(close)).child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`)).child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2)).child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`));
   pendingText(m.pending).forEach((t, i) => {
     el = el.child(label(`gascity-detail-pending-${i}`, t));
   });
   const out = m.output;
-  let output = v_flex2().id("gascity-detail-output").gap(0);
+  let output = v_flex3().id("gascity-detail-output").gap(0);
   if (out.region.age !== null) output = output.child(muted(label("gascity-detail-output-age", `output, ${out.region.age}`), theme2));
   if (out.region.error !== null) output = output.child(label("gascity-detail-output-error", out.region.error));
   if (out.text === null) {
@@ -5711,14 +5988,14 @@ function renderDetail(m, theme2, actions) {
 }
 
 // src/view/header.ts
-import { div as div4 } from "gpui-kit";
-import { h_flex as h_flex3, v_flex as v_flex3 } from "gpui-base";
+import { div as div5 } from "gpui-kit";
+import { h_flex as h_flex4, v_flex as v_flex4 } from "gpui-base";
 function renderHeader(h, theme2, actions) {
   const out = [];
-  let status2 = h_flex3().id("gascity-status").gap(8).child(label("gascity-chip", h.chip.text));
+  let status2 = h_flex4().id("gascity-status").gap(8).child(label("gascity-chip", h.chip.text));
   if (h.needsYou !== null) status2 = status2.child(label("gascity-needs-you", h.needsYou));
   if (h.age !== null) status2 = status2.child(muted(label("gascity-age", h.age), theme2));
-  if (h.canRetry) status2 = status2.child(div4().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now"));
+  if (h.canRetry) status2 = status2.child(div5().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now"));
   out.push(status2);
   if (h.endpoint !== null) out.push(muted(label("gascity-endpoint", h.endpoint), theme2));
   if (h.city !== null) out.push(label("gascity-city", `City: ${h.city}`));
@@ -5729,12 +6006,12 @@ function renderHeader(h, theme2, actions) {
   }
   if (h.choices !== null && h.choices.length > 0) {
     const heading = h.city === null ? "Choose a city:" : "Switch to:";
-    const list = v_flex3().id("gascity-choices").gap(4).child(label("gascity-choices-heading", heading));
+    const list = v_flex4().id("gascity-choices").gap(4).child(label("gascity-choices-heading", heading));
     out.push(list.children(h.choices.map((c, i) => label(`gascity-choose-${i}`, `${c.name} (${c.label})`).on_click((_, cx) => actions.select(c.name, cx)))));
   }
   if (h.diagnostics.length > 0) {
     const lines = h.diagnostics.map((line, i) => muted(label(`gascity-diagnostic-${i}`, line), theme2));
-    out.push(v_flex3().id("gascity-diagnostics").gap(2).child(label("gascity-diagnostics-heading", "Discovery:")).children(lines));
+    out.push(v_flex4().id("gascity-diagnostics").gap(2).child(label("gascity-diagnostics-heading", "Discovery:")).children(lines));
   }
   return out;
 }
@@ -5753,24 +6030,27 @@ function themeIssues(el, theme2) {
 function diagnostics(model) {
   const { view, theme: theme2, actions } = model;
   if (view.diagnostics.length === 0) return null;
-  const toggle = div5().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
+  const toggle = div6().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
   if (!view.diagnosticsOpen) return toggle;
   const lines = view.diagnostics.map((d, i) => muted(label(`gascity-diag-${i}`, `${d.at ?? ""} ${d.source}: ${d.text}`.trim()), theme2));
-  return v_flex4().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
+  return v_flex5().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
 }
 function renderPanel(model) {
-  const title = div5().id("gascity-title").text_size(16).font_semibold().child(TITLE);
+  const title = div6().id("gascity-title").text_size(16).font_semibold().child(TITLE);
   if (model.kind === "host-incompatible") {
-    const root2 = v_flex4().id("gascity-root").size_full().p(12).gap(8);
+    const root2 = v_flex5().id("gascity-root").size_full().p(12).gap(8);
     return root2.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  let root = themedRoot(model.theme, v_flex4().id("gascity-root").size_full().p(12).gap(8)).child(title);
+  let root = themedRoot(model.theme, v_flex5().id("gascity-root").size_full().p(12).gap(8)).child(title);
   if (model.kind === "copy-invalid") {
     return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
   const { view, theme: theme2, actions } = model;
   root = root.children(renderHeader(view.header, theme2, actions));
-  if (view.agents !== null) root = root.child(renderAgents(view.agents, theme2, actions));
+  const regions = [];
+  if (view.agents !== null) regions.push(div6().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme2, actions)));
+  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions));
+  if (regions.length > 0) root = root.child(h_flex5().id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme2, actions);
   if (detail !== null) root = root.child(detail);
   const diag = diagnostics(model);
@@ -5825,6 +6105,10 @@ function actionsFor(copy) {
     },
     selectSession: (id, cx) => {
       copy.selectSession(id);
+      cx.notify();
+    },
+    selectBead: (id, cx) => {
+      copy.selectBead(id);
       cx.notify();
     },
     toggleGroup: (key, cx) => {
