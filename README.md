@@ -130,13 +130,16 @@ the job summary; they need no secrets and only read.
   and compares it with the pin, restricted to the used surface
   (`scripts/used-surface-diff.ts`). A used operation, parameter or field that
   is gone, moved, newly required, or that gc may now omit or send with another
-  type fails; additions the decoders absorb (a new enum value, a renamed model
+  type fails, as does a request gc would now refuse (a tighter length or range
+  bound, a new pattern, format or const, fewer enum values) or a query
+  parameter serialized differently (`style`/`explode`); additions the decoders absorb (a new enum value, a renamed model
   with the same fields) are listed as compatible. Locally:
   `scripts/fetch-gc-spec.sh main /tmp/gc.json` then
   `bun run scripts/used-surface-diff.ts --upstream /tmp/gc.json --upstream-commit <sha>`.
 - **herdr-app types drift** (`.github/workflows/types-drift.yml`): hourly it
-  reads herdr-app's `latest.json` and checks a release it has not checked yet;
-  daily it checks the current release regardless. It installs the release the
+  reads herdr-app's `latest.json` and checks a release it has not checked yet,
+  and fails at once while the current release's last check failed (so the
+  status stays red); daily it checks the current release regardless. It installs the release the
   way the canary does (the per-release mirror), runs `herdr-app types`
   headless, and type-checks `src/` against the generated declarations with
   `compat/host-aliases.ts` in place of the subsets in `types/`. The summary
@@ -145,6 +148,10 @@ the job summary; they need no secrets and only read.
   modules or globals, list it in `HOST_SUBSETS` in `scripts/types-drift.ts`
   (a test refuses unclassified files) and map any global type it declares in
   `compat/host-aliases.ts`.
+
+GitHub disables scheduled workflows in a public repository after 60 days
+without activity in it; a commit, or re-enabling the workflow in the Actions
+tab, starts them again.
 
 ## The sync engine
 
