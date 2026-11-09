@@ -11,13 +11,14 @@
 //   - `Idempotency-Key` only on operations whose pinned spec declares it (the
 //     types require a key there and reject one elsewhere);
 //   - nothing is retried here: reads are retried by the sync engine's backoff,
-//     mutations never automatically. A mutation whose transport fails is
+//     mutations never automatically. A mutation whose transport fails, or
+//     that gc answers with a 5xx (but 501) or 409 idempotency-in-flight, is
 //     `outcome-unknown`, because it may have been applied.
 
 import { err, ok, type Result } from "../result.ts";
 import { MOD_VERSION } from "../version.ts";
 import { decodeListed, decodeValue } from "./decode.ts";
-import { httpError, type CancelReason, type GcError } from "./errors.ts";
+import { httpError, uncertainMutationAnswer, type CancelReason, type GcError } from "./errors.ts";
 import { OPERATIONS, type OperationId, type OperationTypes } from "./operations.gen.ts";
 import type * as z from "./zod.ts";
 
@@ -239,7 +240,11 @@ async function call<Op extends OperationId>(
     return err({ kind: "not-loopback", url: finalUrl });
   }
 
-  if (status < 200 || status > 299) return err(httpError(op, status, text));
+  if (status < 200 || status > 299) {
+    const e = httpError(op, status, text);
+    // A server error or a same-key request still running does not prove the change was not made.
+    return err((mutation ? uncertainMutationAnswer(op, status, e) : null) ?? e);
+  }
 
   let decoded: Result<unknown, Extract<GcError, { kind: "decode" }>>;
   try {

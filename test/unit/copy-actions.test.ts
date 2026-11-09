@@ -153,8 +153,36 @@ describe("a copy's actions", () => {
     };
     a.copy.selectSession("sc-20");
     await host.advance(1000);
-    await click(a, (c) => c.answer(1));
+    await click(a, (c) => c.answer("perm-1", "deny"));
     expect(posts("/respond").map((r) => JSON.parse(r.init.body ?? "{}"))).toEqual([{ action: "deny", request_id: "perm-1" }]);
+  });
+
+  test("A1: the prompt changed between drawing and the click: nothing is sent, and the copy says to review it", async () => {
+    const { host, gc, open, click, posts } = setup();
+    const a = await open();
+    await host.advance(3000);
+    let prompt = { request_id: "perm-A", kind: "permission", prompt: "Delete the build cache?", options: ["approve", "deny"] };
+    gc.override = (req) => {
+      if (req.path.endsWith("/session/sc-20/pending")) return { status: 200, body: { supported: true, pending: prompt } };
+      if (req.path === "/v0/city/scratch/pending") {
+        return { status: 200, body: { items: [{ session_id: "sc-20", request_id: prompt.request_id, kind: "permission" }], total: 1 } };
+      }
+      if (req.method === "POST") return { status: 202, body: fixtureBody("respond-session", "accepted") };
+      return undefined;
+    };
+    a.copy.selectSession("sc-20");
+    await host.advance(1000);
+    const shown = a.copy.view(host.now()).detail;
+    if (shown.kind !== "session" || shown.pending.kind !== "prompt") throw new Error("no prompt shown");
+    const drawn = { requestId: shown.pending.answer.requestId, option: shown.pending.answer.options[1] as string };
+    expect(drawn).toEqual({ requestId: "perm-A", option: "deny" });
+    // gc resolved A elsewhere and the agent raised B, with its options in another order.
+    prompt = { request_id: "perm-B", kind: "permission", prompt: "Push to main?", options: ["deny", "approve"] };
+    await host.advance(5500);
+    await click(a, (c) => c.answer(drawn.requestId, drawn.option));
+    await host.runTurns();
+    expect(posts("/respond")).toEqual([]);
+    expect(a.copy.view(host.now()).notice).toBe("the prompt changed: review it before answering");
   });
 
   test("new session: the form names the agent, and create sends its alias", async () => {
@@ -181,7 +209,7 @@ describe("a copy's actions", () => {
     expect(row?.tone).toBe("unknown");
     await host.advance(6000);
     const ready = b.copy.view(host.now()).activity?.rows[0];
-    expect(ready?.retry).toEqual({ kind: "retry", label: "Retry (gc deduplicates it)" });
+    expect(ready?.retry).toEqual({ kind: "retry", label: "Retry (same key: gc deduplicates it within 30 min, not across a gc restart)" });
     gc.override = (req) => (req.method === "POST" ? { status: 200, body: { status: "ok" } } : undefined);
     await click(b, (c) => c.retryAction(ready?.id ?? -1));
     expect(posts("/wake")).toHaveLength(2);

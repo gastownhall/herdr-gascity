@@ -51,7 +51,9 @@ export function renderNotice(notice: string | null): GpuiElement | null {
   return notice === null ? null : label("gascity-notice", notice);
 }
 
-const TONES: Readonly<Record<ActivityRow["tone"], string>> = { pending: "pending", done: "done", failed: "failed", unknown: "outcome unknown" };
+const TONES: Readonly<Record<ActivityRow["tone"], string>> = {
+  pending: "pending", done: "done", failed: "failed", unknown: "outcome unknown", "not-sent": "not sent",
+};
 
 function activityRow(r: ActivityRow, theme: ThemeRead, actions: DialogActions): GpuiElement {
   const id = `gascity-activity-${r.id}`;

@@ -206,6 +206,12 @@ export interface CitySnapshot {
   readonly beads: ReadonlyMap<string, Slot<T.Bead>>;
   /** The last ERROR_RING failures, oldest first. */
   readonly errors: readonly ErrorEntry[];
+  /**
+   * When the request behind each domain's current value was started: a value
+   * fetched by a request that started before some moment may predate it
+   * (an action's unknown outcome waits for a refetch started after it).
+   */
+  readonly fetchStarts: Readonly<Partial<Record<Domain, number>>>;
 }
 
 /** New events as one batch, oldest first, for app-wide listeners (toasts, the city list). */
@@ -323,6 +329,7 @@ export class CityStore implements EndpointListener {
     cursor: null, polledAt: null, error: null, held: false, resyncs: 0,
   };
   private errors: ErrorEntry[] = [];
+  private readonly fetchStarts: Partial<Record<Domain, number>> = {};
   private readonly last: TaskTimes = { events: null, sessions: null, peek: null, sweep: null };
   private onScreen: boolean;
   private step: Step | null = null;
@@ -787,6 +794,7 @@ export class CityStore implements EndpointListener {
   }
 
   private async fetchDomain(step: Step, d: Domain, priority: FetchPriority): Promise<void> {
+    const startedAt = this.deps.clock.now();
     const r = await this.load(step, d, priority);
     if (!this.current(step)) return;
     this.progress(step);
@@ -794,6 +802,7 @@ export class CityStore implements EndpointListener {
     if (this.settle(r, d) && r.ok) {
       slot.value = r.value;
       slot.fetchedAt = this.deps.clock.now();
+      this.fetchStarts[d] = startedAt;
       slot.error = null;
       slot.held = false;
       this.due.delete(d);
@@ -1056,6 +1065,7 @@ export class CityStore implements EndpointListener {
       details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
       beads: new Map([...this.lookups].map(([id, b]) => [id, this.slotOf(b, b.due)])),
       errors: this.errors,
+      fetchStarts: { ...this.fetchStarts },
     };
   }
 

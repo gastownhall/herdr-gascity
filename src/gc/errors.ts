@@ -27,6 +27,10 @@ export type OutcomeUnknownCause =
   /** Asking gc for the outcome failed in a way that will not pass (e.g. gc no longer knows the request). */
   | "outcome-poll-failed"
   | "reported-by-gc"
+  /** gc answered a mutation with a server error (5xx other than 501): it may have been applied (e.g. 503 write_unconfirmed). */
+  | "server-error"
+  /** gc answered 409 idempotency-in-flight: a request with the same key is still running. */
+  | "idempotency-in-flight"
   /** gc reported an outcome state this pin does not know. */
   | "unrecognized-state"
   /** The request was in flight when herdr cancelled it with the copy that started it. */
@@ -187,4 +191,24 @@ export function outcomeFailure(outcome: RequestOutcome): GcError | null {
   const payload = decodeValue(RequestFailedPayloadSchema, event.payload, OUTCOME_OP, "event.payload");
   if (!payload.ok) return payload.error;
   return { kind: "outcome-failed", requestId: outcome.request_id, operation: outcome.operation, payload: payload.value };
+}
+
+/** gc's problem code for a same-key request still running (internal/api/apierr/catalog.go). */
+const CODE_IDEMPOTENCY_IN_FLIGHT = "idempotency-in-flight";
+
+/**
+ * A mutation's non-2xx answer that does not prove the change was not made:
+ * any 5xx except 501 (gc's "not implemented" refuses before doing anything;
+ * 503 write_unconfirmed is documented as "may have landed"), and 409
+ * idempotency-in-flight (the same key is still being worked on). These are
+ * outcome-unknown, so a retry keeps the key; other answers are refusals.
+ */
+export function uncertainMutationAnswer(operationId: string, status: number, error: GcError): GcError | null {
+  const detail = error.kind === "http" ? (error.problem?.detail ?? error.problem?.title ?? error.raw ?? "") : "";
+  const issue = detail === "" ? `gc answered ${status}` : `gc answered ${status}: ${detail}`;
+  if (status === 409 && error.kind === "http" && error.problem?.code === CODE_IDEMPOTENCY_IN_FLIGHT) {
+    return { kind: "outcome-unknown", requestId: null, operationId, cause: "idempotency-in-flight", issues: [issue] };
+  }
+  if (status >= 500 && status !== 501) return { kind: "outcome-unknown", requestId: null, operationId, cause: "server-error", issues: [issue] };
+  return null;
 }

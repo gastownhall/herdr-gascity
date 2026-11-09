@@ -10,19 +10,26 @@
 //   - an action is sent in the turn of the copy that started it (a click, a
 //     key, a command), and its outcome is polled only from that copy's own
 //     ticks;
-//   - when that copy goes (ownerGone, from its close), every action it still
-//     had under way becomes "unknown" at once (cause "cancelled"): its queued
-//     request is dropped from the fetch budget (never sent), a late answer is
-//     ignored, the affected state is refetched by the next tick of any live
+//   - when that copy goes (ownerGone, from its close), an action it was still
+//     sending is resolved at once: "not-sent" if its request was still queued
+//     (dropped, never sent), else "unknown" (cause "cancelled"); a late answer
+//     is ignored, the affected state is refetched by the next tick of any live
 //     copy, and nothing is resent;
 //   - every step has a deadline (SEND_DEADLINE_MS for the request,
 //     OUTCOME_POLL_LIMIT_MS for the outcome), so nothing hangs.
 //
+// When the owner goes, a request it still had queued is dropped (never sent:
+// "not-sent"); one in flight can no longer be observed ("unknown"); and an
+// accepted request's outcome is a read gc serves by request id, so the next
+// tick of any surviving copy takes over polling it.
+//
 // Nothing here retries. A retry is a person's explicit act (retry), allowed
-// after a failure, or after an unknown outcome once the affected state has
-// been refetched (retryGate). After an unknown outcome a retry reuses the
-// action's Idempotency-Key, so gc deduplicates it where gc declares the
-// header; where it does not, the retry is a new request.
+// after a definite failure or a request that was never sent, or after an
+// unknown outcome once the affected state has been refetched by a request
+// started after it became unknown (retryGate). After an unknown outcome a
+// retry reuses the action's Idempotency-Key, so gc can deduplicate it where it
+// declares the header (gc keeps keys in memory for 30 minutes; a gc restart
+// forgets them); where it does not, the retry is a new request.
 
 import { outcomeFailure, type GcError } from "../gc/errors.ts";
 import type { GcClient } from "../gc/client.ts";
@@ -33,6 +40,7 @@ import {
 } from "../gc/schemas.gen.ts";
 import type { RequestOutcome } from "../gc/types.gen.ts";
 import { err, ok, type Result } from "../result.ts";
+import { errorText } from "../vm/errorText.ts";
 import { backsOff } from "../sync/backoff.ts";
 import { RECLAIM_AFTER_MS, type FetchPriority } from "../sync/budget.ts";
 import type { Clock } from "../sync/clock.ts";
@@ -64,8 +72,8 @@ export interface LedgerDeps {
   clock: Clock;
   /** A client whose requests queue at `priority` and can be dropped together with `group`. */
   client(priority: FetchPriority, group: object): GcClient;
-  /** Drops `group`'s queued requests: they are never sent. Starts nothing. */
-  dropQueued(group: object): void;
+  /** Drops `group`'s queued requests: they are never sent. Starts nothing. Returns how many. */
+  dropQueued(group: object): number;
   /** Refetches these domains at the next tick of any copy. */
   refresh(domains: readonly Domain[]): void;
   /** Refetches a watched session's detail at the next tick. */
@@ -81,8 +89,8 @@ interface ActionRecord {
   attempt: number;
   startedAt: number;
   state: ActionState;
-  /** The copy whose turn sent the current attempt. */
-  owner: object;
+  /** The copy whose turn sent the current attempt; null once it closed while the outcome is being polled (any copy's tick polls it). */
+  owner: object | null;
   /** The current attempt's requests, for dropping them from the queue. */
   group: object;
   /** Answers carrying another token belong to an earlier attempt or a resolved one: ignored. */
@@ -102,10 +110,11 @@ export function retryGate(entry: ActionEntry, snapshot: CitySnapshot): RetryGate
   const s = entry.state;
   if (isPending(s)) return { allowed: false, reason: "the action is still under way" };
   if (s.kind === "done") return { allowed: false, reason: "the action is done" };
-  if (s.kind === "failed") return { allowed: true };
+  if (s.kind === "failed" || s.kind === "not-sent") return { allowed: true };
   for (const d of entry.spec.refresh) {
-    const fetchedAt = snapshot[d].fetchedAt;
-    if (fetchedAt === null || fetchedAt < s.at) return { allowed: false, reason: `refreshing ${d} before a retry` };
+    // A request started before the outcome became unknown may show the state before the action landed.
+    const startedAt = snapshot.fetchStarts[d];
+    if (startedAt === undefined || startedAt < s.at) return { allowed: false, reason: `refreshing ${d} before a retry` };
   }
   return { allowed: true };
 }
@@ -215,10 +224,15 @@ export class ActionLedger {
     for (const rec of [...this.records]) {
       const s = rec.state;
       if (s.kind === "sending" && now - s.since > SEND_DEADLINE_MS) {
-        this.resolve(rec, { kind: "unknown", at: now, error: unknown(null, rec.spec.operationId, "timeout", [`no answer within ${Math.round(SEND_DEADLINE_MS / 1000)} s`]) });
+        const secs = Math.round(SEND_DEADLINE_MS / 1000);
+        // Still queued: drop it, so it is never sent after being reported.
+        if (this.deps.dropQueued(rec.group) > 0) this.resolve(rec, { kind: "not-sent", at: now, reason: `the fetch queue did not reach it within ${secs} s` });
+        else this.resolve(rec, { kind: "unknown", at: now, error: unknown(null, rec.spec.operationId, "timeout", [`no answer within ${secs} s`]) });
       } else if (s.kind === "polling" && now - s.acceptedAt >= OUTCOME_POLL_LIMIT_MS) {
         this.resolve(rec, { kind: "unknown", at: now, error: unknown(s.requestId, rec.spec.operationId, "outcome-poll-expired") });
-      } else if (s.kind === "polling" && rec.owner === owner && !s.inFlight && now >= s.nextAt) {
+      } else if (s.kind === "polling" && (rec.owner === owner || rec.owner === null) && !s.inFlight && now >= s.nextAt) {
+        // An orphaned outcome poll is taken over by whichever live copy ticks first.
+        rec.owner = owner;
         this.poll(rec, s);
       }
     }
@@ -232,13 +246,27 @@ export class ActionLedger {
   ownerGone(owner: object): void {
     const now = this.deps.clock.now();
     for (const rec of this.records) {
-      if (rec.owner !== owner || !isPending(rec.state)) continue;
-      this.deps.dropQueued(rec.group);
-      const requestId = rec.state.kind === "polling" ? rec.state.requestId : null;
-      this.resolve(rec, {
-        kind: "unknown", at: now,
-        error: unknown(requestId, rec.spec.operationId, "cancelled", ["the Gas City view that started it closed before gc's answer arrived"]),
-      });
+      if (rec.owner !== owner) continue;
+      const s = rec.state;
+      if (s.kind === "polling") {
+        // gc serves the outcome by request id: a surviving copy's tick polls it next.
+        // The closed copy's poll in flight never settles; its slot is reclaimed.
+        this.deps.dropQueued(rec.group);
+        rec.owner = null;
+        rec.group = {};
+        rec.token = ++this.tokens;
+        rec.state = { ...s, inFlight: false, nextAt: now };
+        this.commit();
+      } else if (s.kind === "sending") {
+        if (this.deps.dropQueued(rec.group) > 0) {
+          this.resolve(rec, { kind: "not-sent", at: now, reason: "the Gas City view that started it closed before it was sent" });
+        } else {
+          this.resolve(rec, {
+            kind: "unknown", at: now,
+            error: unknown(null, rec.spec.operationId, "cancelled", ["the Gas City view that started it closed before gc's answer arrived"]),
+          });
+        }
+      }
     }
   }
 
@@ -249,7 +277,7 @@ export class ActionLedger {
 
   // ---- internals ------------------------------------------------------------------
 
-  private send(rec: ActionRecord, owner: object): void {
+  private send(rec: ActionRecord, owner: object | null): void {
     rec.owner = owner;
     rec.group = {};
     const token = ++this.tokens;
@@ -334,7 +362,7 @@ export class ActionLedger {
   }
 
   /** Ends an action and refetches what it changed (a done one too: rig and agent changes are not evented). */
-  private resolve(rec: ActionRecord, state: Extract<ActionState, { kind: "done" | "failed" | "unknown" }>): void {
+  private resolve(rec: ActionRecord, state: Extract<ActionState, { kind: "done" | "failed" | "unknown" | "not-sent" }>): void {
     rec.token = ++this.tokens;
     rec.state = state;
     this.refreshAfter(rec);
@@ -369,14 +397,7 @@ export class ActionLedger {
   }
 }
 
-/** A short text of an error for an outcome-unknown's issues. */
+/** An error as one line for an outcome-unknown's issues, keeping every detail it has (cause, issues, gc's text). */
 function describe(e: GcError): string {
-  switch (e.kind) {
-    case "http":
-      return `gc answered ${e.status}${e.problem?.detail ? `: ${e.problem.detail}` : ""}`;
-    case "decode":
-      return `unreadable answer: ${e.issues.join("; ")}`;
-    default:
-      return e.kind;
-  }
+  return errorText(e);
 }

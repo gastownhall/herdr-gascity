@@ -238,6 +238,22 @@ describe("transport failures (herdr fetch rejections)", () => {
     }
   });
 
+  test("a mutation answered 5xx (but 501) or 409 idempotency-in-flight is outcome-unknown, with gc's text; a read is a plain http error", async () => {
+    const op = "post-v0-city-by-city-name-session-by-id-wake";
+    const at = async (reply: Reply) => (await client([reply]).c.call(op, WAKE));
+    expect(await at(json(503, { status: 503, title: "Service Unavailable", code: "store-unavailable", detail: "write_unconfirmed: not confirmed" }))).toEqual({
+      ok: false, error: { kind: "outcome-unknown", requestId: null, operationId: op, cause: "server-error", issues: ["gc answered 503: write_unconfirmed: not confirmed"] },
+    });
+    expect(await at({ status: 500, body: "boom" })).toMatchObject({ ok: false, error: { kind: "outcome-unknown", cause: "server-error", issues: ["gc answered 500: boom"] } });
+    expect(await at(json(409, { status: 409, title: "Idempotency Key In Flight", code: "idempotency-in-flight", detail: "in_flight: still running" }))).toMatchObject({
+      ok: false, error: { kind: "outcome-unknown", cause: "idempotency-in-flight" },
+    });
+    expect(await at(json(501, { status: 501, title: "Not Implemented", code: "not-implemented", detail: "unsupported" }))).toMatchObject({ ok: false, error: { kind: "http", status: 501 } });
+    expect(await at(json(409, { status: 409, title: "Conflict", code: "session-conflict", detail: "closed" }))).toMatchObject({ ok: false, error: { kind: "http", status: 409 } });
+    const read = await client([json(503, { status: 503, title: "Service Unavailable" })]).c.call("get-health", { path: {} });
+    expect(read).toMatchObject({ ok: false, error: { kind: "http", status: 503 } });
+  });
+
   test("text() rejecting is handled like a fetch rejection", async () => {
     const host = fakeHost([]);
     const fetch: HostFetch = (url) =>

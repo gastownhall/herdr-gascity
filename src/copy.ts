@@ -327,17 +327,25 @@ export class CopyController {
     return this.send(spec);
   }
 
-  /** Answers the open session's pending prompt with gc's `index`-th option. */
-  answer(index: number): void {
+  /**
+   * Answers the open session's pending prompt `requestId` with `option`, both
+   * exactly as the button showing them was drawn. If gc's current prompt is a
+   * different one (or no longer lists that option), nothing is sent: the
+   * person must see the prompt they answer.
+   */
+  answer(requestId: string, option: string): void {
     const s = this.city?.snapshot();
     const id = this.selectedRef();
     const d = s && id !== null ? s.details.get(id)?.pending.value?.pending : undefined;
-    const option = d?.options[index];
-    if (!d || id === null || option === undefined) {
+    if (!d || id === null) {
       this.refuse("that prompt is no longer pending");
       return;
     }
-    this.send(sessionRespond(id, d.request_id, option));
+    if (d.request_id !== requestId || !d.options.includes(option)) {
+      this.refuse("the prompt changed: review it before answering");
+      return;
+    }
+    this.send(sessionRespond(id, requestId, option));
   }
 
   /** Opens the new-session form for an agent (gc's qualified name). */

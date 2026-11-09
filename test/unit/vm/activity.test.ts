@@ -53,12 +53,29 @@ describe("activity rows", () => {
 
     const fresh = snapshot({ sessions: slot(sessions([]), { ageMs: 100 }), agents: slot({ items: [], total: 0, partial_errors: [], unreadable: [] }, { ageMs: 100 }) });
     const [ready] = activityModel({ rev: 1, entries: [wake] }, fresh, NOW).rows;
-    expect(ready?.retry).toEqual({ kind: "retry", label: "Retry (gc deduplicates it)" });
+    expect(ready?.retry).toEqual({ kind: "retry", label: "Retry (same key: gc deduplicates it within 30 min, not across a gc restart)" });
     expect(ready?.detail).toContain("check it before retrying");
 
     const suspend = entry(agentSuspend("worker"), unknownState);
     const [twice] = activityModel({ rev: 1, entries: [suspend] }, fresh, NOW).rows;
     expect(twice?.retry).toEqual({ kind: "retry", label: "Retry (gc cannot deduplicate this: it may happen twice)" });
+  });
+
+  test("the gate counts a refetch only if it started after the outcome became unknown", () => {
+    const at = NOW - 500;
+    const wake = entry(session.sessionWake("sc-20"), { kind: "unknown", at, error: { kind: "outcome-unknown", requestId: null, operationId: "x", cause: "timeout" } });
+    // Both lists arrived after `at`, but the session list's request had started before it.
+    const s = snapshot({
+      sessions: slot(sessions([]), { ageMs: 100 }), agents: slot({ items: [], total: 0, partial_errors: [], unreadable: [] }, { ageMs: 100 }),
+      fetchStarts: { sessions: at - 1, agents: at + 1 },
+    });
+    expect(activityModel({ rev: 1, entries: [wake] }, s, NOW).rows[0]?.retry).toEqual({ kind: "wait", reason: "refreshing sessions before a retry" });
+  });
+
+  test("an action dropped before it was sent says so and may be retried", () => {
+    const e = entry(session.sessionPin("sc-20"), { kind: "not-sent", at: NOW, reason: "no answer from the fetch queue within 70 s" });
+    const [r] = activityModel({ rev: 1, entries: [e] }, city, NOW).rows;
+    expect(r).toMatchObject({ tone: "not-sent", detail: "not sent: no answer from the fetch queue within 70 s", retry: { kind: "retry", label: "Retry" } });
   });
 
   test("gc text is cleaned", () => {

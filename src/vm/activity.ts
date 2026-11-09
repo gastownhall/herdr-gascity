@@ -14,7 +14,16 @@ import { errorText } from "./errorText.ts";
 import { cleanLine } from "./sanitize.ts";
 
 /** A row's state as the panel shows it. */
-export type ActivityTone = "pending" | "done" | "failed" | "unknown";
+export type ActivityTone = "pending" | "done" | "failed" | "unknown" | "not-sent";
+
+/**
+ * The retry label after an unknown outcome on an operation gc deduplicates:
+ * gc keeps Idempotency-Keys in memory for 30 minutes, and a gc restart
+ * forgets them, so the promise is limited to that.
+ */
+export const SAME_KEY_RETRY = "Retry (same key: gc deduplicates it within 30 min, not across a gc restart)";
+/** The retry label after an unknown outcome on an operation without Idempotency-Key. */
+export const MAY_REPEAT_RETRY = "Retry (gc cannot deduplicate this: it may happen twice)";
 
 /** What a row offers. */
 export type RetryOffer =
@@ -93,7 +102,7 @@ function row(e: ActionEntry, city: CitySnapshot | null, now: number): ActivityRo
     }
     case "unknown": {
       const gate = city ? retryGate(e, city) : { allowed: false as const, reason: "no city data" };
-      const twice = e.spec.idempotent ? "Retry (gc deduplicates it)" : "Retry (gc cannot deduplicate this: it may happen twice)";
+      const twice = e.spec.idempotent ? SAME_KEY_RETRY : MAY_REPEAT_RETRY;
       return {
         ...base, tone: "unknown", refresh: true,
         requestId: s.error.requestId === null ? null : cleanLine(s.error.requestId),
@@ -103,6 +112,8 @@ function row(e: ActionEntry, city: CitySnapshot | null, now: number): ActivityRo
         retry: gate.allowed ? { kind: "retry", label: twice } : { kind: "wait", reason: gate.reason },
       };
     }
+    case "not-sent":
+      return { ...base, tone: "not-sent", detail: cleanLine(`not sent: ${s.reason}`), requestId: null, retry: { kind: "retry", label: "Retry" } };
   }
 }
 

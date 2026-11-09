@@ -7,9 +7,14 @@
 //   polling  – gc accepted it (202) and the mod is asking for its outcome;
 //   done     – gc says it happened;
 //   failed   – gc says it did not happen (a refusal, or a failed outcome);
-//   unknown  – it may or may not have happened: the transport failed, the
-//              outcome could not be learned in time, or the view that started
-//              it closed. The affected state is refetched before a retry.
+//   unknown  – it may or may not have happened: the transport failed, gc
+//              answered with a server error or "same key still in flight",
+//              the outcome could not be learned in time, or the view that
+//              started it closed with the request in flight. The affected
+//              state is refetched before a retry;
+//   not-sent – it was dropped from the fetch queue before it was sent (its
+//              view closed, or the queue did not reach it in time): known
+//              not to have happened.
 // Nothing here or in the ledger ever retries on its own.
 
 import type { GcClient } from "../gc/client.ts";
@@ -93,7 +98,8 @@ export type ActionState =
   }
   | { kind: "done"; at: number; detail: string; requestId: string | null }
   | { kind: "failed"; at: number; error: GcError }
-  | { kind: "unknown"; at: number; error: OutcomeUnknown };
+  | { kind: "unknown"; at: number; error: OutcomeUnknown }
+  | { kind: "not-sent"; at: number; reason: string };
 
 /** One action in the activity log. */
 export interface ActionEntry {

@@ -73,6 +73,8 @@ interface SyncSummary {
   actions: { kind: string; state: string; attempt: number }[];
   activity: [string, string, string][];
   keyShapes: boolean[];
+  retryOk: boolean;
+  sameKeyRetry: boolean;
 }
 
 const probe = await bundleProbe();
@@ -197,13 +199,17 @@ describe("the bundled gc client with zod, and the sync engine", () => {
     expect(sync.board.closed.earlier.map((c) => c.id)).not.toContain("sc-60");
     expect(sync.board.hidden).toBe(2); // the session bead in the seed, and the session close
     expect(sync.beadDetail).toMatchObject({ kind: "bead", id: "sc-74", closeReason: "closed in the scenario", description: "recorded for the herdr-gascity contract fixtures" });
-    // actions: a 202 followed to "delivered"; one whose copy went is unknown, not pending
+    // actions: a 202 followed to "delivered", an answer, a 503 retried with the same key, and one whose copy went (unknown, not pending)
     expect(sync.actions).toEqual([
       { kind: "session.submit", state: "done", attempt: 1 },
+      { kind: "session.respond", state: "done", attempt: 1 },
+      { kind: "session.stop", state: "done", attempt: 2 },
       { kind: "session.wake", state: "unknown", attempt: 1 },
     ]);
-    expect(sync.activity[1]).toEqual(["Send · session sc-20", "done", "delivered"]);
-    expect(sync.keyShapes).toEqual([true, true]);
+    expect(sync.activity[3]).toEqual(["Send · session sc-20", "done", "delivered"]);
+    expect(sync.retryOk).toBe(true);
+    expect(sync.sameKeyRetry).toBe(true);
+    expect(sync.keyShapes).toEqual([true, true, true, true, true]);
     expect(sync.sanitized).toEqual([
       "abcde f",
       "line\nnext",

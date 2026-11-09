@@ -23,8 +23,8 @@ export interface DetailActions {
   requestKill(sessionId: string, cx: GpuiContext): void;
   /** Sends the send box's text to the open session. */
   send(mode: InputMode, cx: GpuiContext): void;
-  /** Answers the open session's pending prompt with gc's `index`-th option. */
-  answer(index: number, cx: GpuiContext): void;
+  /** Answers the open session's pending prompt `requestId` with `option`, exactly as the button was drawn. */
+  answer(requestId: string, option: string, cx: GpuiContext): void;
 }
 
 /** What the detail pane draws besides its model. */
@@ -73,8 +73,12 @@ function actionBar(id: string, ctx: DetailContext, theme: ThemeRead, actions: De
 
 function answers(p: PendingView, actions: DetailActions): GpuiElement | null {
   if (p.kind !== "prompt" || p.options.length === 0) return null;
+  // Each button carries the prompt and the option it was drawn with, so a
+  // click answers what the person saw (gc refuses an answer to a resolved
+  // prompt; the copy refuses one when the prompt has changed since).
+  const { requestId, options } = p.answer;
   return h_flex().id("gascity-detail-answers").gap(8)
-    .children(p.options.map((o, i) => button(`gascity-answer-${i}`, o, (cx) => actions.answer(i, cx))));
+    .children(options.map((raw, i) => button(`gascity-answer-${i}`, p.options[i] ?? "", (cx) => actions.answer(requestId, raw, cx))));
 }
 
 function sendBox(canInterrupt: boolean, ctx: DetailContext, actions: DetailActions): GpuiElement {

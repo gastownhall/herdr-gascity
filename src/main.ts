@@ -132,8 +132,8 @@ function actionsFor(copy: CopyController, inputs: PanelInputs | null): PanelActi
       if (inputs !== null && copy.sendInput(inputs.message.value(), mode)) inputs.message.set_value("");
       cx.notify();
     },
-    answer: (index, cx) => {
-      copy.answer(index);
+    answer: (requestId, option, cx) => {
+      copy.answer(requestId, option);
       cx.notify();
     },
     openNewSession: (agent, cx) => {

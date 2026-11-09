@@ -179,7 +179,9 @@ describe("a 202 action is followed to its outcome", () => {
     submitFlow(gc, [{ status: 404, body: { title: "Not Found", status: 404, detail: "request not found" } }]);
     const id2 = await act(a, session.sessionSubmit("sc-20", "y", "default"));
     await host.advance(2000);
-    expect(entry(a, id2).state).toMatchObject({ kind: "unknown", error: { cause: "outcome-poll-failed", requestId: ACCEPTED_SUBMIT.request_id } });
+    expect(entry(a, id2).state).toMatchObject({
+      kind: "unknown", error: { cause: "outcome-poll-failed", requestId: ACCEPTED_SUBMIT.request_id, issues: ["gc answered 404: request not found"] },
+    });
   });
 
   test("session new: 202 → the created session is named in the outcome", async () => {
@@ -279,11 +281,13 @@ describe("outcome unknown: refetch before retry, never retried automatically", (
     expect(posts.every((p) => p.init.headers["Idempotency-Key"] === undefined)).toBe(true);
   });
 
-  test("a retry after gc refused uses a new key: the refusal is known, not a lost request", async () => {
+  test("a retry after gc refused (a definite 4xx) uses a new key: the refusal is known, not a lost request", async () => {
     const { host, gc, open, act, retry, entry, sent } = setup();
     const a = await open();
     await host.advance(3000);
-    gc.override = (req) => req.method === "POST" ? { status: 503, body: { title: "Unavailable", status: 503, detail: "busy" } } : undefined;
+    gc.override = (req) => req.method === "POST"
+      ? { status: 409, body: { title: "Session State Conflict", status: 409, code: "session-conflict", detail: "pending_interaction: answer first" } }
+      : undefined;
     const id = await act(a, session.sessionStop("sc-20"));
     await host.advance(1000);
     expect(entry(a, id).state.kind).toBe("failed");
@@ -319,6 +323,125 @@ describe("outcome unknown: refetch before retry, never retried automatically", (
   });
 });
 
+describe("answers that do not prove a failure are unknown, and a retry keeps the key", () => {
+  const IN_FLIGHT = {
+    type: "about:blank", title: "Idempotency Key In Flight", status: 409, code: "idempotency-in-flight",
+    detail: "in_flight: request with this Idempotency-Key is already in progress",
+  };
+
+  test("A2: lost connection → unknown; the same-key retry answered 409 idempotency-in-flight stays unknown; every retry reuses the key", async () => {
+    const { host, gc, open, act, retry, entry, sent } = setup();
+    const a = await open();
+    await host.advance(3000);
+    let mode = "reset";
+    gc.override = (req) => {
+      if (req.method !== "POST") return undefined;
+      if (mode === "reset") return { reject: "error sending request: connection reset by peer" };
+      if (mode === "inflight") return { status: 409, body: IN_FLIGHT };
+      return { status: 202, body: ACCEPTED_SUBMIT };
+    };
+    const id = await act(a, session.sessionSubmit("sc-20", "deploy now", "default"));
+    await host.advance(6000);
+    expect(entry(a, id).state.kind).toBe("unknown");
+    mode = "inflight";
+    expect((await retry(a, id)).ok).toBe(true);
+    await host.advance(500);
+    expect(entry(a, id).state).toMatchObject({ kind: "unknown", error: { cause: "idempotency-in-flight" } });
+    await host.advance(6000);
+    mode = "accept";
+    expect((await retry(a, id)).ok).toBe(true);
+    await host.advance(500);
+    expect(sent("POST", "/submit").map((p) => p.init.headers["Idempotency-Key"])).toEqual(["key-1", "key-1", "key-1"]);
+  });
+
+  test("A3: create-session answered 503 write_unconfirmed ('may have landed') is unknown, and the retry keeps the key", async () => {
+    const { host, gc, open, act, retry, entry, sent } = setup();
+    const a = await open();
+    await host.advance(3000);
+    let first = true;
+    gc.override = (req) => {
+      if (req.method !== "POST") return undefined;
+      if (first) {
+        first = false;
+        return { status: 503, body: { title: "Service Unavailable", status: 503, code: "store-unavailable", detail: "write_unconfirmed: session bead write not confirmed" } };
+      }
+      return { status: 202, body: fixtureBody("create-session", "accepted") };
+    };
+    const id = await act(a, session.sessionNew("worker", null));
+    await host.advance(500);
+    const s = entry(a, id).state;
+    expect(s).toMatchObject({ kind: "unknown", error: { cause: "server-error" } });
+    if (s.kind === "unknown") expect(s.error.issues?.join(" ")).toContain("write_unconfirmed");
+    await host.advance(6000);
+    expect((await retry(a, id)).ok).toBe(true);
+    await host.advance(500);
+    expect(sent("POST", "/sessions").map((p) => p.init.headers["Idempotency-Key"])).toEqual(["key-1", "key-1"]);
+  });
+
+  test("every 5xx is unknown; 501 not-implemented and other 4xx are definite refusals", async () => {
+    const { host, gc, open, act, entry } = setup();
+    const a = await open();
+    await host.advance(3000);
+    const answers: Record<string, { status: number; body: unknown }> = {
+      "sc-1": { status: 500, body: { title: "Internal Server Error", status: 500, detail: "boom" } },
+      "sc-2": { status: 502, body: "bad gateway" },
+      "sc-3": { status: 501, body: fixtureBody("respond-session", "no-pending") },
+      "sc-4": { status: 404, body: { title: "Not Found", status: 404, code: "not-found", detail: "session not found" } },
+    };
+    gc.override = (req) => (req.method === "POST" ? answers[/session\/([^/]+)\//.exec(req.path)?.[1] ?? ""] : undefined);
+    const ids = await Promise.all(["sc-1", "sc-2", "sc-3", "sc-4"].map((x) => act(a, session.sessionStop(x))));
+    await host.advance(1000);
+    expect(ids.map((i) => entry(a, i).state.kind)).toEqual(["unknown", "unknown", "failed", "failed"]);
+  });
+});
+
+describe("deadlines and the retry gate", () => {
+  test("A6: a request still queued at the send deadline is dropped and reported not sent; nothing is sent after it was reported", async () => {
+    const { host, gc, open, act, entry, sent } = setup();
+    const a = await open();
+    await host.advance(3000);
+    gc.override = (req) => (req.method === "POST" ? { hold: true } : undefined);
+    const targets = ["sc-1", "sc-2", "sc-3", "sc-4", "sc-5", "sc-6", "sc-7"];
+    const ids = [];
+    for (const t of targets) ids.push(await act(a, session.sessionPin(t)));
+    const resolvedAt = new Map<number, number>();
+    for (let i = 0; i < 160; i++) {
+      await host.advance(1000);
+      for (const id of ids) if (!resolvedAt.has(id) && !["sending", "polling"].includes(entry(a, id).state.kind)) resolvedAt.set(id, host.now());
+    }
+    for (const [i, id] of ids.entries()) {
+      const at = resolvedAt.get(id);
+      expect(at).toBeDefined();
+      const late = sent("POST", `/session/${targets[i]}/pin`).filter((p) => p.at >= (at as number));
+      expect(late).toEqual([]);
+    }
+    const notSent = ids.filter((id) => entry(a, id).state.kind === "not-sent");
+    expect(notSent.length).toBeGreaterThan(0);
+    for (const id of notSent) expect(sent("POST", `/session/${targets[ids.indexOf(id)]}/pin`)).toEqual([]);
+  });
+
+  test("the retry gate needs a refetch that STARTED after the outcome became unknown", async () => {
+    const { host, gc, open, act, entry } = setup();
+    const a = await open();
+    await host.advance(3000);
+    // A session list read is held open before the action, and answers after it became unknown.
+    gc.override = (req) => (req.method === "GET" && req.path.endsWith("/sessions") ? { hold: true } : req.method === "POST" ? { reject: "connection reset" } : undefined);
+    a.sub.refresh(["sessions"]);
+    await host.advance(300);
+    expect(gc.heldCount()).toBe(1);
+    // Submit changes only the session list, so that list's refetch alone gates the retry.
+    const id = await act(a, session.sessionSubmit("sc-20", "x", "default"));
+    await host.advance(10);
+    expect(entry(a, id).state.kind).toBe("unknown");
+    gc.override = (req) => (req.method === "POST" ? { reject: "connection reset" } : undefined);
+    gc.release(200, fixtureBody("get-v0-city-by-city-name-sessions", "ok"));
+    await host.advance(10);
+    expect(retryGate(entry(a, id), a.sub.snapshot()).allowed).toBe(false);
+    await host.advance(7000);
+    expect(retryGate(entry(a, id), a.sub.snapshot())).toEqual({ allowed: true });
+  });
+});
+
 describe("herdr ownership: the copy that started an action closes", () => {
   test("while the request is in flight: unknown at once, the late answer is ignored, nothing is re-sent", async () => {
     const { host, gc, open, close, act, entry, sent } = setup();
@@ -339,20 +462,27 @@ describe("herdr ownership: the copy that started an action closes", () => {
     expect(retryGate(entry(b, id), b.sub.snapshot())).toEqual({ allowed: true });
   });
 
-  test("while its outcome is being polled: unknown with the request id; no copy polls it any more", async () => {
+  test("while its outcome is being polled: a surviving copy takes over the polling from its own ticks and learns the outcome", async () => {
     const { host, gc, open, close, act, entry, sent } = setup();
     const a = await open();
     const b = await open();
     await host.advance(3000);
+    let done = false;
     submitFlow(gc, [{ status: 200, body: pendingOutcome }]);
+    const base = gc.override;
+    gc.override = (req) => (req.path === OUTCOME_PATH && done ? { status: 200, body: fixtureBody("get-request-outcome", "session-submit") } : base?.(req));
     const id = await act(a, session.sessionSubmit("sc-20", "x", "default"));
     await host.advance(1000);
     expect(entry(b, id).state.kind).toBe("polling");
     await close(a);
-    expect(entry(b, id).state).toMatchObject({ kind: "unknown", error: { cause: "cancelled", requestId: ACCEPTED_SUBMIT.request_id } });
+    expect(entry(b, id).state.kind).toBe("polling");
     const n = sent("GET", OUTCOME_PATH).length;
-    await host.advance(10_000);
-    expect(sent("GET", OUTCOME_PATH)).toHaveLength(n);
+    done = true;
+    await host.advance(3000);
+    expect(sent("GET", OUTCOME_PATH).length).toBeGreaterThan(n);
+    expect(host.starts.filter((x) => x.path === OUTCOME_PATH).slice(n).every((x) => x.owner === b.owner)).toBe(true);
+    expect(entry(b, id).state).toMatchObject({ kind: "done", detail: "delivered" });
+    expect(sent("POST", "/submit")).toHaveLength(1);
   });
 
   test("while the request is still queued in the fetch budget: it is dropped, never sent", async () => {
@@ -371,7 +501,8 @@ describe("herdr ownership: the copy that started an action closes", () => {
     const id = await act(a, session.sessionWake("sc-20"));
     expect(reg.budgetStats().queued).toBeGreaterThan(0);
     await close(a);
-    expect(entry(b, id).state.kind).toBe("unknown");
+    // Dropped from the queue before it was sent: known not to have happened.
+    expect(entry(b, id).state).toMatchObject({ kind: "not-sent" });
     while (gc.heldCount() > 0) gc.release(200, { items: [], total: 0 });
     await host.advance(5000);
     expect(sent("POST", "/wake")).toHaveLength(0);

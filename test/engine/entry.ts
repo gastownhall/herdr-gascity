@@ -11,7 +11,7 @@ import { OPERATIONS, type OperationId } from "../../src/gc/operations.gen.ts";
 import type { RequestOutcome } from "../../src/gc/types.gen.ts";
 import { jitlessEnabled } from "../../src/gc/zod.ts";
 import { decodeTerminals } from "../../src/host.schemas.ts";
-import { sessionSubmit, sessionWake } from "../../src/actions/session.ts";
+import { sessionRespond, sessionStop, sessionSubmit, sessionWake } from "../../src/actions/session.ts";
 import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
 import { activityModel } from "../../src/vm/activity.ts";
 import type { EventBatch } from "../../src/sync/store.ts";
@@ -86,6 +86,7 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   let down = false;
   const keys: string[] = [];
   let hangPosts = false;
+  let stops = 0;
   const fetch: HostFetch = (url, init) => {
     const path = url.replace("http://127.0.0.1:8372", "");
     paths.push(path);
@@ -95,8 +96,17 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
     if (init.method === "POST") {
       keys.push(init.headers["Idempotency-Key"] ?? "");
       if (hangPosts) return new Promise(() => {});
-      status = 202;
-      reply = body("submit-session", "accepted");
+      if (path.endsWith("/respond")) {
+        status = 202;
+        reply = body("respond-session", "accepted");
+      } else if (path.endsWith("/stop")) {
+        // The first stop gets a server error that may have landed; the retry is answered.
+        status = stops++ === 0 ? 503 : 200;
+        reply = status === 503 ? { title: "Service Unavailable", status: 503, detail: "write_unconfirmed: not confirmed" } : { status: "ok", id: "sc-20" };
+      } else {
+        status = 202;
+        reply = body("submit-session", "accepted");
+      }
     } else if (path.includes("/request/")) reply = body("get-request-outcome", "session-submit");
     else if (path.includes("/events")) {
       const limit = Number(/limit=(\d+)/.exec(path)?.[1] ?? "50");
@@ -114,7 +124,7 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
       reply = { ...(body("get-v0-city-by-city-name-bead-by-id", "ok") as object), id, ...closed };
     }
     const text = JSON.stringify(reply);
-    return Promise.resolve({ status, ok: true, url, text: () => Promise.resolve(text) });
+    return Promise.resolve({ status, ok: status >= 200 && status < 300, url, text: () => Promise.resolve(text) });
   };
   const registry = new SyncRegistry({ fetch, clock: { now: () => now }, random: () => 0.5 });
   registry.setOnScreen(true);
@@ -146,9 +156,16 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   down = false;
   const releaseBead = b.value.watchBead("sc-74");
   await advance(40_000);
-  // An action: a 202 followed to its outcome, then one left in flight when its copy goes.
+  // Actions: a 202 followed to its outcome; an answer to a prompt; a server
+  // error (unknown) retried with the same key once the state was refetched;
+  // then one left in flight when its copy goes.
   b.value.act(sessionSubmit("sc-20", "close fe-1", "default"));
   await advance(3000);
+  b.value.act(sessionRespond("sc-20", "perm-1", "approve"));
+  const stop = b.value.act(sessionStop("sc-20"));
+  await advance(6000);
+  const retried = b.value.retryAction(stop);
+  await advance(500);
   hangPosts = true;
   const c = registry.subscribe({ apiUrl: "http://127.0.0.1:8372", city: "scratch" });
   if (!c.ok) return { error: "subscribe" };
@@ -156,6 +173,7 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   await advance(250);
   c.value.unsubscribe();
   const actions = b.value.activity().entries.map((e) => ({ kind: e.spec.kind, state: e.state.kind, attempt: e.attempt }));
+  const retryOk = retried.ok;
   const activity = activityModel(b.value.activity(), b.value.snapshot(), now).rows.map((r) => [r.title, r.tone, r.detail]);
   const s = b.value.snapshot();
   const agents = agentsModel({ snapshot: s, now, selected: "sc-20", collapsed: new Set() });
@@ -187,6 +205,8 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
     stores: registry.storeCount(),
     actions,
     activity,
+    retryOk,
+    sameKeyRetry: keys.length >= 4 && keys[2] === keys[3],
     keyShapes: keys.map((k) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(k)),
   };
 }

@@ -21,6 +21,8 @@ type Gc = {
   outcome?: () => FakeReply;
   /** A session's pending prompt; default none. */
   pending?: unknown;
+  /** The city's pending list; default the recorded one. */
+  cityPending?: unknown;
 };
 
 /** gc at the default URL serving the recorded fixtures, with mutations and outcomes as `g` says (mutable). */
@@ -40,7 +42,7 @@ function gcRoute(g: Gc) {
     }
     if (/\/session\/[^/]+\/pending$/.test(p)) return { status: 200, body: g.pending ?? fixtureBody("get-v0-city-by-city-name-session-by-id-pending", "none") };
     if (/\/session\/[^/]+$/.test(p)) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-session-by-id", "peek") };
-    if (p.endsWith("/pending")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-pending", "ok") };
+    if (p.endsWith("/pending")) return { status: 200, body: g.cityPending ?? fixtureBody("get-v0-city-by-city-name-pending", "ok") };
     if (p.endsWith("/rigs")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-rigs", "ok") };
     if (p.endsWith("/agents")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-agents", "ok") };
     if (p.endsWith("/work/ready")) {
@@ -202,6 +204,24 @@ describe("session actions in the detail pane", () => {
     await mod.tick();
     expect(activityText(mod)).toContain("select:always · session sc-6 → done: gc: accepted");
   });
+
+  test("an answer button sends the prompt and option it was drawn with, even if gc's prompt changed since", async () => {
+    const g: Gc = {
+      pending: { supported: true, pending: { request_id: "perm-A", kind: "permission", prompt: "Delete?", options: ["approve", "deny"] } },
+      post: () => ({ status: 202, body: fixtureBody("respond-session", "accepted") }),
+    };
+    const mod = await running(g);
+    await openDetail(mod);
+    const drawn = findById(mod.render(), "gascity-answer-1")!;
+    g.pending = { supported: true, pending: { request_id: "perm-B", kind: "permission", prompt: "Push?", options: ["deny", "approve"] } };
+    g.cityPending = { items: [{ session_id: "sc-6", request_id: "perm-B", kind: "permission" }], total: 1 };
+    for (let i = 0; i < 24; i++) await mod.tick();
+    drawn.handlers.on_click!({}, mod.cx);
+    expect(posts(mod, "/respond")).toEqual([]);
+    expect(text(mod.render(), "gascity-notice")).toBe("the prompt changed: review it before answering");
+    mod.click("gascity-answer-1");
+    expect(posts(mod, "/respond").map((p) => JSON.parse(p.body ?? "{}"))).toEqual([{ action: "approve", request_id: "perm-B" }]);
+  });
 });
 
 describe("agent and rig actions", () => {
@@ -246,7 +266,7 @@ describe("unknown outcomes and the copy that closes", () => {
     const id = /gascity-activity-(\d+)-retry/.exec(JSON.stringify(rows))?.[1];
     expect(text(mod.render(), `gascity-activity-${id}-retry`)).toBe("[Retry: refreshing sessions before a retry]");
     for (let i = 0; i < 4; i++) await mod.tick(1000);
-    expect(text(mod.render(), `gascity-activity-${id}-retry`)).toBe("[Retry (gc deduplicates it)]");
+    expect(text(mod.render(), `gascity-activity-${id}-retry`)).toBe("[Retry (same key: gc deduplicates it within 30 min, not across a gc restart)]");
     expect(posts(mod, "/wake")).toHaveLength(1);
     g.post = () => ({ status: 200, body: { status: "ok", id: "sc-6" } });
     mod.click(`gascity-activity-${id}-retry`);

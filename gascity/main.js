@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:3e636e57da44cac10b5eb61da8ebbe32e5078c4611fd4ef65fdc931bea4b0f3c over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:66440fa3281df65845f02714ca546a40a1e906145aa8b6c5a496f0669530e1dc over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2110,6 +2110,16 @@ function outcomeFailure(outcome) {
   if (!payload.ok) return payload.error;
   return { kind: "outcome-failed", requestId: outcome.request_id, operation: outcome.operation, payload: payload.value };
 }
+var CODE_IDEMPOTENCY_IN_FLIGHT = "idempotency-in-flight";
+function uncertainMutationAnswer(operationId, status2, error) {
+  const detail = error.kind === "http" ? error.problem?.detail ?? error.problem?.title ?? error.raw ?? "" : "";
+  const issue2 = detail === "" ? `gc answered ${status2}` : `gc answered ${status2}: ${detail}`;
+  if (status2 === 409 && error.kind === "http" && error.problem?.code === CODE_IDEMPOTENCY_IN_FLIGHT) {
+    return { kind: "outcome-unknown", requestId: null, operationId, cause: "idempotency-in-flight", issues: [issue2] };
+  }
+  if (status2 >= 500 && status2 !== 501) return { kind: "outcome-unknown", requestId: null, operationId, cause: "server-error", issues: [issue2] };
+  return null;
+}
 
 // src/gc/operations.gen.ts
 var OPERATIONS = {
@@ -2566,7 +2576,10 @@ async function call(baseUrl, fetch2, now, op, args) {
     }
     return err({ kind: "not-loopback", url: finalUrl });
   }
-  if (status2 < 200 || status2 > 299) return err(httpError(op, status2, text));
+  if (status2 < 200 || status2 > 299) {
+    const e = httpError(op, status2, text);
+    return err((mutation ? uncertainMutationAnswer(op, status2, e) : null) ?? e);
+  }
   let decoded;
   try {
     const json = JSON.parse(text);
@@ -3243,6 +3256,79 @@ function targetText(t) {
   return t.kind === "session" ? `session ${t.id}` : `${t.kind} ${t.name}`;
 }
 
+// src/vm/sanitize.ts
+var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
+var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+function cleanText(text) {
+  return text.replace(/\r\n?/g, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
+}
+function cleanLine(text) {
+  return cleanText(text).replace(/[\n\t]+/g, " ");
+}
+
+// src/vm/errorText.ts
+var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
+function seconds(ms) {
+  return `${Math.round(ms / 1e3)} s`;
+}
+function drift(value) {
+  return isUnrecognized(value) ? value.raw : String(value);
+}
+function errorText(e) {
+  return cleanLine(rawText2(e));
+}
+function rawText2(e) {
+  switch (e.kind) {
+    case "unreachable":
+      return `cannot reach ${e.url}: ${e.cause}`;
+    case "timeout":
+      return `no answer from ${e.url} within ${seconds(e.ms)}`;
+    case "too-large":
+      return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
+    case "http": {
+      const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
+      return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
+    }
+    case "csrf-rejected":
+      return "gc refused a change without X-GC-Request (a bug in the mod)";
+    case "read-only":
+      return `gc serves this API read-only (${e.detail})`;
+    case "write-grant-required":
+      return `this city requires a signed write grant (${e.detail})`;
+    case "read-grant-required":
+      return `this city requires a signed read grant (${e.detail})`;
+    case "city-not-running":
+      return `city "${e.city}" is not running`;
+    case "api-missing":
+      return `gc too old (needs ${e.operationId})${e.raw === void 0 ? "" : `: ${e.raw}`}`;
+    case "decode":
+      return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
+    case "outcome-failed":
+      return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
+    case "outcome-unknown": {
+      const why = e.requestId === null ? e.cause : `${e.cause}, request ${e.requestId}`;
+      const issues = e.issues && e.issues.length > 0 ? `: ${e.issues.join("; ")}` : "";
+      return `outcome of ${e.operationId} unknown (${why})${issues}`;
+    }
+    case "exec":
+      return e.code === null ? `${e.argv.join(" ")} did not run: ${e.stderr}` : `${e.argv.join(" ")} exited with code ${e.code}: ${e.stderr}`;
+    case "host-incompatible":
+      return `this herdr-app lacks ${e.missing.join(", ")}`;
+    case "host-decode":
+      return `unreadable ${e.api}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
+    case "host-call":
+      return `${e.api} failed: ${e.cause}`;
+    case "supervisor-config":
+      return `${e.path} line ${e.line}: ${e.issue}`;
+    case "attach-not-started":
+      return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
+    case "not-loopback":
+      return LOOPBACK_ONLY;
+    case "cancelled":
+      return e.reason === "copy-closed" ? `request to ${e.url} was cancelled: the Gas City view that started it closed` : `request to ${e.url} was dropped before it was sent: nothing waits for its answer any more`;
+  }
+}
+
 // src/sync/backoff.ts
 var BACKOFF_BASE_MS = 1e3;
 var BACKOFF_CAP_MS = 6e4;
@@ -3425,10 +3511,10 @@ function retryGate(entry, snapshot) {
   const s = entry.state;
   if (isPending(s)) return { allowed: false, reason: "the action is still under way" };
   if (s.kind === "done") return { allowed: false, reason: "the action is done" };
-  if (s.kind === "failed") return { allowed: true };
+  if (s.kind === "failed" || s.kind === "not-sent") return { allowed: true };
   for (const d of entry.spec.refresh) {
-    const fetchedAt = snapshot[d].fetchedAt;
-    if (fetchedAt === null || fetchedAt < s.at) return { allowed: false, reason: `refreshing ${d} before a retry` };
+    const startedAt = snapshot.fetchStarts[d];
+    if (startedAt === void 0 || startedAt < s.at) return { allowed: false, reason: `refreshing ${d} before a retry` };
   }
   return { allowed: true };
 }
@@ -3529,10 +3615,13 @@ var ActionLedger = class {
     for (const rec of [...this.records]) {
       const s = rec.state;
       if (s.kind === "sending" && now - s.since > SEND_DEADLINE_MS) {
-        this.resolve(rec, { kind: "unknown", at: now, error: unknown2(null, rec.spec.operationId, "timeout", [`no answer within ${Math.round(SEND_DEADLINE_MS / 1e3)} s`]) });
+        const secs = Math.round(SEND_DEADLINE_MS / 1e3);
+        if (this.deps.dropQueued(rec.group) > 0) this.resolve(rec, { kind: "not-sent", at: now, reason: `the fetch queue did not reach it within ${secs} s` });
+        else this.resolve(rec, { kind: "unknown", at: now, error: unknown2(null, rec.spec.operationId, "timeout", [`no answer within ${secs} s`]) });
       } else if (s.kind === "polling" && now - s.acceptedAt >= OUTCOME_POLL_LIMIT_MS) {
         this.resolve(rec, { kind: "unknown", at: now, error: unknown2(s.requestId, rec.spec.operationId, "outcome-poll-expired") });
-      } else if (s.kind === "polling" && rec.owner === owner && !s.inFlight && now >= s.nextAt) {
+      } else if (s.kind === "polling" && (rec.owner === owner || rec.owner === null) && !s.inFlight && now >= s.nextAt) {
+        rec.owner = owner;
         this.poll(rec, s);
       }
     }
@@ -3545,14 +3634,26 @@ var ActionLedger = class {
   ownerGone(owner) {
     const now = this.deps.clock.now();
     for (const rec of this.records) {
-      if (rec.owner !== owner || !isPending(rec.state)) continue;
-      this.deps.dropQueued(rec.group);
-      const requestId = rec.state.kind === "polling" ? rec.state.requestId : null;
-      this.resolve(rec, {
-        kind: "unknown",
-        at: now,
-        error: unknown2(requestId, rec.spec.operationId, "cancelled", ["the Gas City view that started it closed before gc's answer arrived"])
-      });
+      if (rec.owner !== owner) continue;
+      const s = rec.state;
+      if (s.kind === "polling") {
+        this.deps.dropQueued(rec.group);
+        rec.owner = null;
+        rec.group = {};
+        rec.token = ++this.tokens;
+        rec.state = { ...s, inFlight: false, nextAt: now };
+        this.commit();
+      } else if (s.kind === "sending") {
+        if (this.deps.dropQueued(rec.group) > 0) {
+          this.resolve(rec, { kind: "not-sent", at: now, reason: "the Gas City view that started it closed before it was sent" });
+        } else {
+          this.resolve(rec, {
+            kind: "unknown",
+            at: now,
+            error: unknown2(null, rec.spec.operationId, "cancelled", ["the Gas City view that started it closed before gc's answer arrived"])
+          });
+        }
+      }
     }
   }
   /** The store went away: late answers are ignored. */
@@ -3677,90 +3778,12 @@ var ActionLedger = class {
   }
 };
 function describe3(e) {
-  switch (e.kind) {
-    case "http":
-      return `gc answered ${e.status}${e.problem?.detail ? `: ${e.problem.detail}` : ""}`;
-    case "decode":
-      return `unreadable answer: ${e.issues.join("; ")}`;
-    default:
-      return e.kind;
-  }
-}
-
-// src/vm/sanitize.ts
-var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
-var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
-function cleanText(text) {
-  return text.replace(/\r\n?/g, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
-}
-function cleanLine(text) {
-  return cleanText(text).replace(/[\n\t]+/g, " ");
-}
-
-// src/vm/errorText.ts
-var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
-function seconds(ms) {
-  return `${Math.round(ms / 1e3)} s`;
-}
-function drift(value) {
-  return isUnrecognized(value) ? value.raw : String(value);
-}
-function errorText(e) {
-  return cleanLine(rawText2(e));
-}
-function rawText2(e) {
-  switch (e.kind) {
-    case "unreachable":
-      return `cannot reach ${e.url}: ${e.cause}`;
-    case "timeout":
-      return `no answer from ${e.url} within ${seconds(e.ms)}`;
-    case "too-large":
-      return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
-    case "http": {
-      const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
-      return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
-    }
-    case "csrf-rejected":
-      return "gc refused a change without X-GC-Request (a bug in the mod)";
-    case "read-only":
-      return `gc serves this API read-only (${e.detail})`;
-    case "write-grant-required":
-      return `this city requires a signed write grant (${e.detail})`;
-    case "read-grant-required":
-      return `this city requires a signed read grant (${e.detail})`;
-    case "city-not-running":
-      return `city "${e.city}" is not running`;
-    case "api-missing":
-      return `gc too old (needs ${e.operationId})${e.raw === void 0 ? "" : `: ${e.raw}`}`;
-    case "decode":
-      return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
-    case "outcome-failed":
-      return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
-    case "outcome-unknown": {
-      const why = e.requestId === null ? e.cause : `${e.cause}, request ${e.requestId}`;
-      const issues = e.issues && e.issues.length > 0 ? `: ${e.issues.join("; ")}` : "";
-      return `outcome of ${e.operationId} unknown (${why})${issues}`;
-    }
-    case "exec":
-      return e.code === null ? `${e.argv.join(" ")} did not run: ${e.stderr}` : `${e.argv.join(" ")} exited with code ${e.code}: ${e.stderr}`;
-    case "host-incompatible":
-      return `this herdr-app lacks ${e.missing.join(", ")}`;
-    case "host-decode":
-      return `unreadable ${e.api}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
-    case "host-call":
-      return `${e.api} failed: ${e.cause}`;
-    case "supervisor-config":
-      return `${e.path} line ${e.line}: ${e.issue}`;
-    case "attach-not-started":
-      return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
-    case "not-loopback":
-      return LOOPBACK_ONLY;
-    case "cancelled":
-      return e.reason === "copy-closed" ? `request to ${e.url} was cancelled: the Gas City view that started it closed` : `request to ${e.url} was dropped before it was sent: nothing waits for its answer any more`;
-  }
+  return errorText(e);
 }
 
 // src/vm/activity.ts
+var SAME_KEY_RETRY = "Retry (same key: gc deduplicates it within 30 min, not across a gc restart)";
+var MAY_REPEAT_RETRY = "Retry (gc cannot deduplicate this: it may happen twice)";
 var REPEATABLE = /* @__PURE__ */ new Set(["session.submit", "session.interrupt", "session.message"]);
 function busyKey(spec2) {
   return `${spec2.kind}|${targetKey(spec2.target)}`;
@@ -3807,7 +3830,7 @@ function row(e, city, now) {
     }
     case "unknown": {
       const gate = city ? retryGate(e, city) : { allowed: false, reason: "no city data" };
-      const twice = e.spec.idempotent ? "Retry (gc deduplicates it)" : "Retry (gc cannot deduplicate this: it may happen twice)";
+      const twice = e.spec.idempotent ? SAME_KEY_RETRY : MAY_REPEAT_RETRY;
       return {
         ...base,
         tone: "unknown",
@@ -3817,6 +3840,8 @@ function row(e, city, now) {
         retry: gate.allowed ? { kind: "retry", label: twice } : { kind: "wait", reason: gate.reason }
       };
     }
+    case "not-sent":
+      return { ...base, tone: "not-sent", detail: cleanLine(`not sent: ${s.reason}`), requestId: null, retry: { kind: "retry", label: "Retry" } };
   }
 }
 function activityModel(activity, city, now) {
@@ -4032,6 +4057,7 @@ var CityStore = class {
     resyncs: 0
   };
   errors = [];
+  fetchStarts = {};
   last = { events: null, sessions: null, peek: null, sweep: null };
   onScreen;
   step = null;
@@ -4454,6 +4480,7 @@ var CityStore = class {
     return { ok: true, value: out };
   }
   async fetchDomain(step2, d, priority) {
+    const startedAt = this.deps.clock.now();
     const r = await this.load(step2, d, priority);
     if (!this.current(step2)) return;
     this.progress(step2);
@@ -4461,6 +4488,7 @@ var CityStore = class {
     if (this.settle(r, d) && r.ok) {
       slot.value = r.value;
       slot.fetchedAt = this.deps.clock.now();
+      this.fetchStarts[d] = startedAt;
       slot.error = null;
       slot.held = false;
       this.due.delete(d);
@@ -4703,7 +4731,8 @@ var CityStore = class {
       peeks: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
       beads: new Map([...this.lookups].map(([id, b]) => [id, this.slotOf(b, b.due)])),
-      errors: this.errors
+      errors: this.errors,
+      fetchStarts: { ...this.fetchStarts }
     };
   }
   commit() {
@@ -5646,17 +5675,25 @@ var CopyController = class {
     const spec2 = mode === "message" ? sessionMessage(id, text) : sessionSubmit(id, text, mode);
     return this.send(spec2);
   }
-  /** Answers the open session's pending prompt with gc's `index`-th option. */
-  answer(index) {
+  /**
+   * Answers the open session's pending prompt `requestId` with `option`, both
+   * exactly as the button showing them was drawn. If gc's current prompt is a
+   * different one (or no longer lists that option), nothing is sent: the
+   * person must see the prompt they answer.
+   */
+  answer(requestId, option) {
     const s = this.city?.snapshot();
     const id = this.selectedRef();
     const d = s && id !== null ? s.details.get(id)?.pending.value?.pending : void 0;
-    const option = d?.options[index];
-    if (!d || id === null || option === void 0) {
+    if (!d || id === null) {
       this.refuse("that prompt is no longer pending");
       return;
     }
-    this.send(sessionRespond(id, d.request_id, option));
+    if (d.request_id !== requestId || !d.options.includes(option)) {
+      this.refuse("the prompt changed: review it before answering");
+      return;
+    }
+    this.send(sessionRespond(id, requestId, option));
   }
   /** Opens the new-session form for an agent (gc's qualified name). */
   openNewSession(agent) {
@@ -6317,9 +6354,9 @@ var Endpoint = class _Endpoint {
     const made = createGcClient(options);
     return made.ok ? made.value : { baseUrl: this.baseUrl, call: () => Promise.resolve(made) };
   }
-  /** Drops the group's queued requests (they reject as cancelled and are never sent). Starts nothing. */
+  /** Drops the group's queued requests (they reject as cancelled and are never sent). Starts nothing. Returns how many. */
   dropQueued(group) {
-    this.budget.dropQueued(group);
+    return this.budget.dropQueued(group);
   }
   addListener(l) {
     this.listeners.add(l);
@@ -6791,7 +6828,13 @@ function renderDialog(d, theme2, actions, alias) {
 function renderNotice(notice) {
   return notice === null ? null : label("gascity-notice", notice);
 }
-var TONES = { pending: "pending", done: "done", failed: "failed", unknown: "outcome unknown" };
+var TONES = {
+  pending: "pending",
+  done: "done",
+  failed: "failed",
+  unknown: "outcome unknown",
+  "not-sent": "not sent"
+};
 function activityRow(r, theme2, actions) {
   const id = `gascity-activity-${r.id}`;
   const attempt = r.attempt > 1 ? ` (attempt ${r.attempt})` : "";
@@ -6961,7 +7004,8 @@ function actionBar(id, ctx, theme2, actions) {
 }
 function answers(p, actions) {
   if (p.kind !== "prompt" || p.options.length === 0) return null;
-  return h_flex4().id("gascity-detail-answers").gap(8).children(p.options.map((o, i) => button(`gascity-answer-${i}`, o, (cx) => actions.answer(i, cx))));
+  const { requestId, options } = p.answer;
+  return h_flex4().id("gascity-detail-answers").gap(8).children(options.map((raw, i) => button(`gascity-answer-${i}`, p.options[i] ?? "", (cx) => actions.answer(requestId, raw, cx))));
 }
 function sendBox(canInterrupt, ctx, actions) {
   let row2 = h_flex4().id("gascity-send").gap(8);
@@ -7160,8 +7204,8 @@ function actionsFor(copy, inputs) {
       if (inputs !== null && copy.sendInput(inputs.message.value(), mode)) inputs.message.set_value("");
       cx.notify();
     },
-    answer: (index, cx) => {
-      copy.answer(index);
+    answer: (requestId, option, cx) => {
+      copy.answer(requestId, option);
       cx.notify();
     },
     openNewSession: (agent, cx) => {

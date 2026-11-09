@@ -60,8 +60,14 @@ come next.
   (`const F = f.constructor`), passed on (`Reflect.apply(f.constructor, …)`,
   `.call`, `.bind`), destructured (`const { constructor: F } = f`) or read by
   key (`Reflect.get(f, "constructor")`); only `.constructor.name`,
-  `.constructor.prototype` and `===`/`!==` comparisons are allowed. A key
-  computed at run time is beyond a syntax check, so review still matters.
+  `.constructor.prototype` and `===`/`!==` comparisons are allowed.
+  **Known limit:** the lint reads syntax, so a key computed at run time gets
+  past it (`const k = "constructor"; f[k](…)`, `globalThis["Func" + "tion"]`,
+  scanning property descriptors, `Reflect.get` with a variable key). These are
+  left to review and to the runtime check: the engine-parity probe runs the
+  client, the sync engine and the action paths in QuickJS with `Function`,
+  `eval` and every function prototype's `constructor` replaced by traps, and
+  fails if any trap is hit.
   zod is imported only through `src/gc/zod.ts`, which must call
   `z.config({ jitless: true })`.
 - **The bundle is the source.** `gascity/main.js` is unminified and must equal
@@ -350,7 +356,9 @@ and never ends or types into a terminal itself.
   Kill… (with Force kill), a send box (Send, Interrupt and send when gc says
   the session supports it, Send as message), and one answer button per option
   gc lists for a pending prompt (gc's own words, sent back exactly as gc
-  listed them). Each agent row: New session… (an optional alias) and Suspend
+  listed them). Each answer button carries the prompt's request id and the
+  option it was drawn with; if gc's prompt has changed by the click, nothing
+  is sent and the panel asks to review it. Each agent row: New session… (an optional alias) and Suspend
   agent… / Resume agent (rig-scoped agents use gc's own route). Each rig gc
   lists: Suspend rig… / Resume rig. Actions marked `…` ask first: close,
   kill, agent suspend and rig suspend say what gc will do and send nothing
@@ -360,27 +368,35 @@ and never ends or types into a terminal itself.
   session create, submit, messages, respond, wake, suspend, stop, close and
   kill. gc declares none on pin/unpin and agent/rig actions.
 - **Outcomes.** Each action shows in the activity log as pending, then done,
-  failed or outcome unknown, with gc's answer or reason and its request id.
+  failed, outcome unknown or not sent, with gc's answer or reason and its request id.
   A 202 (session create, submit, messages) is followed through gc's request
   outcome endpoint (`after_seq` = the 202's `event_cursor`) at 0.5 s, 1 s,
   2 s, then every 2 s; with no outcome after 120 s it is unknown. Submit and
   message outcomes say whether gc delivered or queued the input; a created
   session is named.
 - **Never retried automatically.** A mutation whose connection was lost,
-  whose 2xx answer could not be read, or that was redirected is outcome
-  unknown, not failed: the mod refetches what it changes and offers Retry only
-  once that refetch has arrived, so the person sees the current state first.
-  A retry after an unknown outcome reuses the action's Idempotency-Key, so gc
-  deduplicates it where gc declares the header; elsewhere the button says it
-  may happen twice. A retry after gc refused uses a new key. A destructive
-  action asks again on retry. An action already under way is not sent twice.
+  whose 2xx answer could not be read, that was redirected, that gc answered
+  with a server error (any 5xx but 501, e.g. 503 `write_unconfirmed`, which
+  may have landed) or with 409 `idempotency-in-flight` (the same key is still
+  running) is outcome unknown, not failed: the mod refetches what it changes
+  and offers Retry only once a refetch that started after the outcome became
+  unknown has arrived, so the person sees the current state first. A retry
+  after an unknown outcome reuses the action's Idempotency-Key. gc keeps keys
+  in memory for 30 minutes and forgets them on restart, so the button
+  promises deduplication only within that; where gc declares no key the
+  button says the action may happen twice. Only a definite refusal (a 4xx, or
+  501) is failed, and its retry uses a new key. A destructive action asks
+  again on retry. An action already under way is not sent twice.
 - **herdr ownership.** An action is sent in the turn of the copy whose
   button was clicked, and its outcome is polled from that copy's own timer.
-  If that copy closes first, the action becomes outcome unknown at once in
-  every other copy of the city (the activity log is the city's): a request
-  still queued in the fetch budget is dropped and never sent, a late answer is
-  ignored, and nothing is resent. Every step has a deadline, so an action
-  never hangs as pending.
+  The activity log is the city's, shared by every copy. If that copy closes
+  first: a request still queued in the fetch budget is dropped and shown as
+  not sent; one in flight is outcome unknown at once (its late answer is
+  ignored, nothing is resent); an accepted request's outcome is a read gc
+  serves by request id, so a surviving copy's timer takes over polling it.
+  Every step has a deadline, so an action never hangs as pending: a request
+  still queued 70 s after it was asked for is dropped and shown as not sent,
+  so it can never go out after being reported.
 
 ## Develop
 

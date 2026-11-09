@@ -78,8 +78,10 @@ export function snapshot(parts: {
   errors?: CitySnapshot["errors"];
   connection?: CitySnapshot["connection"];
   polledAt?: number | null;
+  /** When each domain's last good fetch started; by default when it was fetched. */
+  fetchStarts?: CitySnapshot["fetchStarts"];
 } = {}): CitySnapshot {
-  return {
+  const s: Omit<CitySnapshot, "fetchStarts"> = {
     rev: 1,
     key: { apiUrl: "http://127.0.0.1:8372", city: "scratch" },
     onScreen: parts.onScreen ?? true,
@@ -97,4 +99,10 @@ export function snapshot(parts: {
     beads: parts.beads ?? new Map(),
     errors: parts.errors ?? [],
   };
+  const starts: Record<string, number> = {};
+  for (const d of ["rigs", "agents", "sessions", "pending", "ready", "inProgress"] as const) {
+    const at = s[d].fetchedAt;
+    if (at !== null) starts[d] = at;
+  }
+  return { ...s, fetchStarts: parts.fetchStarts ?? starts };
 }
