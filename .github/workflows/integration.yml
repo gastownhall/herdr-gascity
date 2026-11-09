@@ -1,0 +1,105 @@
+name: Integration
+
+# The built mod (gascity/main.js) against a real scratch gc city on Linux, no
+# GPU and no herdr-app: test/integration/scenario.integration.ts. gc is built
+# from the gastownhall/gascity commit in api/PIN, the API the mod's types and
+# contract fixtures come from. The scratch city, its supervisor and every
+# terminal run under the runner's temp directory with their own HOME,
+# GC_HOME, XDG dirs and tmux socket.
+#
+# Separate from CI's unit job (`bun run ci`): it needs gc, tmux and a few
+# minutes. It runs on every push and pull request that touches the mod, the
+# harness or the pin.
+
+on:
+  push:
+    paths: &paths
+      - "src/**"
+      - "gascity/**"
+      - "canary/**"
+      - "test/integration/**"
+      - "test/harness.ts"
+      - "api/PIN"
+      - "package.json"
+      - "bun.lock"
+      - ".bun-version"
+      - ".github/workflows/integration.yml"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scratch-city:
+    name: Mod vs a scratch gc city (gc at api/PIN)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Read the gc commit the API is pinned to
+        id: pin
+        run: |
+          commit=$(sed -n 's/^commit=\([0-9a-f]\{40\}\)$/\1/p' api/PIN)
+          if [[ ! $commit =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error file=api/PIN::no commit=<40 hex digits> line"
+            exit 1
+          fi
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+      - name: Check out gc at the pin
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: gastownhall/gascity
+          ref: ${{ steps.pin.outputs.commit }}
+          path: gascity-src
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: gascity-src/go.mod
+          cache-dependency-path: gascity-src/go.sum
+
+      - name: Install tmux and ICU headers (gc links ICU)
+        timeout-minutes: 5
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tmux libicu-dev
+
+      - name: Build gc
+        timeout-minutes: 15
+        working-directory: gascity-src
+        env:
+          GC_COMMIT: ${{ steps.pin.outputs.commit }}
+        run: |
+          go build -buildvcs=false -ldflags "-X main.version=dev -X main.commit=${GC_COMMIT:0:10}" -o "$RUNNER_TEMP/gc-bin/gc" ./cmd/gc
+          "$RUNNER_TEMP/gc-bin/gc" version
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Scenario, HC_SCOPE audit and negative cases
+        timeout-minutes: 15
+        env:
+          GC_BIN: ${{ runner.temp }}/gc-bin/gc
+          INTEGRATION_SHELL: /bin/bash
+        run: bun run test:integration
+
+      - name: Upload logs, probes and the report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: integration-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hg-it-*/logs
+          if-no-files-found: warn
+          retention-days: 14

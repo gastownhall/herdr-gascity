@@ -16,7 +16,8 @@ every action's outcome. Every action can also be driven by a command
 (`herdr-app do gascity.<command>`), and a toast tells you when a session
 needs you, opening a "needs you" window on the session. Open terminal shows
 a session's terminal in a herdr tab running `gc session attach`, after
-waking the session through gc's API.
+waking the session through gc's API. An integration test runs the built mod
+against a real scratch gc city, with an `HC_SCOPE` process audit.
 
 ## Layout
 
@@ -44,6 +45,10 @@ waking the session through gc's API.
 | `test/unit/` | Unit and render tests. |
 | `test/contract/` | Responses recorded from a scratch city at the pinned gc (`record.ts`), validated with ajv against the pin and decoded by the client. |
 | `test/engine/` | Engine parity: the client bundled like the mod, run in QuickJS (quickjs-ng, wasm) with `Function`/`eval` trapped, compared with bun. |
+| `test/integration/` | The integration test against a real scratch gc city (see below): `scenario.integration.ts`, the live herdr stand-in `herdr.ts` (constrained fetch, allowlisted exec, recorded `run`), `terminals.ts` (tabs in PTYs under herdr's shell wrapper), `proxy.ts`, `checks.ts`. |
+| `canary/pack/` | The canary pack: one deterministic, LLM-free agent (`assets/canary-agent.sh`) for the integration test and the nightly canary. |
+| `canary/city.ts`, `canary/city.toml.in` | An isolated scratch city (own HOME, GC_HOME, XDG dirs, tmux socket, port; teardown stops only what it started). |
+| `canary/scope-audit.ts`, `canary/proc.ts` | The `HC_SCOPE` process audit over `/proc`. |
 
 ## Rules the build enforces
 
@@ -663,6 +668,72 @@ action; the open window follows each newer target by itself. Commands reach
 the window like any shown copy. Known limit: the authority lint checks a
 toast action's `name`, not its `args`.
 
+## Integration test
+
+`test/integration/scenario.integration.ts` runs the built `gascity/main.js`
+against a real scratch gc city, on Linux, with no GPU and no herdr-app. It
+is its own workflow (`.github/workflows/integration.yml`), not part of
+`bun run ci`: it needs gc, tmux, curl and bash, and takes a few minutes.
+
+```sh
+GC_BIN=/abs/path/to/gc bun run test:integration
+```
+
+- **The gc under test** is built from the gastownhall/gascity commit in
+  `api/PIN`: the API the mod's types, decoders and contract fixtures come
+  from. That commit's `gc session attach` has no `--no-start` and reports
+  version `dev`, so the mod sends no flag and its wake through the API is the
+  only guard, which is the case the audit is for. The nightly canary covers
+  the latest gc release.
+- **The city.** `canary/city.ts` makes everything under one temporary
+  directory: its own HOME, GC_HOME, XDG directories and `TMUX_TMPDIR`, a free
+  loopback port, the file bead store, and the city's own tmux socket (`tmux
+  -L <city>-<run id>`), never the default tmux server. TMUX, HC_* and GC_*
+  variables of the caller are dropped. `gc supervisor run` is the test's own
+  child, never under a herdr terminal. Every process it starts carries
+  `HERDR_GASCITY_RUN=<run id>`; teardown stops the supervisor, kills the
+  city's tmux server by its socket, then signals only processes carrying
+  that marker, and the last test checks none is left.
+- **The agent.** `canary/pack/` has one agent whose sessions run
+  `canary-agent.sh`: it prints `CANARY READY <alias>`, and on the line
+  `close <bead> [<nonce>]` (typed by gc's submit) closes the bead through
+  gc's API with the reason `canary <nonce>` and prints `CANARY DONE`.
+- **herdr, in bun.** `test/integration/herdr.ts` loads the bundle as herdr
+  does (shared module code, two copies of the city's view) with a real
+  `fetch` constrained like herdr's (options `{method, headers, body}`, the
+  same refused headers, 30 s timeout, 8 MiB cap, no response headers, every
+  request metered), `exec` allowlisted to `<gc> supervisor status --json`,
+  and `run` recorded: `tab.new` starts the argv in a PTY under herdr's
+  wrapper (`$SHELL -ic '"$@"; exec "$0" -i' $SHELL <argv>`) with a fresh
+  `HC_SCOPE` token, and `terminals()` reports it with herdr's record shape
+  (the program named from the PTY's foreground process). Commands go only to
+  copies on screen, as `herdr-app do gascity.<command>` does.
+- **The scenario.** Discovery (from `~/.gc/supervisor.toml`) and one shared
+  store for both copies; a session started through the mod, running within
+  90 s; a bead created through the mod and `submit close <bead>` sent to the
+  session, the bead in the closed ring within 60 s; changes shown within 3 s
+  of gc's event; then the session suspended through gc and Open terminal:
+  the mod must wake it through gc's API and see it running before `tab.new`.
+- **The `HC_SCOPE` audit.** With the attach tab's token known, no process
+  outside that terminal's process tree may carry it (`/proc/*/environ`): not
+  the city's tmux server, the agent's pane, the supervisor. It runs for the
+  woken session and for the race path (the recorded attach argv run right
+  after the session was suspended again). Then the terminal's tree is killed
+  and gc must still report the session running.
+- **The checks are shown to bite.** The audit flags a daemon started from a
+  terminal without the `env -u` prefix (and passes with it), and a copy of
+  the bundle patched to skip the wake fails the wake-before-attach check.
+- **Negative cases.** A city gc does not have (the banner names it); a sling
+  gc never answers (a proxy holds it: herdr's 30 s timeout, an unknown
+  outcome, the board refreshed before a retry is offered, never retried);
+  the supervisor dying mid-run (the reconnecting banner, at most one request
+  in flight while it is down, then back); a city that requires signed write
+  grants and an API bound to every interface (reads work; a change fails
+  with gc's reason). Across all of it, never more than 2 requests in flight.
+- **Artifacts.** `logs/` under the run's directory: `report.json` (timings,
+  audits, checks), the probe files, every request and host call, each
+  terminal's output, the supervisor's log.
+
 ## Develop
 
 Needs [bun](https://bun.sh) (version in `.bun-version`).
@@ -675,6 +746,7 @@ bun run typecheck       # src/ against the QuickJS host types; tools against bun
 bun run lint:authority  # or: bun run scripts/authority.ts <file-or-dir>
 bun run check:bundle    # or: bun run scripts/bundle-fresh.ts --bundle <path>
 bun run ci              # all of the above, as CI runs them
+GC_BIN=/abs/gc bun run test:integration   # the integration test (see above)
 bun run gen:gc          # regenerate src/gc/*.gen.ts from api/
 bun run notices         # regenerate gascity/THIRD_PARTY_NOTICES.md
 ```
