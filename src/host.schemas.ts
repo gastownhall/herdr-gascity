@@ -112,3 +112,28 @@ export function decodeSpaces(value: unknown): Result<HostList<HostSpace>, HostDe
 export function decodeFocused(value: unknown): Result<HostFocus | null, HostDecodeError> {
   return hostDecode("focused", FocusSchema, value);
 }
+
+/**
+ * The mod names of a layout()'s blocks (`{content: {mod: "<name>"}}` at any
+ * depth). herdr publishes no schema for layouts, so this reads only that
+ * shape and ignores everything else; it never throws.
+ */
+export function layoutModNames(layout: unknown): string[] {
+  const out = new Set<string>();
+  const seen = new Set<object>();
+  const walk = (v: unknown): void => {
+    if (v === null || typeof v !== "object" || seen.has(v)) return;
+    seen.add(v);
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x);
+      return;
+    }
+    const content = (v as { content?: unknown }).content;
+    if (content !== null && typeof content === "object" && typeof (content as { mod?: unknown }).mod === "string") {
+      out.add((content as { mod: string }).mod);
+    }
+    for (const x of Object.values(v)) walk(x);
+  };
+  walk(layout);
+  return [...out];
+}

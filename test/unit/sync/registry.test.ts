@@ -876,9 +876,10 @@ describe("for actions (mutations come later; their plumbing is here)", () => {
     gc.override = null;
     gc.release(200, fixtureBody("post-v0-city-by-city-name-session-by-id-pin", "ok")); // owned by closed a: never settles
     await host.advance(RECLAIM_AFTER_MS + TICK_MS);
-    expect(await (pinned as unknown as Promise<unknown>)).toMatchObject({ ok: false, error: { kind: "outcome-unknown", cause: "timeout" } });
+    // cancelled with its copy, not a gc timeout: it may have been applied, and nothing backs off for it
+    expect(await (pinned as unknown as Promise<unknown>)).toMatchObject({ ok: false, error: { kind: "outcome-unknown", cause: "cancelled" } });
     expect(gc.count("/pin")).toBe(1);
-    void b;
+    expect(b.sub.snapshot().connection).toEqual({ kind: "connected" });
   });
 
   test("refresh(domains) refetches those domains at the next tick", async () => {

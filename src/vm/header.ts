@@ -1,13 +1,17 @@
 // The header view-model: connection chip, where the gc API URL came from, the
 // copy's city and the other cities' health, notices as banners, the cities
 // an unpinned copy can choose from, and the discovery diagnostics. Pure: it
-// reads only the city machine.
+// reads the city machine and, for a running city, the shared store's
+// connection, needs-you count and data age. Text from gc (city names,
+// statuses, errors) is cleaned of control characters.
 
 import type { CityMachine, CityNotice, CityState } from "../discovery/city.ts";
 import type { Attempt, EndpointSource, NoEndpoint } from "../discovery/resolve.ts";
 import type { GcError } from "../gc/errors.ts";
 import type { CityInfo } from "../gc/types.gen.ts";
+import type { Connection } from "../sync/endpoint.ts";
 import { LOOPBACK_ONLY, errorText } from "./errorText.ts";
+import { cleanLine } from "./sanitize.ts";
 
 /** How each source is named in the header and diagnostics. */
 export const SOURCE_LABELS: Readonly<Record<EndpointSource, string>> = {
@@ -45,10 +49,22 @@ export interface HeaderModel {
   /** Whether "retry now" (rediscover) is offered. */
   canRetry: boolean;
   diagnostics: string[];
+  /** "2 need you" while sessions wait for the person; null otherwise. */
+  needsYou: string | null;
+  /** "data N s old" of the city's agents panel; null without a running city. */
+  age: string | null;
+}
+
+/** What the shared store says about a running city. */
+export interface LiveHeader {
+  connection: Connection;
+  now: number;
+  needsYou: number;
+  age: string | null;
 }
 
 function cityLabel(c: CityInfo): string {
-  return c.running ? "running" : (c.status ?? "stopped");
+  return cleanLine(c.running ? "running" : (c.status ?? "stopped"));
 }
 
 function attemptLine(a: Attempt): string {
@@ -101,18 +117,23 @@ function noticeBanner(n: CityNotice, version: string): string {
   }
 }
 
-/** The chip of a running city: the most limiting notice, else connected. */
-function runningChip(notices: CityNotice[]): HeaderModel["chip"] {
+/** The chip of a running city: backing off, else the most limiting notice, else the store's connection. */
+function runningChip(notices: CityNotice[], live: LiveHeader | null): HeaderModel["chip"] {
+  if (live?.connection.kind === "backing-off") {
+    const s = Math.max(0, Math.ceil((live.connection.retryAt - live.now) / 1000));
+    return { tone: "warn", text: `reconnecting in ${s} s (${errorText(live.connection.cause)})` };
+  }
   if (notices.some((n) => n.kind === "read-grant-required")) return { tone: "error", text: "read grant required" };
   const readOnly = notices.find((n) => n.kind === "read-only");
   if (readOnly) return { tone: "warn", text: "read-only server" };
   const missing = notices.find((n) => n.kind === "api-missing");
   if (missing) return { tone: "warn", text: `gc too old (needs ${missing.operationId})` };
   if (notices.some((n) => n.kind === "write-grant-required")) return { tone: "warn", text: "connected, read-only" };
+  if (live?.connection.kind === "connecting") return { tone: "busy", text: "connecting" };
   return { tone: "ok", text: "connected" };
 }
 
-function chipOf(state: CityState): HeaderModel["chip"] {
+function chipOf(state: CityState, live: LiveHeader | null): HeaderModel["chip"] {
   switch (state.phase) {
     case "discovering":
       return { tone: "busy", text: "looking for gc" };
@@ -135,12 +156,15 @@ function chipOf(state: CityState): HeaderModel["chip"] {
       return { tone: "warn", text: `city stopped (${status})${error}` };
     }
     case "city-running":
-      return runningChip(state.notices);
+      return runningChip(state.notices, live);
   }
 }
 
-/** The header for one copy; `hostErrors` are host calls that failed outside the machine. */
-export function headerModel(m: CityMachine, hostErrors: readonly GcError[] = []): HeaderModel {
+/**
+ * The header for one copy; `hostErrors` are host calls that failed outside
+ * the machine; `live` is the shared store's view of a running city.
+ */
+export function headerModel(m: CityMachine, hostErrors: readonly GcError[] = [], live: LiveHeader | null = null): HeaderModel {
   const { state, copy } = m;
   const endpoint = "endpoint" in state ? state.endpoint : null;
   const cities = "cities" in state ? state.cities : null;
@@ -173,14 +197,19 @@ export function headerModel(m: CityMachine, hostErrors: readonly GcError[] = [])
     ? cities.items.filter((c) => c.name !== cityName).map((c) => ({ name: c.name, label: cityLabel(c) }))
     : null;
 
+  const running = state.phase === "city-running" ? live : null;
+  const chip = chipOf(state, running);
+  const needsYou = running && running.needsYou > 0 ? `${running.needsYou} ${running.needsYou === 1 ? "needs" : "need"} you` : null;
   return {
-    chip: chipOf(state),
-    endpoint: endpoint ? `gc ${endpoint.version} at ${endpoint.url} (from ${SOURCE_LABELS[endpoint.source]})` : null,
-    city: cityName === null ? null : copy.pinned !== null ? `${cityName} (pinned)` : cityName,
-    others: (cities?.items ?? []).filter((c) => c.name !== cityName).map((c) => ({ name: c.name, running: c.running, label: cityLabel(c) })),
-    banners,
+    chip: { tone: chip.tone, text: cleanLine(chip.text) },
+    endpoint: endpoint ? cleanLine(`gc ${endpoint.version} at ${endpoint.url} (from ${SOURCE_LABELS[endpoint.source]})`) : null,
+    city: cityName === null ? null : cleanLine(copy.pinned !== null ? `${cityName} (pinned)` : cityName),
+    others: (cities?.items ?? []).filter((c) => c.name !== cityName).map((c) => ({ name: cleanLine(c.name), running: c.running, label: cityLabel(c) })),
+    banners: banners.map(cleanLine),
     choices,
     canRetry: state.phase !== "discovering" && state.phase !== "listing",
-    diagnostics,
+    diagnostics: diagnostics.map(cleanLine),
+    needsYou,
+    age: running ? running.age : null,
   };
 }

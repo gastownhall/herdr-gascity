@@ -128,7 +128,7 @@ describe("reclaiming slots whose fetch never settles", () => {
     expect(RECLAIM_AFTER_MS).toBeLessThanOrEqual(HERDR_FETCH_TIMEOUT_MS + 10_000);
   });
 
-  test("a slot that never settles is freed after the reclaim age; its caller gets a timeout with the host time", async () => {
+  test("a slot that never settles is freed after the reclaim age; its caller gets a cancellation (not a gc timeout) with the host time", async () => {
     const { clock, gc, budget } = setup();
     const stuck = [0, 1].map((i) => budget.fetchFor(A, "snapshot")(`${A}/stuck${i}`, GET).then(() => "settled", (e: unknown) => e));
     const queued = budget.fetchFor(A, "snapshot")(`${A}/next`, GET);
@@ -143,8 +143,9 @@ describe("reclaiming slots whose fetch never settles", () => {
     await flush();
     const [e0] = await Promise.all(stuck);
     expect(e0).toBeInstanceOf(Error);
-    expect((e0 as Error).message).toContain("timed out");
+    expect((e0 as Error).message).toContain("cancelled");
     expect((e0 as { hostElapsedMs?: number }).hostElapsedMs).toBe(RECLAIM_AFTER_MS);
+    expect((e0 as { cancelled?: string }).cancelled).toBe("copy-closed");
     expect(gc.paths()).toEqual(["/stuck0", "/stuck1", "/next"]);
     expect(budget.stats().inFlight).toBe(1);
     // the original promises settling late (they never do in herdr) must not free a slot twice
@@ -186,5 +187,45 @@ describe("reclaiming slots whose fetch never settles", () => {
     expect((e as Error).message).toContain("connection refused");
     expect((e as { hostElapsedMs?: number }).hostElapsedMs).toBe(100);
     await Promise.allSettled(blockers);
+  });
+});
+
+describe("dropping and forgetting", () => {
+  test("dropQueued rejects only that group's queued requests as abandoned; in-flight ones and other groups are untouched", async () => {
+    const { gc, budget } = setup();
+    const step = {};
+    const other = {};
+    const running = [0, 1].map((i) => budget.fetchFor(A, "snapshot", step)(`${A}/run${i}`, GET));
+    const mine = budget.fetchFor(A, "snapshot", step)(`${A}/mine`, GET).catch((e: unknown) => e);
+    const theirs = budget.fetchFor(A, "snapshot", other)(`${A}/theirs`, GET);
+    await flush();
+    expect(budget.dropQueued(step)).toBe(1);
+    const e = await mine;
+    expect((e as { cancelled?: string }).cancelled).toBe("abandoned");
+    expect((e as { hostElapsedMs?: number }).hostElapsedMs).toBe(0);
+    expect(budget.stats()).toEqual({ inFlight: 2, queued: 1, maxInFlight: 2 });
+    gc.release();
+    await flush();
+    expect(gc.paths()).toEqual(["/run0", "/run1", "/theirs"]);
+    gc.release();
+    gc.release();
+    await Promise.all([...running, theirs]);
+  });
+
+  test("forgetEndpoint leaves degraded mode without starting anything; the next pump does", async () => {
+    const { gc, budget } = setup();
+    budget.setDegraded(A, true);
+    const all = [0, 1].map((i) => budget.fetchFor(A, "snapshot")(`${A}/a${i}`, GET));
+    await flush();
+    expect(gc.inFlight).toBe(1);
+    budget.forgetEndpoint(A);
+    await flush();
+    expect(gc.inFlight).toBe(1);
+    budget.reclaim();
+    await flush();
+    expect(gc.inFlight).toBe(2);
+    gc.release();
+    gc.release();
+    await Promise.all(all);
   });
 });

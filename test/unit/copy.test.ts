@@ -1,0 +1,200 @@
+// One copy of the mod (src/copy.ts) wired to discovery and the shared sync
+// registry, under herdr's ownership rule (sync/fakes.ts FakeHost): each copy
+// discovers in its own init task, ticks from its own periodic timer, renders
+// from the shared snapshot, and on close unsubscribes without starting
+// anything. Surviving copies keep updating.
+
+import { afterEach, describe, expect, test } from "bun:test";
+import { DiscoveryController } from "../../src/discovery/controller.ts";
+import { CopyController, type CopyHost } from "../../src/copy.ts";
+import { ok } from "../../src/result.ts";
+import { ProbeWriter, type ProbeIo } from "../../src/probe.ts";
+import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
+import type { VisibilityInput } from "../../src/sync/visibility.ts";
+import { FakeGc, FakeHost, type Owner } from "./sync/fakes.ts";
+
+const API = "http://127.0.0.1:8372";
+
+interface Opened {
+  owner: Owner;
+  copy: CopyController;
+  notifies: number;
+}
+
+let opened: Opened[] = [];
+
+afterEach(() => {
+  for (const o of opened) o.copy.close();
+  opened = [];
+});
+
+function setup(opts: { visibility?: VisibilityInput; probe?: boolean } = {}) {
+  const host = new FakeHost();
+  const gc = new FakeGc(host);
+  gc.emit({ type: "order.fired", subject: "gate-sweep" });
+  const registry = new SyncRegistry({ fetch: host.wrap(gc.fetch), clock: host, random: () => 0.5 });
+  const files = new Map<string, string>();
+  const io: ProbeIo = {
+    path: () => "/app/data/gascity-probe/probe.json",
+    read: (p) => Promise.resolve(ok(files.get(p) ?? null)),
+    write: (p, text) => {
+      files.set(p, text);
+      return Promise.resolve(ok(null));
+    },
+  };
+  const probe = new ProbeWriter(io);
+  let visibility: VisibilityInput = opts.visibility ?? { windowOpen: false, layoutMods: [], panes: [{ pane: "p1", tab: "t1", mod: "gascity" }], focus: { space: "s", tab: "t1" } };
+  const copyHost: CopyHost = {
+    visibility: () => ok(visibility),
+    probeEnabled: () => opts.probe ?? false,
+    herdrVersion: () => "0.1.14",
+    execLog: () => [],
+  };
+  let n = 0;
+  /** Opens a copy as main.ts does: discovery task and periodic timer, both in the copy's own scope. */
+  const open = async (props: { pinned?: string } = {}): Promise<Opened> => {
+    const owner = `copy-${++n}`;
+    const discovery = new DiscoveryController({
+      settings: () => null,
+      gcStatus: () => Promise.resolve(ok("{}")),
+      readSupervisorConfig: () => Promise.resolve(ok({ path: "/h/.gc/supervisor.toml", text: null })),
+      fetch: registry.probeFetch().fetch,
+      probeFetch: () => registry.probeFetch(),
+      rememberCity: () => ok(null),
+    }, { pinned: props.pinned ?? null, lastSelection: null });
+    const copy = new CopyController({ registry, discovery, host: copyHost, clock: host, probe });
+    const o: Opened = { owner, copy, notifies: 0 };
+    await host.run(owner, () => {
+      void copy.discover({ notify: () => o.notifies++, sleep: (ms) => host.sleep(ms) });
+      host.every(TICK_MS, () => {
+        if (copy.tick()) o.notifies++;
+      });
+    });
+    await host.runTurns();
+    opened.push(o);
+    return o;
+  };
+  const close = (o: Opened) => host.close(o.owner, () => o.copy.close());
+  return { host, gc, registry, open, close, files, setVisibility: (v: VisibilityInput) => { visibility = v; } };
+}
+
+describe("a copy", () => {
+  test("discovers, subscribes to its running city from its own tick, and renders agents from the shared snapshot", async () => {
+    const { host, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    const v = a.copy.view(host.now());
+    expect(v.header.chip).toEqual({ tone: "ok", text: "connected" });
+    expect(v.header.city).toBe("scratch");
+    expect(v.agents?.groups.map((g) => g.key)).toEqual(["rig:frontend", "city"]);
+    expect(v.agents?.region.kind).toBe("ok");
+    expect(a.notifies).toBeGreaterThan(0);
+  });
+
+  test("two copies of one city share one store; closing one starts nothing, and the other keeps updating", async () => {
+    const { host, gc, registry, open, close } = setup();
+    const a = await open();
+    const b = await open();
+    await host.advance(3000);
+    expect(registry.storeCount()).toBe(1);
+    const starts = host.starts.length;
+    await close(a);
+    expect(host.starts.slice(starts)).toEqual([]);
+    const before = b.notifies;
+    const seen = gc.seen.length;
+    gc.emit({ type: "session.woke", subject: "sc-20" });
+    await host.advance(5000);
+    expect(gc.count("/sessions", seen)).toBeGreaterThan(0);
+    expect(host.starts.slice(starts).every((s) => s.owner !== a.owner)).toBe(true);
+    expect(b.notifies).toBeGreaterThan(before);
+    expect(b.copy.view(host.now()).header.chip.text).toBe("connected");
+  });
+
+  test("the last copy's close drops the store and the city list poll; nothing polls afterwards", async () => {
+    const { host, gc, registry, open, close } = setup();
+    const a = await open();
+    await host.advance(3000);
+    await close(a);
+    expect(registry.storeCount()).toBe(0);
+    const seen = gc.seen.length;
+    await host.advance(120_000);
+    expect(gc.seen.length).toBe(seen);
+  });
+
+  test("selecting a session watches its detail (output, wake reasons, pending prompt); deselecting releases it", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    a.copy.selectSession("sc-20");
+    await host.advance(3000);
+    expect(gc.count("/session/sc-20")).toBeGreaterThan(0);
+    expect(gc.count("/session/sc-20/pending")).toBe(1);
+    expect(gc.paths().filter((p) => p.includes("wake_reasons=true")).length).toBe(1);
+    const detail = a.copy.view(host.now()).detail;
+    expect(detail.kind).toBe("session");
+    a.copy.selectSession(null);
+    await host.advance(TICK_MS);
+    const seen = gc.seen.length;
+    await host.advance(10_000);
+    expect(gc.count("/session/sc-20", seen)).toBe(0);
+  });
+
+  test("a city call answering 'not running' moves the copy to city stopped and ends its subscription", async () => {
+    const { host, gc, registry, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    gc.override = (req) => (req.path.startsWith("/v0/city/scratch/")
+      ? { status: 404, body: { title: "Not Found", status: 404, detail: "not_found: city not found or not running: scratch" } }
+      : undefined);
+    await host.advance(6000);
+    expect(a.copy.view(host.now()).header.chip.text).toBe("city stopped (gc answered: not running)");
+    expect(registry.storeCount()).toBe(0);
+  });
+
+  test("the copy tells the registry whether a gascity view may be on screen", async () => {
+    const { host, gc, open, setVisibility } = setup();
+    await open();
+    await host.advance(3000);
+    setVisibility({ windowOpen: false, layoutMods: [], panes: [{ pane: "p1", tab: "t1", mod: "gascity" }], focus: { space: "s", tab: "t2" } });
+    const seen = gc.seen.length;
+    await host.advance(20_000);
+    // hidden: an event poll every 10 s instead of every 2 s
+    expect(gc.count("/events", seen)).toBe(2);
+  });
+
+  test("with the probe on, the probe file is written from the copy's tick", async () => {
+    const { host, open, files } = setup({ probe: true });
+    await open();
+    await host.advance(3000);
+    const doc = JSON.parse(files.get("/app/data/gascity-probe/probe.json") ?? "{}");
+    expect(doc).toMatchObject({ schema: "gascity-herdr-probe/2", connection: { text: "connected" }, city: "scratch", visibility: { on_screen: true } });
+    expect(doc.sessions.length).toBe(3);
+    expect(doc.fetch_in_flight_max).toBeLessThanOrEqual(2);
+  });
+
+  test("retry now with a running city refetches everything and the city list, keeping what is shown; it does not rediscover", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(6000);
+    const seen = gc.seen.length;
+    await host.run(a.owner, () => a.copy.retry({ notify: () => {}, sleep: (ms) => host.sleep(ms) }));
+    expect(a.copy.view(host.now()).agents?.groups.length).toBe(2);
+    await host.advance(1000);
+    expect(gc.count("/health", seen)).toBe(0);
+    expect(gc.count("/v0/cities", seen)).toBe(1);
+    for (const d of ["/rigs", "/agents", "/sessions", "/pending"]) expect(gc.count(d, seen)).toBe(1);
+    expect(a.copy.view(host.now()).refreshCount).toBe(1);
+  });
+
+  test("retry now without a running city rediscovers", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => (req.path === "/health" ? { reject: "error sending request: connection refused" } : undefined);
+    const a = await open();
+    await host.advance(1000);
+    expect(a.copy.view(host.now()).header.chip.text).toMatch(/^gc not reachable/);
+    gc.override = null;
+    await host.run(a.owner, () => a.copy.retry({ notify: () => {}, sleep: (ms) => host.sleep(ms) }));
+    await host.advance(3000);
+    expect(a.copy.view(host.now()).header.chip.text).toBe("connected");
+  });
+});

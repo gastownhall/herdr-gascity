@@ -2,18 +2,19 @@
 
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
-**Status: scaffold, gc client, discovery, sync engine.** The mod finds the gc
-API, lists the cities and shows the copy's city with its connection state in
-the header. The sync engine (`src/sync/`) is built and tested but not wired
-into the panel yet; the agents and work panels come next.
+**Status: scaffold, gc client, discovery, sync engine, agents panel.** The
+mod finds the gc API, lists the cities, and shows the copy's city: its
+connection state, and its rigs, agents and sessions with live status, pending
+prompts and active beads, plus a detail pane for one session. It only reads;
+actions (answer, send, wake, open a terminal) and the work board come next.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `src/` | TypeScript source of the mod. `main.ts` is the `View`; `host.ts` is the only module that touches herdr-app's host APIs; `host.schemas.ts` decodes the host data the mod reads; `view/` draws from a model and does no I/O. |
+| `src/` | TypeScript source of the mod. `main.ts` is the `View`; `copy.ts` wires one copy to discovery and the shared sync registry; `host.ts` is the only module that touches herdr-app's host APIs; `host.schemas.ts` decodes the host data the mod reads; `probe.ts` writes the probe file; `view/` draws from a model and does no I/O. |
 | `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
-| `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `errorText.ts`. |
+| `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
 | `src/sync/` | The sync engine: one shared store per gc city per app, its poll loop, the event watcher, the fetch budget, backoff, visibility and staleness (see below). |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
@@ -172,9 +173,15 @@ promise never settles. The engine is built around that rule:
   step only when one is due, so every step starts in a live copy's own turn.
   The engine itself owns no timer and never sleeps.
 - **Closing a copy starts nothing.** `unsubscribe()` only abandons a step that
-  copy started. The old step's late answers are dropped, and the next tick of
-  any other copy starts a fresh step. A step that makes no progress for
-  140 s is abandoned the same way and recorded.
+  copy started: its queued requests are dropped from the fetch budget (never
+  sent), its late answers are ignored, and the next tick of any other copy
+  starts a fresh step. Releasing the last store on an endpoint leaves the
+  budget's degraded mode without starting anything. A step that makes no
+  progress for 140 s is abandoned the same way and recorded.
+- **The city list** (`cities.ts`): one `GET /v0/cities` poll per gc API per
+  app, every 10 s while no copy shows a running city and every 60 s once one
+  does, and at the next tick after a `city.*` event. It is driven by the
+  copies' ticks like a city store.
 - **Change signal = a short event poll.** `GET …/events?limit=50` without
   `index` returns at once. herdr's fetch hides response headers, so the
   cursor comes from the body: the newest `seq` the page shows. gc reads
@@ -207,9 +214,14 @@ promise never settles. The engine is built around that rule:
   per app, across all copies, cities and endpoints. While an endpoint is
   backing off, at most 1 request to it is in flight. Queued requests start in
   this order: mutation > events > snapshot > peek > sweep. A slot older than
-  herdr's 30 s fetch timeout plus 5 s belongs to a cancelled fetch: it is
-  reclaimed, and its caller gets a timeout (a read backs off, a mutation is
-  outcome-unknown). Time spent queued never counts as a timeout.
+  herdr's 30 s fetch timeout plus 5 s belongs to a fetch herdr cancelled with
+  the copy that started it: it is reclaimed, and its caller gets a
+  `cancelled` error, not a gc timeout. A cancelled read does not back off and
+  is not held: it is simply still due. A cancelled mutation is
+  outcome-unknown. Time spent queued never counts as a timeout. Discovery's
+  `/health` and `/v0/cities` probes go through the same budget; a probe that
+  lost its 5 s race is dropped if it is still queued, and otherwise stays
+  counted in flight until herdr's fetch settles.
 - **Backoff** (`backoff.ts`, `endpoint.ts`). A transport failure, a 5xx, or
   an answer from off the loopback origin (a followed redirect) on a read
   backs the endpoint off: 1 s doubling to 60 s, with jitter. Until it
@@ -227,6 +239,52 @@ promise never settles. The engine is built around that rule:
 - **Time is injected.** The clock is a parameter, and the tests run the
   engine under a fake of herdr's ownership rule (`test/unit/sync/fakes.ts`).
   The engine-parity probe also runs a scripted sync scenario in QuickJS.
+
+## The agents panel
+
+Each copy subscribes, from its own 250 ms timer, to the shared city list of
+its gc API and, once a running city is chosen, to that city's store. It
+renders from their snapshots only and never fetches while drawing. On close
+it unsubscribes and starts nothing; the other copies keep updating.
+
+- **Rows.** Rigs in gc's order (with gc's agent and running counts), then
+  rigs that only an agent names, then the city's own agents. A session joins
+  the agent its `agent_name` names, else its `template`; one that matches no
+  agent is listed under "Other sessions", never dropped. Pool agents show
+  their limits. The session list follows `next_cursor` in pages of 500 up to
+  2 000 rows, and says "showing N of M" beyond that.
+- **Status chip** (`vm/status.ts`), most specific first: a pending
+  interaction (needs you, with its kind) > a lifecycle state other than
+  active (suspended, asleep, …, with gc's reason) > `program_status` (state,
+  kind, progress, app) > the transcript's activity, marked "(transcript)" >
+  unknown. An absent `program_status` is unknown, never idle. An agent row
+  shows its most urgent session, or its own state without one. A value this
+  version does not know is shown raw and listed in the diagnostics.
+- **Active bead.** Its title comes from the board's data, else from the bead
+  fetched by id (at most 10 per step, again on an event about it); it is
+  never guessed.
+- **Detail pane.** Clicking a session opens it: gc's facts, the output (40
+  lines, refreshed every 2 s while the pane is open and on screen), the wake
+  reasons (fetched when it opens and on "retry now", because gc probes the
+  runtime for each session), and the pending prompt with gc's own options.
+- **Errors and staleness.** Each region says how old its data is; on a
+  failure it keeps the last data, greyed, with the error above it. The header
+  says connected, connecting, reconnecting in N s (with the cause), city
+  stopped, gc too old, read-only, or herdr-app too old. gc's partial lists
+  show `partial_errors`; an entry that cannot be read is an "unreadable"
+  row. The diagnostics drawer lists the last 100 failures with their time and
+  source.
+- **Plain text only.** Every string gc supplies (names, statuses, titles,
+  errors, problem details, prompts, output) is shown with escape sequences,
+  control characters and bidirectional overrides removed (`vm/sanitize.ts`),
+  never as markdown or links.
+- **Probe.** While the shared value `gascity.probe` is `true`, the copy's
+  tick writes `<app home>/data/gascity-probe/probe.json`
+  (`gascity-herdr-probe/2`): connection, discovery, city, visibility,
+  sessions with their status, board, detail, exec log, errors and the budget
+  high-water mark. It serializes the same view-models the panel draws. Writes
+  are herdr's compare-and-swap, at most one in flight, on change or every
+  5 s.
 
 ## Develop
 

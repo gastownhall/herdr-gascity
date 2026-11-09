@@ -13,6 +13,10 @@ import { jitlessEnabled } from "../../src/gc/zod.ts";
 import { decodeTerminals } from "../../src/host.schemas.ts";
 import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
 import type { EventBatch } from "../../src/sync/store.ts";
+import { agentsModel } from "../../src/vm/agents.ts";
+import { detailModel } from "../../src/vm/detail.ts";
+import { errorText } from "../../src/vm/errorText.ts";
+import { cleanLine, cleanText } from "../../src/vm/sanitize.ts";
 
 /** One fixture as the test passes it in. */
 export interface ProbeFixture {
@@ -114,8 +118,17 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   down = false;
   await advance(40_000);
   const s = b.value.snapshot();
+  const agents = agentsModel({ snapshot: s, now, selected: "sc-20", collapsed: new Set() });
+  const detail = detailModel({ snapshot: s, now, selected: "sc-20" });
   b.value.unsubscribe();
   return {
+    agents,
+    detail,
+    sanitized: [
+      cleanLine("a\u0000b\u001b[31mc\u001b]8;;http://x\u0007d\u202ee\r\nf"),
+      cleanText("\u001b[1mline\u001b[0m\r\nnext\u0007"),
+      errorText({ kind: "cancelled", url: "http://127.0.0.1:8372/health", reason: "copy-closed" }),
+    ],
     initial,
     paths,
     batches: batches.map((x) => ({ seqs: x.events.map((e) => e.seq), resync: x.resync })),

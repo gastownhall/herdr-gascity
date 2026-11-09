@@ -184,6 +184,25 @@ describe("transport failures (herdr fetch rejections)", () => {
     expect(t.ok ? null : t.error.kind).toBe("timeout");
   });
 
+  test("a request the fetch budget cancelled is `cancelled`, never a timeout, however long it took", async () => {
+    const closed = Object.assign(new Error("gascity: request cancelled"), { hostElapsedMs: 35_000, cancelled: "copy-closed" });
+    expect(await health({ rejects: closed, afterMs: 35_000 }))
+      .toEqual({ ok: false, error: { kind: "cancelled", url: "http://127.0.0.1:8372/health", reason: "copy-closed" } });
+    const dropped = Object.assign(new Error("gascity: request dropped"), { hostElapsedMs: 0, cancelled: "abandoned" });
+    expect(await health({ rejects: dropped }))
+      .toEqual({ ok: false, error: { kind: "cancelled", url: "http://127.0.0.1:8372/health", reason: "abandoned" } });
+  });
+
+  test("a mutation cancelled in flight may have been applied: outcome-unknown; one dropped before it was sent is just cancelled", async () => {
+    const wake = (cause: Error) => client([{ rejects: cause }]).c.call("post-v0-city-by-city-name-session-by-id-wake", WAKE);
+    expect(await wake(Object.assign(new Error("x"), { hostElapsedMs: 35_000, cancelled: "copy-closed" }))).toEqual({
+      ok: false, error: { kind: "outcome-unknown", requestId: null, operationId: "post-v0-city-by-city-name-session-by-id-wake", cause: "cancelled" },
+    });
+    expect(await wake(Object.assign(new Error("x"), { hostElapsedMs: 0, cancelled: "abandoned" }))).toEqual({
+      ok: false, error: { kind: "cancelled", url: "http://127.0.0.1:8372/v0/city/c/session/s-1/wake", reason: "abandoned" },
+    });
+  });
+
   test("a rejection whose message says it timed out -> timeout, however fast", async () => {
     const r = await health({ rejects: new Error("reading response from http://127.0.0.1:8372/health failed: operation timed out") });
     expect(r.ok ? null : r.error.kind).toBe("timeout");

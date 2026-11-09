@@ -230,3 +230,39 @@ describe("errorText covers every GcError kind", () => {
     expect(errorText(e)).toMatch(/^request r-1 \(session\.submit\) failed/);
   });
 });
+
+describe("live connection, needs-you count and data age (a running city's shared store)", () => {
+  const running = machine(UNPINNED, resolved, cities(city("alpha", true)));
+  const NOW = 5_000_000;
+  const live = (connection: Parameters<typeof headerModel>[2] extends infer L ? L extends { connection: infer C } ? C : never : never, extra = {}) =>
+    headerModel(running, [], { connection, now: NOW, needsYou: 0, age: null, ...extra });
+
+  test("reconnecting in N s, with the cause", () => {
+    const h = live({ kind: "backing-off", attempt: 2, retryAt: NOW + 3_400, cause: { kind: "unreachable", url: "http://127.0.0.1:9100/v0/city/alpha/events", cause: "refused" } });
+    expect(h.chip).toEqual({ tone: "warn", text: "reconnecting in 4 s (cannot reach http://127.0.0.1:9100/v0/city/alpha/events: refused)" });
+    expect(h.canRetry).toBe(true);
+  });
+
+  test("connecting until the city's first answer; connected after", () => {
+    expect(live({ kind: "connecting" }).chip).toEqual({ tone: "busy", text: "connecting" });
+    expect(live({ kind: "connected" }).chip).toEqual({ tone: "ok", text: "connected" });
+  });
+
+  test("needs-you count and data age", () => {
+    const h = live({ kind: "connected" }, { needsYou: 2, age: "data 1 s old" });
+    expect(h.needsYou).toBe("2 need you");
+    expect(h.age).toBe("data 1 s old");
+    expect(live({ kind: "connected" }, { needsYou: 1 }).needsYou).toBe("1 needs you");
+    expect(live({ kind: "connected" }).needsYou).toBeNull();
+  });
+});
+
+test("gc-supplied city names, statuses and errors are cleaned", () => {
+  const h = header({ pinned: "al\u0007pha", lastSelection: null }, resolved, cities(
+    city("al\u0007pha", false, { status: "init\u001b[31m_failed", error: "dolt:\r\nport in use\u0000" }),
+    city("be‮ta", false, { status: "stop\u0007ped" }),
+  ));
+  expect(h.chip).toEqual({ tone: "warn", text: "city stopped (init_failed): dolt: port in use" });
+  expect(h.city).toBe("alpha (pinned)");
+  expect(h.others).toEqual([{ name: "beta", running: false, label: "stopped" }]);
+});

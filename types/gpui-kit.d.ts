@@ -26,9 +26,20 @@ interface GpuiElement {
   on_click(handler: (event: unknown, cx: GpuiContext) => void): GpuiElement;
 }
 
+/** One-shot and repeating callbacks on the foreground executor, owned by the view whose context made them. */
+interface GpuiTimer {
+  /**
+   * Calls `handler(cx)` every `ms`. The interval is measured from the end of
+   * one call, so a slow handler delays the next tick instead of stacking.
+   */
+  every(ms: number, handler: (cx: GpuiAsyncContext) => void): unknown;
+}
+
 /** The context `render` gets. Never keep one past the call that got it. */
 interface GpuiContext {
   notify(): void;
+  /** One-shot and repeating callbacks on the foreground executor. */
+  readonly timer: GpuiTimer;
   /** Runs `body` as a task of this view; a rejection is reported, not swallowed. */
   spawn(body: (cx: GpuiAsyncContext) => unknown): unknown;
   /** Resolves after `ms` on GPUI's foreground executor. */

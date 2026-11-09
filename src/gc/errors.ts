@@ -26,7 +26,9 @@ export type OutcomeUnknownCause =
   | "outcome-poll-expired"
   | "reported-by-gc"
   /** gc reported an outcome state this pin does not know. */
-  | "unrecognized-state";
+  | "unrecognized-state"
+  /** The request was in flight when herdr cancelled it with the copy that started it. */
+  | "cancelled";
 
 /** Every failure of a gc call or of host data, as the mod renders and logs it. */
 export type GcError =
@@ -74,7 +76,17 @@ export type GcError =
     detail: string;
   }
   /** The configured gc API is not a loopback address. */
-  | { kind: "not-loopback"; url: string };
+  | { kind: "not-loopback"; url: string }
+  /**
+   * The mod gave up on a request without gc failing: herdr cancelled it with
+   * the copy that started it ("copy-closed"), or it was dropped from the fetch
+   * queue before it was sent because nothing waits for it ("abandoned"). Not a
+   * gc timeout: it never backs off.
+   */
+  | { kind: "cancelled"; url: string; reason: CancelReason };
+
+/** Why a request was cancelled (see the `cancelled` error). */
+export type CancelReason = "copy-closed" | "abandoned";
 
 /** gc's stable 404 detail for a city that is not running (internal/api/city_scope.go). */
 export const CITY_NOT_RUNNING_PREFIX = "not_found: city not found or not running: ";

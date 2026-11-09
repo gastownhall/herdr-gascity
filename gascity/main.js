@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:4dff67826e52134cabb04aece8a28b73212e7b73bd9c98bba06de0b2908983ab over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:c59c3d8ac1ce6c5ec1a8ed73fdd80e11a3cf4c38dc4435eaa26e7d23aa435e8a over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2035,22 +2035,22 @@ function rawText(body) {
   return body.trim().slice(0, RAW_LIMIT);
 }
 var CODE_CITY_NOT_FOUND = "city-not-found";
-function httpError(operationId, status, body) {
+function httpError(operationId, status2, body) {
   const problem = parseProblem(body);
   const detail = problem?.detail ?? "";
   const code = problem?.code;
-  if ((status === 404 || status === 405) && problem === null) {
+  if ((status2 === 404 || status2 === 405) && problem === null) {
     const raw = rawText(body);
     return raw === "" || !raw.startsWith("{") ? { kind: "api-missing", operationId } : { kind: "api-missing", operationId, raw };
   }
-  if (status === 404 && (code === CODE_CITY_NOT_FOUND || code === void 0 && detail.startsWith(CITY_NOT_RUNNING_PREFIX))) {
+  if (status2 === 404 && (code === CODE_CITY_NOT_FOUND || code === void 0 && detail.startsWith(CITY_NOT_RUNNING_PREFIX))) {
     return { kind: "city-not-running", city: detail.startsWith(CITY_NOT_RUNNING_PREFIX) ? detail.slice(CITY_NOT_RUNNING_PREFIX.length) : "" };
   }
-  if (status === 401 && problem) {
+  if (status2 === 401 && problem) {
     if (detail === "missing X-GC-City-Write grant") return { kind: "write-grant-required", status: 401, detail };
     if (detail === "missing X-GC-City-Read grant") return { kind: "read-grant-required", status: 401, detail };
   }
-  if (status === 403 && problem) {
+  if (status2 === 403 && problem) {
     if (detail.startsWith("csrf:")) return { kind: "csrf-rejected" };
     if (detail.startsWith("read_only:")) return { kind: "read-only", detail };
     if (detail === "write grant rejected" || detail.startsWith("workspace-service mutations are disabled")) {
@@ -2058,8 +2058,8 @@ function httpError(operationId, status, body) {
     }
     if (detail === "read grant rejected") return { kind: "read-grant-required", status: 403, detail };
   }
-  if (problem) return { kind: "http", status, problem };
-  return { kind: "http", status, problem: null, raw: rawText(body) };
+  if (problem) return { kind: "http", status: status2, problem };
+  return { kind: "http", status: status2, problem: null, raw: rawText(body) };
 }
 
 // src/gc/operations.gen.ts
@@ -2460,7 +2460,14 @@ function hostElapsedMs(cause) {
   const v = cause.hostElapsedMs;
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
+function cancelReason(cause) {
+  if (cause === null || typeof cause !== "object") return null;
+  const v = cause.cancelled;
+  return v === "copy-closed" || v === "abandoned" ? v : null;
+}
 function transportFailure(url, cause, elapsedMs) {
+  const cancelled = cancelReason(cause);
+  if (cancelled !== null) return { kind: "cancelled", url, reason: cancelled };
   const message = messageOf(cause);
   if (/exceeded the \d+ byte limit/.test(message)) {
     return { kind: "too-large", url, direction: /request body/.test(message) ? "request" : "response", limitBytes: HERDR_FETCH_MAX_BODY_BYTES };
@@ -2488,17 +2495,18 @@ async function call(baseUrl, fetch2, now, op, args) {
     init.body = body;
   }
   const started = now();
-  let status;
+  let status2;
   let text;
   let finalUrl;
   try {
     const response = await fetch2(url, init);
-    status = response.status;
+    status2 = response.status;
     finalUrl = response.url;
     text = await response.text();
   } catch (cause) {
     const failure2 = transportFailure(url, cause, hostElapsedMs(cause) ?? now() - started);
-    if (mutation && !(failure2.kind === "too-large" && failure2.direction === "request")) {
+    const neverSent = failure2.kind === "too-large" && failure2.direction === "request" || failure2.kind === "cancelled" && failure2.reason === "abandoned";
+    if (mutation && !neverSent) {
       return err({ kind: "outcome-unknown", requestId: null, operationId: op, cause: failure2.kind });
     }
     return err(failure2);
@@ -2509,7 +2517,7 @@ async function call(baseUrl, fetch2, now, op, args) {
     }
     return err({ kind: "not-loopback", url: finalUrl });
   }
-  if (status < 200 || status > 299) return err(httpError(op, status, text));
+  if (status2 < 200 || status2 > 299) return err(httpError(op, status2, text));
   let decoded;
   try {
     const json = JSON.parse(text);
@@ -2552,8 +2560,84 @@ function decodeSettings(raw) {
   return ok({ apiUrl: apiUrl ?? null, gcBin: gcBin ?? DEFAULT_GC_BIN });
 }
 
+// src/host.schemas.ts
+var TerminalSchema = object({
+  address: string2(),
+  argv: array(string2()),
+  labels: record(string2(), string2()),
+  state: enumOf(["live", "finished"]),
+  program: object({ shell: boolean2() })
+});
+var PaneSchema = object({
+  pane: string2(),
+  tab: string2(),
+  terminal: optional(nullable(string2())),
+  mod: optional(string2())
+});
+var SpaceSchema = object({
+  id: string2(),
+  machine: nullable(string2()),
+  active: boolean2(),
+  tabs: array(object({ id: string2(), active: boolean2() }))
+});
+var FocusSchema = nullable(object({ space: string2(), tab: string2() }));
+function hostDecode(api, schema, value, path = "") {
+  const r = decodeValue(schema, value, api, path);
+  return r.ok ? r : err({ kind: "host-decode", api, path: r.error.path, issues: r.error.issues });
+}
+function hostList(api, schema, value) {
+  const list = hostDecode(api, array(unknown()), value);
+  if (!list.ok) return list;
+  const out = { items: [], errors: [] };
+  list.value.forEach((entry, i) => {
+    const r = hostDecode(api, schema, entry, `[${i}]`);
+    if (r.ok) out.items.push(r.value);
+    else out.errors.push(r.error);
+  });
+  return ok(out);
+}
+function decodePanes(value) {
+  return hostList("panes", PaneSchema, value);
+}
+function decodeFocused(value) {
+  return hostDecode("focused", FocusSchema, value);
+}
+function layoutModNames(layout2) {
+  const out = /* @__PURE__ */ new Set();
+  const seen = /* @__PURE__ */ new Set();
+  const walk = (v) => {
+    if (v === null || typeof v !== "object" || seen.has(v)) return;
+    seen.add(v);
+    if (Array.isArray(v)) {
+      for (const x of v) walk(x);
+      return;
+    }
+    const content = v.content;
+    if (content !== null && typeof content === "object" && typeof content.mod === "string") {
+      out.add(content.mod);
+    }
+    for (const x of Object.values(v)) walk(x);
+  };
+  walk(layout2);
+  return [...out];
+}
+
 // src/host.ts
-var REQUIRED_HOST_EXPORTS = ["theme", "props", "shared", "home", "readTextFile", "exec", "fetch", "localStorage"];
+var REQUIRED_HOST_EXPORTS = [
+  "theme",
+  "props",
+  "shared",
+  "home",
+  "readTextFile",
+  "exec",
+  "fetch",
+  "localStorage",
+  "panes",
+  "focused",
+  "layout",
+  "appHome",
+  "writeTextFile"
+];
 function missingHostExports() {
   const present = {
     theme: typeof herdr.theme === "function",
@@ -2563,7 +2647,12 @@ function missingHostExports() {
     readTextFile: typeof herdr.readTextFile === "function",
     exec: typeof herdr.exec === "function",
     fetch: typeof fetch === "function",
-    localStorage: typeof localStorage === "object" && localStorage !== null
+    localStorage: typeof localStorage === "object" && localStorage !== null,
+    panes: typeof herdr.panes === "function",
+    focused: typeof herdr.focused === "function",
+    layout: typeof herdr.layout === "function",
+    appHome: typeof herdr.appHome === "function",
+    writeTextFile: typeof herdr.writeTextFile === "function"
   };
   return REQUIRED_HOST_EXPORTS.filter((name) => !present[name]);
 }
@@ -2605,16 +2694,70 @@ async function readSupervisorConfig() {
     return err({ kind: "host-call", api: `readTextFile(${path})`, cause: messageOf2(cause) });
   }
 }
+var WINDOW_KEY = "gascity.window";
+var PROBE_KEY = "gascity.probe";
+function readVisibility() {
+  const panes2 = decodePanes(herdr.panes());
+  if (!panes2.ok) return panes2;
+  const focus = decodeFocused(herdr.focused());
+  if (!focus.ok) return focus;
+  const first = panes2.value.errors[0];
+  if (first) return err(first);
+  return ok({ windowOpen: herdr.shared(WINDOW_KEY) === true, layoutMods: layoutModNames(herdr.layout()), panes: panes2.value.items, focus: focus.value });
+}
+function readProbeEnabled() {
+  return herdr.shared(PROBE_KEY) === true;
+}
+function readHerdrVersion() {
+  try {
+    if (typeof herdr.updates !== "function") return null;
+    const v = herdr.updates()?.app?.version;
+    return typeof v === "string" ? v : null;
+  } catch {
+    return null;
+  }
+}
+var probeIo = {
+  path: () => `${herdr.appHome().replace(/\/+$/, "")}/data/gascity-probe/probe.json`,
+  read: async (path) => {
+    try {
+      return ok(await herdr.readTextFile(path));
+    } catch (cause) {
+      return err({ kind: "host-call", api: `readTextFile(${path})`, cause: messageOf2(cause) });
+    }
+  },
+  write: async (path, text, expected) => {
+    try {
+      await herdr.writeTextFile(path, text, expected);
+      return ok(null);
+    } catch (cause) {
+      return err({ kind: "host-call", api: `writeTextFile(${path})`, cause: messageOf2(cause) });
+    }
+  }
+};
+var EXEC_LOG_LIMIT = 50;
+var execLog = [];
+function readExecLog() {
+  return execLog;
+}
+function logExec(argv) {
+  execLog = [...execLog, { at: Date.now(), kind: "exec", argv }].slice(-EXEC_LOG_LIMIT);
+}
 var GC_STATUS_TIMEOUT_MS = 1e4;
 var STDERR_LIMIT = 2e3;
 async function execGcStatus(gcBin) {
   const argv = [gcBin, ...GC_STATUS_ARGS];
   const refused = gcBinIssue(gcBin);
   if (refused) return err({ kind: "exec", argv, code: null, stderr: `not run: gcBin ${refused}` });
+  logExec(argv);
   return herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS }).then(
     (result) => result.code === 0 ? ok(result.stdout) : err({ kind: "exec", argv, code: result.code, stderr: result.stderr.trim().slice(0, STDERR_LIMIT) }),
     (cause) => err({ kind: "exec", argv, code: null, stderr: messageOf2(cause) })
   );
+}
+function logError(line) {
+  const c = globalThis.console;
+  if (c !== void 0 && typeof c.error === "function") c.error(line);
 }
 var HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 function isColor(value) {
@@ -2754,12 +2897,1853 @@ function step(m, event) {
   }
 }
 
+// src/sync/invalidate.ts
+var ALL_DOMAINS = ["rigs", "agents", "sessions", "pending", "ready", "inProgress"];
+var SESSION_REFRESH = /* @__PURE__ */ new Set(["request.failed", "worker.operation"]);
+var BOARD_CHANGES = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted", "bead.dead_assignee_reopened"]);
+var PENDING = /* @__PURE__ */ new Set(["session.pending", "session.pending_cleared"]);
+function invalidationFor(events, known) {
+  const inv = { domains: /* @__PURE__ */ new Set(), closed: [], cities: false };
+  const closed = /* @__PURE__ */ new Map();
+  for (const e of events) {
+    const t = e.type;
+    const subject = e.subject;
+    if (PENDING.has(t)) {
+      inv.domains.add("pending");
+    } else if (t.startsWith("session.") || t.startsWith("request.result.session.") || SESSION_REFRESH.has(t)) {
+      inv.domains.add("sessions");
+      inv.domains.add("agents");
+    } else if (t.startsWith("bead.")) {
+      if (subject !== void 0 && known.sessionIds.has(subject)) inv.domains.add("sessions");
+      if (BOARD_CHANGES.has(t)) {
+        inv.domains.add("ready");
+        inv.domains.add("inProgress");
+      }
+      if (t === "bead.closed" && subject !== void 0) closed.set(subject, Math.max(closed.get(subject) ?? -Infinity, e.seq));
+    } else if (t.startsWith("city.")) {
+      inv.cities = true;
+      inv.domains.add("rigs");
+      inv.domains.add("agents");
+    }
+  }
+  inv.closed = [...closed].map(([id, seq]) => ({ id, seq })).sort((a, b) => a.seq - b.seq);
+  return inv;
+}
+
+// src/sync/visibility.ts
+var MOD_NAME = "gascity";
+function mayBeOnScreen(input) {
+  if (input.windowOpen) return true;
+  if (input.layoutMods.includes(MOD_NAME)) return true;
+  const focus = input.focus;
+  if (focus === null) return false;
+  return input.panes.some((p) => p.mod === MOD_NAME && p.tab === focus.tab);
+}
+
 // src/gc/ops.ts
+var INFRASTRUCTURE_BEAD_TYPES = ["session", "message", "molecule", "gate"];
 function getHealth(c) {
   return c.call("get-health", { path: {} });
 }
 function listCities(c) {
   return c.call("get-v0-cities", { path: {} });
+}
+function listRigs(c, city) {
+  return c.call("get-v0-city-by-city-name-rigs", { path: { cityName: city } });
+}
+function listAgents(c, city) {
+  return c.call("get-v0-city-by-city-name-agents", { path: { cityName: city } });
+}
+function listSessions(c, city, query) {
+  return c.call("get-v0-city-by-city-name-sessions", { path: { cityName: city }, query });
+}
+function getSession(c, city, id, query = {}) {
+  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id }, query });
+}
+function listPending(c, city) {
+  return c.call("get-v0-city-by-city-name-pending", { path: { cityName: city } });
+}
+function getSessionPending(c, city, id) {
+  return c.call("get-v0-city-by-city-name-session-by-id-pending", { path: { cityName: city, id } });
+}
+function listWork(c, city, query) {
+  return c.call("get-v0-city-by-city-name-work-ready", { path: { cityName: city }, query });
+}
+function getBead(c, city, id) {
+  return c.call("get-v0-city-by-city-name-bead-by-id", { path: { cityName: city, id } });
+}
+function pollEvents(c, city, query) {
+  return c.call("get-v0-city-by-city-name-events", { path: { cityName: city }, query: { limit: query.limit } });
+}
+
+// src/sync/backoff.ts
+var BACKOFF_BASE_MS = 1e3;
+var BACKOFF_CAP_MS = 6e4;
+function backoffCeiling(attempt) {
+  const exp = Math.min(Math.max(attempt, 1) - 1, 16);
+  return Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** exp);
+}
+function backoffDelay(attempt, random) {
+  const ceiling = backoffCeiling(attempt);
+  return BACKOFF_BASE_MS + Math.floor(random() * (ceiling - BACKOFF_BASE_MS));
+}
+function failBackoff(state, now, cause, random) {
+  const attempt = (state?.attempt ?? 0) + 1;
+  return { attempt, retryAt: now + backoffDelay(attempt, random), cause };
+}
+function retryBackoffNow(state, now) {
+  return { ...state, retryAt: now };
+}
+function backsOff(error) {
+  switch (error.kind) {
+    case "unreachable":
+    case "timeout":
+    case "not-loopback":
+      return true;
+    case "http":
+      return error.status >= 500;
+    default:
+      return false;
+  }
+}
+
+// src/sync/budget.ts
+var PRIORITIES = ["mutation", "events", "snapshot", "peek", "sweep"];
+var MAX_IN_FLIGHT = 2;
+var DEGRADED_IN_FLIGHT = 1;
+var RECLAIM_AFTER_MS = HERDR_FETCH_TIMEOUT_MS + 5e3;
+function messageOf3(cause) {
+  if (cause instanceof Error) return cause.message;
+  if (typeof cause === "string") return cause;
+  return String(cause);
+}
+function timedRejection(cause, hostElapsedMs2, cancelled) {
+  const e = new Error(messageOf3(cause));
+  e.hostElapsedMs = hostElapsedMs2;
+  if (cancelled !== void 0) e.cancelled = cancelled;
+  return e;
+}
+var FetchBudget = class {
+  constructor(hostFetch2, clock) {
+    this.hostFetch = hostFetch2;
+    this.clock = clock;
+  }
+  hostFetch;
+  clock;
+  queue = [];
+  running = /* @__PURE__ */ new Set();
+  degraded = /* @__PURE__ */ new Set();
+  highWater = 0;
+  seq = 0;
+  /**
+   * A fetch for `endpoint` (an API base URL) at `priority`, for a GcClient.
+   * Requests made with a `group` can be dropped together while still queued.
+   */
+  fetchFor(endpoint, priority, group = null) {
+    const rank = PRIORITIES.indexOf(priority);
+    return (url, init) => new Promise((resolve, reject) => {
+      this.queue.push({
+        endpoint,
+        rank,
+        seq: this.seq++,
+        group,
+        start: () => this.start(endpoint, url, init, resolve, reject),
+        drop: () => reject(timedRejection(`gascity: request to ${url} dropped before it was sent`, 0, "abandoned"))
+      });
+      this.reclaim();
+    });
+  }
+  /** Enters or leaves degraded mode for an endpoint; leaving it starts what now fits. */
+  setDegraded(endpoint, degraded) {
+    if (degraded) {
+      this.degraded.add(endpoint);
+      return;
+    }
+    this.degraded.delete(endpoint);
+    this.pump();
+  }
+  /**
+   * Forgets an endpoint nobody uses any more (the last store on it went, from
+   * a copy's close): leaves degraded mode without starting anything. Whatever
+   * that frees starts at the next reclaim or settled request.
+   */
+  forgetEndpoint(endpoint) {
+    this.degraded.delete(endpoint);
+  }
+  /**
+   * Drops the group's queued requests: each rejects as cancelled
+   * ("abandoned") and is never sent. In-flight requests are untouched (their
+   * slots stay taken until herdr settles them). Starts nothing. Returns how
+   * many were dropped.
+   */
+  dropQueued(group) {
+    const dropped = this.queue.filter((q) => q.group === group);
+    if (dropped.length === 0) return 0;
+    for (let i = this.queue.length - 1; i >= 0; i--) if (this.queue[i].group === group) this.queue.splice(i, 1);
+    for (const q of dropped) q.drop();
+    return dropped.length;
+  }
+  /** Frees every slot older than RECLAIM_AFTER_MS (its copy closed), then starts what fits. */
+  reclaim() {
+    const now = this.clock.now();
+    for (const r of [...this.running]) {
+      if (now - r.startedAt >= RECLAIM_AFTER_MS) {
+        const error = `gascity: request cancelled: no answer after ${now - r.startedAt} ms, so herdr cancelled it with the copy that started it`;
+        r.end({ error, cancelled: "copy-closed" });
+      }
+    }
+    this.pump();
+  }
+  /** Requests in flight to one endpoint. */
+  inFlightTo(endpoint) {
+    let n = 0;
+    for (const r of this.running) if (r.endpoint === endpoint) n++;
+    return n;
+  }
+  stats() {
+    return { inFlight: this.running.size, queued: this.queue.length, maxInFlight: this.highWater };
+  }
+  start(endpoint, url, init, resolve, reject) {
+    const startedAt = this.clock.now();
+    let ended = false;
+    const slot = {
+      endpoint,
+      startedAt,
+      end: (outcome) => {
+        if (ended) return false;
+        ended = true;
+        this.running.delete(slot);
+        if ("response" in outcome) resolve(outcome.response);
+        else reject(timedRejection(outcome.error, this.clock.now() - startedAt, outcome.cancelled));
+        this.pump();
+        return true;
+      }
+    };
+    this.running.add(slot);
+    this.highWater = Math.max(this.highWater, this.running.size);
+    let pending;
+    try {
+      pending = this.hostFetch(url, init);
+    } catch (cause) {
+      pending = Promise.reject(cause);
+    }
+    pending.then((response) => slot.end({ response }), (error) => slot.end({ error }));
+  }
+  startable(q) {
+    return !this.degraded.has(q.endpoint) || this.inFlightTo(q.endpoint) < DEGRADED_IN_FLIGHT;
+  }
+  pump() {
+    while (this.running.size < MAX_IN_FLIGHT) {
+      let best = -1;
+      for (let i = 0; i < this.queue.length; i++) {
+        const q = this.queue[i];
+        if (!this.startable(q)) continue;
+        const b = best < 0 ? void 0 : this.queue[best];
+        if (!b || q.rank < b.rank || q.rank === b.rank && q.seq < b.seq) best = i;
+      }
+      if (best < 0) return;
+      const [next] = this.queue.splice(best, 1);
+      next.start();
+    }
+  }
+};
+
+// src/sync/scheduler.ts
+var TASKS = ["events", "sessions", "peek", "sweep"];
+var CADENCE = {
+  events: { onScreenMs: 2e3, hiddenMs: 1e4 },
+  sessions: { onScreenMs: 5e3, hiddenMs: 3e4 },
+  peek: { onScreenMs: 2e3, hiddenMs: null },
+  sweep: { onScreenMs: 6e4, hiddenMs: 6e4 }
+};
+var DEBOUNCE_MS = 300;
+function intervalOf(task, onScreen) {
+  const c = CADENCE[task];
+  return onScreen ? c.onScreenMs : c.hiddenMs;
+}
+function plan(last, now, input) {
+  const due = [];
+  let wakeAt = input.extraWakeAt ?? Infinity;
+  for (const task of TASKS) {
+    if (task === "peek" && !input.peek) continue;
+    const interval = intervalOf(task, input.onScreen);
+    if (interval === null) continue;
+    const ran = last[task];
+    const at2 = ran === null ? now : ran + interval;
+    if (at2 <= now) {
+      due.push(task);
+      wakeAt = Math.min(wakeAt, now + interval);
+    } else {
+      wakeAt = Math.min(wakeAt, at2);
+    }
+  }
+  return { due, wakeAt };
+}
+
+// src/sync/staleness.ts
+var STALE_FLOOR_MS = 1e4;
+function staleAfterMs(intervalMs) {
+  return Math.max(3 * intervalMs, STALE_FLOOR_MS);
+}
+function freshness(slot, now, input) {
+  if (slot.fetchedAt === null) return { kind: "never", error: slot.error };
+  const confirmed = !slot.dirty && input.confirmedAt !== null ? Math.max(slot.fetchedAt, input.confirmedAt) : slot.fetchedAt;
+  const ageMs = now - confirmed;
+  if (slot.error !== null) return { kind: "stale", ageMs, reason: "error", error: slot.error };
+  if (ageMs > staleAfterMs(input.intervalMs)) return { kind: "stale", ageMs, reason: "overdue", error: null };
+  return { kind: "fresh", ageMs };
+}
+
+// src/sync/watcher.ts
+var EVENT_PAGE_LIMIT = 50;
+function readEventPage(cursor, page) {
+  if (page.total < cursor) return { cursor: page.total, newer: [], resync: "reset" };
+  const unreadable = new Set(page.unreadable);
+  const length = page.items.length + unreadable.size;
+  let next = 0;
+  let above = null;
+  let unreadableNew = false;
+  for (let position = 0; position < length; position++) {
+    if (unreadable.has(position)) {
+      const isOld = above === null ? page.total <= cursor : above <= cursor + 1;
+      if (!isOld) unreadableNew = true;
+      continue;
+    }
+    above = page.items[next++]?.seq ?? above;
+  }
+  const newer = page.items.filter((e) => e.seq > cursor).sort((a, b) => a.seq - b.seq);
+  const newest = newer.at(-1)?.seq ?? cursor;
+  const hole = newer.length > 0 && (newer[0]?.seq ?? 0) > cursor + 1;
+  if (unreadableNew) return { cursor: Math.max(newest, page.total), newer, resync: "gap" };
+  return { cursor: newest, newer, resync: hole ? "gap" : null };
+}
+
+// src/sync/store.ts
+var SESSION_PAGE = 500;
+var MAX_SESSION_ROWS = 2e3;
+var BOARD_LIMIT = 50;
+var MAX_CLOSED_RECENT = 20;
+var BEAD_FETCHES_PER_STEP = 10;
+var ERROR_RING = 100;
+var PEEK_LINES = 40;
+var STEP_STALL_MS = 4 * RECLAIM_AFTER_MS;
+var EMPTY_SLOT = { value: null, fetchedAt: null, error: null, dirty: true, held: false };
+var EVENT_DRIVEN = /* @__PURE__ */ new Set(["rigs", "agents", "ready", "inProgress"]);
+var PRIORITY_RANK = { mutation: 0, events: 1, snapshot: 2, peek: 3, sweep: 4 };
+function freshSlot() {
+  return { value: null, fetchedAt: null, error: null, held: false };
+}
+function isCancelled(error) {
+  return error.kind === "cancelled";
+}
+function holds(error) {
+  return !backsOff(error) && !isCancelled(error);
+}
+function onDemand() {
+  return { ...freshSlot(), due: true };
+}
+function messageOf4(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+function domainFreshness(s, domain, now) {
+  if (EVENT_DRIVEN.has(domain)) {
+    return freshness(s[domain], now, { intervalMs: intervalOf("events", s.onScreen) ?? 0, confirmedAt: s.events.error ? null : s.events.polledAt });
+  }
+  return freshness(s[domain], now, { intervalMs: intervalOf("sessions", s.onScreen) ?? 0, confirmedAt: null });
+}
+var CityStore = class {
+  constructor(key, deps) {
+    this.key = key;
+    this.deps = deps;
+    this.onScreen = deps.onScreen;
+    for (const d of ALL_DOMAINS) this.mark(d, 0, "snapshot");
+    this.snap = this.build(0);
+    deps.endpoint.addListener(this);
+  }
+  key;
+  deps;
+  snap;
+  slots = {
+    rigs: freshSlot(),
+    agents: freshSlot(),
+    sessions: freshSlot(),
+    pending: freshSlot(),
+    ready: freshSlot(),
+    inProgress: freshSlot()
+  };
+  due = /* @__PURE__ */ new Map();
+  closedQueue = [];
+  peeks = /* @__PURE__ */ new Map();
+  lookups = /* @__PURE__ */ new Map();
+  seed = { ...freshSlot(), due: true };
+  recent = [];
+  incomplete = false;
+  events = {
+    cursor: null,
+    polledAt: null,
+    error: null,
+    held: false,
+    resyncs: 0
+  };
+  errors = [];
+  last = { events: null, sessions: null, peek: null, sweep: null };
+  onScreen;
+  step = null;
+  generation = 0;
+  disposed = false;
+  /** The current snapshot. */
+  snapshot() {
+    return this.snap;
+  }
+  /**
+   * Called by a subscribed copy, in its own turn (its periodic timer): starts
+   * a step if one is due and none is running, and abandons a stalled one.
+   */
+  tick(starter) {
+    if (this.disposed) return;
+    const now = this.deps.clock.now();
+    if (this.step) {
+      const idleMs = now - this.step.progressAt;
+      if (idleMs <= STEP_STALL_MS) return;
+      this.record("step", { kind: "step-stalled", idleMs });
+      this.abandon();
+      this.commit();
+    }
+    if (!this.wantsStep(now)) return;
+    const step2 = { gen: ++this.generation, starter, progressAt: now, probe: null };
+    this.step = step2;
+    this.runStep(step2).then(
+      () => this.endStep(step2),
+      (cause) => {
+        if (this.step === step2) this.record("step", { kind: "step-crashed", message: messageOf4(cause) });
+        this.endStep(step2);
+        this.commit();
+      }
+    );
+  }
+  /** The copy `starter` closes: drop the step it started (its requests may never settle). Starts nothing. */
+  abandonStartedBy(starter) {
+    if (this.step?.starter === starter) this.abandon();
+  }
+  /** Switches cadence; the next tick polls at once if a gascity view appeared. */
+  setOnScreen(onScreen) {
+    if (this.onScreen === onScreen) return;
+    this.onScreen = onScreen;
+    this.commit();
+  }
+  /** "Retry now": re-arms held domains and, if the endpoint is backing off, makes the probe due. */
+  retryNow() {
+    this.rearmHeld(this.deps.clock.now(), "snapshot");
+    this.deps.endpoint.retryNow();
+    this.commit();
+  }
+  /** Refetches `domains` at the next tick, held or not. */
+  refresh(domains) {
+    const now = this.deps.clock.now();
+    for (const d of domains) {
+      this.slots[d].held = false;
+      this.mark(d, now, "snapshot");
+    }
+    this.commit();
+  }
+  /** Starts (or joins) watching a session's detail: output, wake reasons, pending prompt; returns the release. */
+  watchPeek(sessionId) {
+    const p = this.peeks.get(sessionId);
+    if (p) p.refs++;
+    else {
+      this.peeks.set(sessionId, {
+        ...freshSlot(),
+        refs: 1,
+        due: true,
+        wake: onDemand(),
+        pending: { ...onDemand(), key: this.pendingKey(sessionId) }
+      });
+      this.commit();
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const q = this.peeks.get(sessionId);
+      if (!q) return;
+      q.refs--;
+      if (q.refs <= 0) {
+        this.peeks.delete(sessionId);
+        this.commit();
+      }
+    };
+  }
+  /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
+  refreshDetail(sessionId) {
+    const w = this.peeks.get(sessionId);
+    if (!w) return;
+    for (const part of [w, w.wake, w.pending]) {
+      part.held = false;
+      part.due = true;
+    }
+    this.commit();
+  }
+  /** Ends the store: a running step's late results are dropped. */
+  dispose() {
+    this.abandon();
+    this.disposed = true;
+    this.deps.endpoint.removeListener(this);
+  }
+  get isDisposed() {
+    return this.disposed;
+  }
+  // ---- EndpointListener -------------------------------------------------------
+  endpointChanged(recovered) {
+    if (recovered) {
+      const now = this.deps.clock.now();
+      for (const d of ALL_DOMAINS) this.mark(d, now, "snapshot");
+      this.incomplete = true;
+    }
+    this.commit();
+  }
+  // ---- steps --------------------------------------------------------------------
+  abandon() {
+    const step2 = this.step;
+    if (!step2) return;
+    this.step = null;
+    this.generation++;
+    if (step2.probe !== null) this.deps.endpoint.endProbe(step2.probe);
+    this.deps.endpoint.dropQueued(step2);
+  }
+  endStep(step2) {
+    if (step2.probe !== null) this.deps.endpoint.endProbe(step2.probe);
+    if (this.step === step2) this.step = null;
+  }
+  current(step2) {
+    return !this.disposed && this.step === step2;
+  }
+  progress(step2) {
+    step2.progressAt = this.deps.clock.now();
+  }
+  sweepDue(now) {
+    return this.last.sweep === null || now >= this.last.sweep + (intervalOf("sweep", this.onScreen) ?? 0);
+  }
+  wantsStep(now) {
+    const gate = this.deps.endpoint.peekGate(now);
+    if (gate.kind === "wait") return false;
+    if (gate.kind === "probe") return true;
+    if (this.events.cursor === null) return !this.events.held || this.sweepDue(now);
+    if (plan(this.last, now, { onScreen: this.onScreen, peek: this.peeks.size > 0, extraWakeAt: null }).due.length > 0) return true;
+    for (const d of this.due.values()) if (d.at <= now) return true;
+    if (this.closedQueue.length > 0) return true;
+    if (this.seed.due && !this.seed.held) return true;
+    if ([...this.lookups.values()].some((b) => b.due && !b.held)) return true;
+    for (const [id, w] of this.peeks) {
+      if (w.wake.due && !w.wake.held && this.templateOf(id) !== void 0 || w.pending.due && !w.pending.held) return true;
+    }
+    return this.onScreen && [...this.peeks.values()].some((q) => q.due && !q.held);
+  }
+  async runStep(step2) {
+    const now = this.deps.clock.now();
+    const gate = this.deps.endpoint.gate(now);
+    if (gate.kind === "wait") return;
+    if (gate.kind === "probe") {
+      step2.probe = gate.token;
+      this.last.events = now;
+      await this.pollEvents(step2, this.events.cursor === null ? 1 : EVENT_PAGE_LIMIT);
+      return;
+    }
+    if (this.events.cursor === null) {
+      if (this.sweepDue(now)) {
+        this.last.sweep = now;
+        this.rearmHeld(now, "sweep");
+      }
+      if (this.events.held) return;
+      this.last.events = now;
+      if (!await this.pollEvents(step2, 1)) return;
+    }
+    const p = plan(this.last, now, { onScreen: this.onScreen, peek: this.peeks.size > 0, extraWakeAt: null });
+    for (const task of p.due) {
+      if (task === "events") {
+        this.last.events = now;
+        if (!this.events.held && !await this.pollEvents(step2, EVENT_PAGE_LIMIT)) return;
+      } else if (task === "sessions") {
+        this.last.sessions = now;
+        this.mark("sessions", now, "snapshot");
+        this.mark("pending", now, "snapshot");
+      } else if (task === "sweep") {
+        this.last.sweep = now;
+        this.rearmHeld(now, "sweep");
+        for (const d of ALL_DOMAINS) this.mark(d, now, "sweep");
+        for (const b of this.lookups.values()) b.due = true;
+      } else {
+        this.last.peek = now;
+        for (const q of this.peeks.values()) q.due = true;
+      }
+    }
+    if (!this.current(step2)) return;
+    await this.fetchDue(step2);
+  }
+  gateOpen(step2) {
+    return this.current(step2) && this.deps.endpoint.peekGate(this.deps.clock.now()).kind === "open";
+  }
+  async fetchDue(step2) {
+    for (const d of ALL_DOMAINS) {
+      const due = this.due.get(d);
+      if (!due || due.at > this.deps.clock.now()) continue;
+      if (!this.gateOpen(step2)) return;
+      await this.fetchDomain(step2, d, due.priority);
+    }
+    if (this.seed.due && !this.seed.held) {
+      if (!this.gateOpen(step2)) return;
+      await this.fetchSeed(step2);
+    }
+    await this.fetchClosed(step2);
+    await this.fetchLookups(step2);
+    for (const [id, w] of [...this.peeks]) {
+      if (w.wake.due && !w.wake.held && this.templateOf(id) !== void 0) {
+        if (!this.gateOpen(step2)) return;
+        await this.fetchWake(step2, id);
+      }
+      if (w.pending.due && !w.pending.held) {
+        if (!this.gateOpen(step2)) return;
+        await this.fetchSessionPending(step2, id);
+      }
+    }
+    if (this.onScreen) {
+      for (const [id, q] of [...this.peeks]) {
+        if (!q.due || q.held) continue;
+        if (!this.gateOpen(step2)) return;
+        await this.fetchPeek(step2, id);
+      }
+    }
+  }
+  // ---- bookkeeping --------------------------------------------------------------
+  mark(d, at2, priority) {
+    if (this.slots[d].held) return;
+    const cur = this.due.get(d);
+    if (!cur) {
+      this.due.set(d, { at: at2, priority });
+      return;
+    }
+    this.due.set(d, {
+      at: Math.min(cur.at, at2),
+      priority: PRIORITY_RANK[priority] < PRIORITY_RANK[cur.priority] ? priority : cur.priority
+    });
+  }
+  rearmHeld(now, priority) {
+    for (const d of ALL_DOMAINS) {
+      if (this.slots[d].held) {
+        this.slots[d].held = false;
+        this.mark(d, now, priority);
+      }
+    }
+    this.events.held = false;
+    for (const p of this.peeks.values()) {
+      if (p.held) {
+        p.held = false;
+        p.due = true;
+      }
+    }
+    if (this.seed.value === null) this.seed.due = true;
+    this.seed.held = false;
+    for (const b of this.lookups.values()) {
+      if (b.held) {
+        b.held = false;
+        b.due = true;
+      }
+    }
+    for (const w of this.peeks.values()) {
+      for (const part of [w.wake, w.pending]) {
+        if (part.held) {
+          part.held = false;
+          part.due = true;
+        }
+      }
+    }
+  }
+  /**
+   * Reports a read's outcome to the endpoint; returns true if it succeeded. A
+   * cancelled request says nothing about gc: it is recorded, nothing more.
+   */
+  settle(r, source) {
+    if (r.ok) {
+      this.deps.endpoint.succeeded();
+      return true;
+    }
+    this.record(source, r.error);
+    if (isCancelled(r.error)) return false;
+    if (backsOff(r.error)) this.deps.endpoint.failed(r.error);
+    else this.deps.endpoint.succeeded();
+    return false;
+  }
+  record(source, error) {
+    const entry = { at: this.deps.clock.now(), source, error };
+    this.errors = [...this.errors, entry].slice(-ERROR_RING);
+    try {
+      this.deps.onError(this.key, entry);
+    } catch (cause) {
+      const hookFailed = { at: entry.at, source: "onError", error: { kind: "listener-failed", message: messageOf4(cause) } };
+      this.errors = [...this.errors, hookFailed].slice(-ERROR_RING);
+    }
+  }
+  // ---- reads --------------------------------------------------------------------
+  async pollEvents(step2, limit) {
+    const r = await pollEvents(this.deps.endpoint.client("events", step2), this.key.city, { limit });
+    if (!this.current(step2)) return false;
+    this.progress(step2);
+    const now = this.deps.clock.now();
+    if (!this.settle(r, "events")) {
+      if (!r.ok && !isCancelled(r.error)) {
+        this.events.error = r.error;
+        if (holds(r.error)) this.events.held = true;
+      }
+      this.commit();
+      return false;
+    }
+    if (!r.ok) return false;
+    for (const u of r.value.unreadable) this.record("events", u.error);
+    const page = r.value;
+    this.events.error = null;
+    this.events.polledAt = now;
+    if (this.events.cursor === null) {
+      this.events.cursor = page.items.reduce((max, e) => Math.max(max, e.seq), page.items.length > 0 ? 0 : page.total);
+      this.commit();
+      return true;
+    }
+    const reading = readEventPage(this.events.cursor, { items: page.items, unreadable: page.unreadable.map((u) => u.index), total: page.total });
+    this.events.cursor = reading.cursor;
+    const at2 = now + DEBOUNCE_MS;
+    if (reading.resync) {
+      this.events.resyncs++;
+      this.incomplete = true;
+      for (const d of ALL_DOMAINS) this.mark(d, at2, "events");
+    }
+    const inv = invalidationFor(reading.newer, this.known());
+    for (const d of inv.domains) this.mark(d, at2, "events");
+    for (const e of reading.newer) {
+      const looked = e.type.startsWith("bead.") && e.subject !== void 0 ? this.lookups.get(e.subject) : void 0;
+      if (looked) looked.due = true;
+    }
+    if (reading.resync) for (const b of this.lookups.values()) b.due = true;
+    if (inv.closed.length > 0) this.closedQueue = [...this.closedQueue, ...inv.closed];
+    if (reading.newer.length > 0 || reading.resync) {
+      const batch = { key: this.key, events: reading.newer, resync: reading.resync, citiesChanged: inv.cities };
+      try {
+        this.deps.emit(batch);
+      } catch (cause) {
+        this.record("listener", { kind: "listener-failed", message: messageOf4(cause) });
+      }
+    }
+    this.commit();
+    return true;
+  }
+  known() {
+    const sessionIds = new Set((this.slots.sessions.value?.items ?? []).map((s) => s.id));
+    return { sessionIds };
+  }
+  workQuery(extra) {
+    const q = {
+      exclude_type: INFRASTRUCTURE_BEAD_TYPES,
+      limit: extra.limit
+    };
+    if (extra.sort) q.sort = extra.sort;
+    if (extra.status) q.status = extra.status;
+    return q;
+  }
+  async load(step2, d, priority) {
+    const c = this.deps.endpoint.client(priority, step2);
+    const city = this.key.city;
+    switch (d) {
+      case "rigs":
+        return await listRigs(c, city);
+      case "agents":
+        return await listAgents(c, city);
+      case "pending":
+        return await listPending(c, city);
+      case "ready":
+        return await listWork(c, city, this.workQuery({ limit: BOARD_LIMIT }));
+      case "inProgress":
+        return await listWork(c, city, this.workQuery({ limit: BOARD_LIMIT, status: "in_progress" }));
+      default:
+        return await this.loadSessions(step2, priority);
+    }
+  }
+  async loadSessions(step2, priority) {
+    const c = this.deps.endpoint.client(priority, step2);
+    const out = { items: [], unreadable: [], total: 0, truncated: false, partial: false, partialErrors: [] };
+    let cursor;
+    for (; ; ) {
+      const r = await listSessions(c, this.key.city, cursor === void 0 ? { limit: SESSION_PAGE } : { limit: SESSION_PAGE, cursor });
+      this.progress(step2);
+      if (!r.ok) return r;
+      const offset = out.items.length + out.unreadable.length;
+      out.items.push(...r.value.items);
+      out.unreadable.push(...r.value.unreadable.map((u) => ({ ...u, index: u.index + offset })));
+      out.total = r.value.total;
+      out.partial ||= r.value.partial === true;
+      out.partialErrors.push(...r.value.partial_errors);
+      const rows = out.items.length + out.unreadable.length;
+      if (!r.value.next_cursor) break;
+      if (rows >= MAX_SESSION_ROWS) {
+        out.truncated = true;
+        break;
+      }
+      if (!this.current(step2)) break;
+      cursor = r.value.next_cursor;
+    }
+    return { ok: true, value: out };
+  }
+  async fetchDomain(step2, d, priority) {
+    const r = await this.load(step2, d, priority);
+    if (!this.current(step2)) return;
+    this.progress(step2);
+    const slot = this.slots[d];
+    if (this.settle(r, d) && r.ok) {
+      slot.value = r.value;
+      slot.fetchedAt = this.deps.clock.now();
+      slot.error = null;
+      slot.held = false;
+      this.due.delete(d);
+      if (d === "pending") this.pendingChanged();
+      this.syncLookups();
+    } else if (!r.ok && !isCancelled(r.error)) {
+      slot.error = r.error;
+      if (holds(r.error)) {
+        slot.held = true;
+        this.due.delete(d);
+      }
+    }
+    this.commit();
+  }
+  async fetchSeed(step2) {
+    const r = await listWork(this.deps.endpoint.client("snapshot", step2), this.key.city, this.workQuery({ limit: MAX_CLOSED_RECENT, status: "closed", sort: "newest" }));
+    if (!this.current(step2)) return;
+    this.progress(step2);
+    if (this.settle(r, "closed-seed") && r.ok) {
+      this.seed = { value: r.value, fetchedAt: this.deps.clock.now(), error: null, held: false, due: false };
+      this.syncLookups();
+    } else if (!r.ok && !isCancelled(r.error)) {
+      this.seed.error = r.error;
+      if (holds(r.error)) {
+        this.seed.held = true;
+        this.seed.due = false;
+      }
+    }
+    this.commit();
+  }
+  async fetchClosed(step2) {
+    if (this.closedQueue.length === 0) return;
+    const newestFirst = [...this.closedQueue].sort((a, b) => b.seq - a.seq);
+    if (newestFirst.length > BEAD_FETCHES_PER_STEP) {
+      this.incomplete = true;
+      this.closedQueue = newestFirst.slice(0, BEAD_FETCHES_PER_STEP);
+    }
+    for (const ref of newestFirst.slice(0, BEAD_FETCHES_PER_STEP)) {
+      if (!this.gateOpen(step2)) return;
+      const r = await getBead(this.deps.endpoint.client("snapshot", step2), this.key.city, ref.id);
+      if (!this.current(step2)) return;
+      this.progress(step2);
+      if (!r.ok && isCancelled(r.error)) {
+        this.record(`closed:${ref.id}`, r.error);
+        this.commit();
+        return;
+      }
+      this.closedQueue = this.closedQueue.filter((c) => c !== ref);
+      if (this.settle(r, `closed:${ref.id}`) && r.ok) {
+        const kept = this.recent.filter((c) => c.bead.id !== ref.id || c.seq > ref.seq);
+        if (!kept.some((c) => c.bead.id === ref.id)) kept.push({ seq: ref.seq, bead: r.value });
+        this.recent = kept.sort((a, b) => b.seq - a.seq).slice(0, MAX_CLOSED_RECENT);
+        this.syncLookups();
+      } else {
+        this.incomplete = true;
+      }
+      this.commit();
+    }
+  }
+  async fetchPeek(step2, id) {
+    const r = await getSession(this.deps.endpoint.client("peek", step2), this.key.city, id, { peek: true, peek_lines: PEEK_LINES });
+    if (!this.current(step2)) return;
+    this.progress(step2);
+    const ok2 = this.settle(r, `peek:${id}`);
+    const q = this.peeks.get(id);
+    if (!q) return;
+    q.due = false;
+    if (ok2 && r.ok) {
+      q.value = r.value;
+      q.fetchedAt = this.deps.clock.now();
+      q.error = null;
+    } else if (!r.ok) {
+      this.failOnDemand(q, r.error);
+    }
+    this.commit();
+  }
+  /** A failed on-demand read: kept due on backoff or cancellation, held (until sweep / retry) otherwise. */
+  failOnDemand(part, error) {
+    if (isCancelled(error)) {
+      part.due = true;
+      return;
+    }
+    part.error = error;
+    if (backsOff(error)) part.due = true;
+    else {
+      part.due = false;
+      part.held = true;
+    }
+  }
+  /** A session's template from the session list: wake reasons are asked per template, so until it is known there is nothing to ask. */
+  templateOf(id) {
+    return this.slots.sessions.value?.items.find((x) => x.id === id)?.template;
+  }
+  async fetchWake(step2, id) {
+    const template = this.templateOf(id);
+    if (template === void 0) return;
+    const r = await listSessions(this.deps.endpoint.client("peek", step2), this.key.city, { limit: SESSION_PAGE, template, wake_reasons: true });
+    if (!this.current(step2)) return;
+    this.progress(step2);
+    const ok2 = this.settle(r, `wake-reasons:${id}`);
+    const w = this.peeks.get(id);
+    if (!w) return;
+    w.wake.due = false;
+    if (ok2 && r.ok) {
+      const listed = r.value.items.find((x) => x.id === id);
+      w.wake.value = { listed: listed !== void 0, reasons: listed?.wake_reasons ?? [] };
+      w.wake.fetchedAt = this.deps.clock.now();
+      w.wake.error = null;
+    } else if (!r.ok) {
+      this.failOnDemand(w.wake, r.error);
+    }
+    this.commit();
+  }
+  async fetchSessionPending(step2, id) {
+    const r = await getSessionPending(this.deps.endpoint.client("peek", step2), this.key.city, id);
+    if (!this.current(step2)) return;
+    this.progress(step2);
+    const ok2 = this.settle(r, `pending:${id}`);
+    const w = this.peeks.get(id);
+    if (!w) return;
+    w.pending.due = false;
+    if (ok2 && r.ok) {
+      w.pending.value = r.value;
+      w.pending.fetchedAt = this.deps.clock.now();
+      w.pending.error = null;
+    } else if (!r.ok) {
+      this.failOnDemand(w.pending, r.error);
+    }
+    this.commit();
+  }
+  async fetchLookups(step2) {
+    const due = [...this.lookups].filter(([, b]) => b.due && !b.held).slice(0, BEAD_FETCHES_PER_STEP);
+    for (const [id] of due) {
+      if (!this.gateOpen(step2)) return;
+      const r = await getBead(this.deps.endpoint.client("snapshot", step2), this.key.city, id);
+      if (!this.current(step2)) return;
+      this.progress(step2);
+      const ok2 = this.settle(r, `bead:${id}`);
+      const b = this.lookups.get(id);
+      if (!b) continue;
+      b.due = false;
+      if (ok2 && r.ok) {
+        b.value = r.value;
+        b.fetchedAt = this.deps.clock.now();
+        b.error = null;
+      } else if (!r.ok) {
+        this.failOnDemand(b, r.error);
+      }
+      this.commit();
+    }
+  }
+  /** The request id the city's pending list shows for a session, or null. */
+  pendingKey(sessionId) {
+    return this.slots.pending.value?.items.find((p) => p.session_id === sessionId)?.request_id ?? null;
+  }
+  /** The city's pending list changed: refetch the prompt of each watched session whose entry changed. */
+  pendingChanged() {
+    for (const [id, w] of this.peeks) {
+      const key = this.pendingKey(id);
+      if (key === w.pending.key) continue;
+      w.pending.key = key;
+      w.pending.due = true;
+      w.pending.held = false;
+    }
+  }
+  /** Keeps a lookup for every active bead of a session or agent that the board does not carry, and only those. */
+  syncLookups() {
+    const onBoard = /* @__PURE__ */ new Set();
+    for (const list of [this.slots.ready.value, this.slots.inProgress.value, this.seed.value]) {
+      for (const b of list?.items ?? []) onBoard.add(b.id);
+    }
+    for (const c of this.recent) onBoard.add(c.bead.id);
+    const wanted = /* @__PURE__ */ new Set();
+    for (const x of [...this.slots.sessions.value?.items ?? [], ...this.slots.agents.value?.items ?? []]) {
+      if (x.active_bead !== void 0 && x.active_bead !== "" && !onBoard.has(x.active_bead)) wanted.add(x.active_bead);
+    }
+    for (const id of [...this.lookups.keys()]) if (!wanted.has(id)) this.lookups.delete(id);
+    for (const id of wanted) if (!this.lookups.has(id)) this.lookups.set(id, onDemand());
+  }
+  // ---- snapshot -----------------------------------------------------------------
+  slotOf(s, dirty) {
+    if (s.value === null && s.fetchedAt === null && s.error === null && dirty && !s.held) return EMPTY_SLOT;
+    return { value: s.value, fetchedAt: s.fetchedAt, error: s.error, dirty, held: s.held };
+  }
+  build(rev) {
+    const dirty = (d) => this.due.has(d);
+    return {
+      rev,
+      key: this.key,
+      onScreen: this.onScreen,
+      connection: this.deps.endpoint.connection(),
+      events: { ...this.events },
+      rigs: this.slotOf(this.slots.rigs, dirty("rigs")),
+      agents: this.slotOf(this.slots.agents, dirty("agents")),
+      sessions: this.slotOf(this.slots.sessions, dirty("sessions")),
+      pending: this.slotOf(this.slots.pending, dirty("pending")),
+      ready: this.slotOf(this.slots.ready, dirty("ready")),
+      inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
+      closed: { seed: this.slotOf(this.seed, this.seed.due), recent: this.recent, incomplete: this.incomplete },
+      peeks: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
+      details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
+      beads: new Map([...this.lookups].map(([id, b]) => [id, this.slotOf(b, b.due)])),
+      errors: this.errors
+    };
+  }
+  commit() {
+    this.snap = this.build(this.snap.rev + 1);
+  }
+};
+
+// src/vm/sanitize.ts
+var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
+var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g;
+function cleanText(text) {
+  return text.replace(/\r\n?/g, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
+}
+function cleanLine(text) {
+  return cleanText(text).replace(/[\n\t]+/g, " ");
+}
+
+// src/vm/errorText.ts
+var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
+function seconds(ms) {
+  return `${Math.round(ms / 1e3)} s`;
+}
+function drift(value) {
+  return isUnrecognized(value) ? value.raw : String(value);
+}
+function errorText(e) {
+  return cleanLine(rawText2(e));
+}
+function rawText2(e) {
+  switch (e.kind) {
+    case "unreachable":
+      return `cannot reach ${e.url}: ${e.cause}`;
+    case "timeout":
+      return `no answer from ${e.url} within ${seconds(e.ms)}`;
+    case "too-large":
+      return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
+    case "http": {
+      const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
+      return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
+    }
+    case "csrf-rejected":
+      return "gc refused a change without X-GC-Request (a bug in the mod)";
+    case "read-only":
+      return `gc serves this API read-only (${e.detail})`;
+    case "write-grant-required":
+      return `this city requires a signed write grant (${e.detail})`;
+    case "read-grant-required":
+      return `this city requires a signed read grant (${e.detail})`;
+    case "city-not-running":
+      return `city "${e.city}" is not running`;
+    case "api-missing":
+      return `gc too old (needs ${e.operationId})${e.raw === void 0 ? "" : `: ${e.raw}`}`;
+    case "decode":
+      return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
+    case "outcome-failed":
+      return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
+    case "outcome-unknown": {
+      const why = e.requestId === null ? e.cause : `${e.cause}, request ${e.requestId}`;
+      const issues = e.issues && e.issues.length > 0 ? `: ${e.issues.join("; ")}` : "";
+      return `outcome of ${e.operationId} unknown (${why})${issues}`;
+    }
+    case "exec":
+      return e.code === null ? `${e.argv.join(" ")} did not run: ${e.stderr}` : `${e.argv.join(" ")} exited with code ${e.code}: ${e.stderr}`;
+    case "host-incompatible":
+      return `this herdr-app lacks ${e.missing.join(", ")}`;
+    case "host-decode":
+      return `unreadable ${e.api}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
+    case "host-call":
+      return `${e.api} failed: ${e.cause}`;
+    case "supervisor-config":
+      return `${e.path} line ${e.line}: ${e.issue}`;
+    case "attach-not-started":
+      return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
+    case "not-loopback":
+      return LOOPBACK_ONLY;
+    case "cancelled":
+      return e.reason === "copy-closed" ? `request to ${e.url} was cancelled: the Gas City view that started it closed` : `request to ${e.url} was dropped before it was sent: nothing waits for its answer any more`;
+  }
+}
+
+// src/vm/region.ts
+function ageText(ms) {
+  const s = Math.max(0, Math.floor(ms / 1e3));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  return `${Math.floor(s / 3600)} h`;
+}
+function regionModel(parts) {
+  let error = null;
+  const note = (name, e) => {
+    if (error === null && e !== null) error = `${name}: ${errorText(e)}`;
+  };
+  let never = false;
+  let stale = false;
+  let age = 0;
+  for (const [name, f] of parts) {
+    if (f.kind === "never") {
+      never = true;
+      note(name, f.error);
+      continue;
+    }
+    age = Math.max(age, f.ageMs);
+    if (f.kind === "stale") {
+      stale = true;
+      note(name, f.error);
+    }
+  }
+  if (never) return error === null ? { kind: "loading", age: null, stale: false, error: null } : { kind: "failed", age: null, stale: true, error };
+  return { kind: "ok", age: `data ${ageText(age)} old`, stale, error };
+}
+
+// src/vm/status.ts
+var LIFECYCLE = {
+  suspended: "suspended",
+  quarantined: "quarantined",
+  stopped: "stopped",
+  draining: "draining",
+  asleep: "asleep",
+  creating: "starting",
+  closing: "closing",
+  archived: "archived"
+};
+var ACTIVE = "active";
+var URGENCY = {
+  "needs-you": 0,
+  blocked: 1,
+  error: 2,
+  working: 3,
+  done: 4,
+  idle: 5,
+  unknown: 6,
+  lifecycle: 7
+};
+function status(kind, label2, source, detail = null, unrecognized = null) {
+  return { kind, label: cleanLine(label2), source, detail: detail === null ? null : cleanLine(detail), unrecognized: unrecognized === null ? null : cleanLine(unrecognized) };
+}
+function drift2(value) {
+  return isUnrecognized(value) ? value.raw : value;
+}
+function fromProgram(p) {
+  const details = [];
+  if (p.progress !== void 0) details.push(`${p.progress}%`);
+  if (p.app !== void 0 && p.app !== "") details.push(p.app);
+  const detail = details.length > 0 ? details.join(" · ") : null;
+  if (isUnrecognized(p.state)) return status("unknown", `unknown (${p.state.raw})`, "program", detail, `program_status.state ${p.state.raw}`);
+  const kind = p.kind === void 0 ? null : drift2(p.kind);
+  const unrecognized = p.kind !== void 0 && isUnrecognized(p.kind) ? `program_status.kind ${p.kind.raw}` : null;
+  const label2 = kind === null ? p.state : `${p.state} (${kind})`;
+  return status(p.state, label2, "program", detail, unrecognized);
+}
+function fromActivity(activity, detail) {
+  if (activity === "in-turn") return status("working", "working (transcript)", "transcript", detail);
+  if (activity === "idle") return status("idle", "idle (transcript)", "transcript", detail);
+  if (activity !== void 0 && activity !== "") return status("unknown", `unknown (${activity})`, "transcript", detail, `activity ${activity}`);
+  return status("unknown", "unknown", "none", detail);
+}
+function liveStatus(x, detail = null) {
+  if (x.program_status !== void 0) return fromProgram(x.program_status);
+  return fromActivity(x.activity, detail);
+}
+function sessionStatus(s, pending) {
+  if (pending !== null) return status("needs-you", `needs you (${pending.kind})`, "pending");
+  if (s.state !== ACTIVE) {
+    const known = LIFECYCLE[s.state];
+    return status("lifecycle", known ?? s.state, "lifecycle", s.reason ?? null, known === void 0 ? `state ${s.state}` : null);
+  }
+  return liveStatus(s);
+}
+function agentStatus(a) {
+  if (a.suspended) return status("lifecycle", "suspended", "lifecycle", a.unavailable_reason ?? null);
+  if (!a.running) return status("lifecycle", LIFECYCLE[a.state] ?? "not running", "lifecycle", a.unavailable_reason ?? null);
+  const unavailable = !a.available ? `unavailable${a.unavailable_reason ? `: ${a.unavailable_reason}` : ""}` : null;
+  const live = liveStatus(a, unavailable);
+  return unavailable !== null && live.detail === null ? { ...live, detail: cleanLine(unavailable) } : live;
+}
+function urgency(s) {
+  return URGENCY[s.kind];
+}
+function mostUrgent(list) {
+  let best = null;
+  for (const s of list) if (best === null || urgency(s) < urgency(best)) best = s;
+  return best;
+}
+
+// src/vm/agents.ts
+var CITY_GROUP = "city";
+function rigKey(rig) {
+  return `rig:${rig}`;
+}
+function nonEmpty(...values) {
+  for (const v of values) if (v !== void 0 && v.trim() !== "") return v;
+  return null;
+}
+function poolText(a) {
+  if (a.pool === void 0 || a.pool_limits === void 0) return null;
+  const { min, max } = a.pool_limits;
+  return `pool ${min}–${max < 0 ? "unlimited" : max}`;
+}
+function boardTitles(s) {
+  const titles = /* @__PURE__ */ new Map();
+  for (const list of [s.ready.value, s.inProgress.value, s.closed.seed.value]) for (const b of list?.items ?? []) titles.set(b.id, b.title);
+  for (const c of s.closed.recent) titles.set(c.bead.id, c.bead.title);
+  return titles;
+}
+function activeBead(id, titles, beads) {
+  if (id === void 0 || id === "") return null;
+  const clean = cleanLine(id);
+  const onBoard = titles.get(id);
+  if (onBoard !== void 0) return { id: clean, title: cleanLine(onBoard), note: null };
+  const fetched = beads.get(id);
+  if (fetched?.value) return { id: clean, title: cleanLine(fetched.value.title), note: null };
+  if (fetched?.error) return { id: clean, title: null, note: `title unavailable: ${errorText(fetched.error)}` };
+  return { id: clean, title: null, note: "loading title" };
+}
+function unreadableRows(kind, list) {
+  return list.map((u) => ({
+    kind,
+    text: `unreadable ${kind} ${u.id === null ? `(entry ${u.index})` : cleanLine(u.id)}: ${errorText(u.error)}`
+  }));
+}
+function partialBanner(what, partial2, errors) {
+  if (!partial2 && errors.length === 0) return [];
+  const detail = errors.length > 0 ? errors.map(cleanLine).join("; ") : "gc did not say why";
+  return [`gc's ${what} list is partial: ${detail}`];
+}
+function agentsModel(input) {
+  const { snapshot: s, now, selected, collapsed } = input;
+  const rigs = s.rigs.value?.items ?? [];
+  const agents = s.agents.value?.items ?? [];
+  const sessionList = s.sessions.value;
+  const titles = boardTitles(s);
+  const drift3 = /* @__PURE__ */ new Set();
+  const pending = /* @__PURE__ */ new Map();
+  for (const p of s.pending.value?.items ?? []) pending.set(p.session_id, { kind: p.kind, requestId: p.request_id });
+  const row = (x) => {
+    const status2 = sessionStatus(x, pending.get(x.id) ?? null);
+    if (status2.unrecognized !== null) drift3.add(status2.unrecognized);
+    return {
+      id: cleanLine(x.id),
+      label: cleanLine(nonEmpty(x.alias, x.display_name, x.title, x.session_name) ?? x.id),
+      status: status2,
+      activeBead: activeBead(x.active_bead, titles, s.beads),
+      attached: x.attached,
+      transport: x.transport === void 0 ? null : cleanLine(x.transport),
+      selected: x.id === selected
+    };
+  };
+  const byName = new Map(agents.map((a) => [a.name, a]));
+  const joined = /* @__PURE__ */ new Map();
+  const other = [];
+  for (const x of sessionList?.items ?? []) {
+    const owner = (x.agent_name !== void 0 ? byName.get(x.agent_name) : void 0) ?? byName.get(x.template);
+    if (!owner) {
+      other.push(row(x));
+      continue;
+    }
+    const rows = joined.get(owner.name) ?? [];
+    rows.push(row(x));
+    joined.set(owner.name, rows);
+  }
+  const agentRow2 = (a) => {
+    const rows = joined.get(a.name) ?? [];
+    const own2 = agentStatus(a);
+    if (rows.length === 0 && own2.unrecognized !== null) drift3.add(own2.unrecognized);
+    return {
+      name: cleanLine(a.name),
+      label: cleanLine(nonEmpty(a.display_name) ?? a.name),
+      pool: poolText(a),
+      status: mostUrgent(rows.map((r) => r.status)) ?? own2,
+      sessions: rows
+    };
+  };
+  const groups = /* @__PURE__ */ new Map();
+  const group = (key, make) => {
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, ...make(), collapsed: collapsed.has(key), agents: [] };
+      groups.set(key, g);
+    }
+    return g;
+  };
+  for (const r of rigs) {
+    group(rigKey(r.name), () => ({
+      title: `rig: ${cleanLine(r.name)}`,
+      counts: `${r.agent_count} agents · ${r.running_count} running`,
+      suspended: r.suspended,
+      listed: true
+    }));
+  }
+  const unlisted = [...new Set(agents.map((a) => a.rig).filter((r) => r !== void 0 && r !== "" && !groups.has(rigKey(r))))].sort();
+  for (const r of unlisted) group(rigKey(r), () => ({ title: `rig: ${cleanLine(r)}`, counts: null, suspended: false, listed: false }));
+  for (const a of agents) {
+    const key = a.rig !== void 0 && a.rig !== "" ? rigKey(a.rig) : CITY_GROUP;
+    const g = group(key, () => ({ title: "city", counts: null, suspended: false, listed: true }));
+    if (!g.collapsed) g.agents.push(agentRow2(a));
+  }
+  const banners = [];
+  if (sessionList?.truncated) {
+    banners.push(`showing ${sessionList.items.length + sessionList.unreadable.length} of ${sessionList.total} sessions`);
+  }
+  banners.push(...partialBanner("rig", s.rigs.value?.partial, s.rigs.value?.partial_errors ?? []));
+  banners.push(...partialBanner("agent", s.agents.value?.partial, s.agents.value?.partial_errors ?? []));
+  banners.push(...partialBanner("session", sessionList?.partial, sessionList?.partialErrors ?? []));
+  banners.push(...partialBanner("pending", s.pending.value?.partial, s.pending.value?.partial_errors ?? []));
+  const unreadable = [
+    ...unreadableRows("rig", s.rigs.value?.unreadable ?? []),
+    ...unreadableRows("agent", s.agents.value?.unreadable ?? []),
+    ...unreadableRows("session", sessionList?.unreadable ?? []),
+    ...unreadableRows("pending", s.pending.value?.unreadable ?? [])
+  ];
+  const region = regionModel([
+    ["sessions", domainFreshness(s, "sessions", now)],
+    ["agents", domainFreshness(s, "agents", now)],
+    ["rigs", domainFreshness(s, "rigs", now)],
+    ["pending", domainFreshness(s, "pending", now)]
+  ]);
+  return {
+    region,
+    groups: [...groups.values()],
+    other,
+    unreadable,
+    banners,
+    needsYou: pending.size,
+    drift: [...drift3]
+  };
+}
+
+// src/vm/detail.ts
+function capabilities(c) {
+  const names = [];
+  if (c.supports_follow_up) names.push("follow-up");
+  if (c.supports_interrupt_now) names.push("interrupt");
+  if (c.supports_steer) names.push("steer");
+  return names.length > 0 ? names.join(", ") : "none";
+}
+function facts(x) {
+  const out = [
+    ["id", x.id],
+    ["state", `${x.state}, ${x.running ? "running" : "not running"}`],
+    ["provider", x.provider]
+  ];
+  if (x.transport !== void 0) out.push(["transport", x.transport]);
+  out.push(["attached", x.attached ? "yes" : "no"]);
+  if (x.active_bead !== void 0 && x.active_bead !== "") out.push(["active bead", x.active_bead]);
+  if (x.last_active !== void 0) out.push(["last active", x.last_active]);
+  if (x.submission_capabilities !== void 0) out.push(["input", capabilities(x.submission_capabilities)]);
+  return out.map(([k, v]) => [k, cleanLine(v)]);
+}
+function wakeText(s) {
+  if (!s || s.value === null) return s?.error ? `unavailable: ${errorText(s.error)}` : "loading";
+  if (!s.value.listed) return "gc did not list this session under its template";
+  return s.value.reasons.length > 0 ? s.value.reasons.map(cleanLine).join(", ") : "none";
+}
+function pendingView(s) {
+  if (!s || s.value === null) return s?.error ? { kind: "failed", error: errorText(s.error) } : { kind: "loading" };
+  if (!s.value.supported) return { kind: "unsupported" };
+  const p = s.value.pending;
+  if (!p) return { kind: "none" };
+  return {
+    kind: "prompt",
+    requestId: cleanLine(p.request_id),
+    promptKind: cleanLine(p.kind),
+    prompt: p.prompt === void 0 ? null : cleanText(p.prompt),
+    options: p.options.map(cleanLine)
+  };
+}
+function detailModel(input) {
+  const { snapshot: s, now, selected } = input;
+  if (selected === null) return { kind: "none" };
+  const x = s.sessions.value?.items.find((i) => i.id === selected);
+  if (!x) return { kind: "gone", id: cleanLine(selected), text: `session ${cleanLine(selected)} is no longer listed by gc` };
+  const p = s.pending.value?.items.find((i) => i.session_id === x.id);
+  const peek = s.peeks.get(x.id);
+  const peekFreshness = peek ? freshness(peek, now, { intervalMs: CADENCE.peek.onScreenMs, confirmedAt: null }) : { kind: "never", error: null };
+  const output = peek?.value ? cleanText(peek.value.last_output ?? "") : null;
+  const label2 = x.alias ?? x.display_name ?? (x.title !== "" ? x.title : x.session_name);
+  const detail = s.details.get(x.id);
+  return {
+    kind: "session",
+    id: cleanLine(x.id),
+    title: cleanLine(`${x.agent_name ?? x.template} / ${label2}`),
+    status: sessionStatus(x, p ? { kind: p.kind, requestId: p.request_id } : null),
+    facts: facts(x),
+    output: { text: output === null ? null : output === "" ? "(no output)" : output, region: regionModel([["output", peekFreshness]]) },
+    wakeReasons: wakeText(detail?.wakeReasons),
+    pending: pendingView(detail?.pending)
+  };
+}
+
+// src/vm/diagnostics.ts
+var DIAGNOSTICS_LIMIT = 100;
+function syncErrorText(e) {
+  switch (e.kind) {
+    case "listener-failed":
+      return cleanLine(`an app-wide listener failed: ${e.message}`);
+    case "step-crashed":
+      return cleanLine(`a refresh step crashed: ${e.message}`);
+    case "step-stalled":
+      return `a refresh step made no progress for ${Math.round(e.idleMs / 1e3)} s and was abandoned`;
+    default:
+      return errorText(e);
+  }
+}
+function iso(ms) {
+  return `${new Date(ms).toISOString().slice(0, 19)}Z`;
+}
+function diagnosticsModel(input) {
+  const failures = [...input.entries].sort((a, b) => b.at - a.at).slice(0, DIAGNOSTICS_LIMIT).map((e) => ({ at: iso(e.at), source: cleanLine(e.source), text: syncErrorText(e.error) }));
+  const unreadable = (input.unreadable ?? []).map((u) => ({ at: null, source: "gc", text: cleanLine(u) }));
+  const drift3 = input.drift.map((d) => ({ at: null, source: "gc", text: cleanLine(`value this version does not know: ${d}`) }));
+  return [...failures, ...unreadable, ...drift3];
+}
+
+// src/vm/header.ts
+var SOURCE_LABELS = {
+  setting: "apiUrl setting",
+  "gc-reported": "gc supervisor status",
+  "supervisor-config": "~/.gc/supervisor.toml",
+  default: "built-in default"
+};
+function cityLabel(c) {
+  return cleanLine(c.running ? "running" : c.status ?? "stopped");
+}
+function attemptLine(a) {
+  const label2 = SOURCE_LABELS[a.source];
+  switch (a.outcome) {
+    case "absent":
+      return `${label2}: ${a.detail}`;
+    case "unavailable":
+      return `${label2}: ${errorText(a.error)}`;
+    case "refused":
+      return `${label2}: ${a.url} refused: ${errorText(a.error)}`;
+    case "unreachable":
+      return `${label2}: ${a.url} unreachable: ${errorText(a.error)}`;
+    case "ok":
+      return `${label2}: ${a.url} ok (gc ${a.version})`;
+  }
+}
+function noEndpointChip(failure2) {
+  if (failure2.reason === "refused") {
+    const url = failure2.error.kind === "not-loopback" ? failure2.error.url : "";
+    return `refusing ${url} (${SOURCE_LABELS[failure2.source]}): ${LOOPBACK_ONLY}`;
+  }
+  if (failure2.reason === "invalid") {
+    const what = failure2.source === "setting" ? "gascity.settings" : SOURCE_LABELS[failure2.source];
+    return `cannot use ${what}: ${errorText(failure2.error)}`;
+  }
+  const tried = failure2.attempts.filter((a) => a.outcome === "unreachable");
+  const first = tried[0];
+  if (!first) return "gc not reachable";
+  const more = tried.length > 1 ? `; ${tried.length - 1} more tried` : "";
+  return `gc not reachable at ${first.url} (${SOURCE_LABELS[first.source]})${more}`;
+}
+function isTransport(e) {
+  return e.kind === "unreachable" || e.kind === "timeout";
+}
+function noticeBanner(n, version2) {
+  switch (n.kind) {
+    case "write-grant-required":
+      return `This city requires signed write grants; the Herdr mod does not mint them, so it is read-only here (gc: ${n.detail}).`;
+    case "read-grant-required":
+      return `This city requires signed read grants; the Herdr mod does not mint them, so it cannot show this city's data (gc: ${n.detail}).`;
+    case "read-only":
+      return `gc serves this API read-only (${n.detail}).`;
+    case "api-missing":
+      return `gc ${version2} lacks ${n.operationId}: update gc.`;
+  }
+}
+function runningChip(notices, live) {
+  if (live?.connection.kind === "backing-off") {
+    const s = Math.max(0, Math.ceil((live.connection.retryAt - live.now) / 1e3));
+    return { tone: "warn", text: `reconnecting in ${s} s (${errorText(live.connection.cause)})` };
+  }
+  if (notices.some((n) => n.kind === "read-grant-required")) return { tone: "error", text: "read grant required" };
+  const readOnly = notices.find((n) => n.kind === "read-only");
+  if (readOnly) return { tone: "warn", text: "read-only server" };
+  const missing = notices.find((n) => n.kind === "api-missing");
+  if (missing) return { tone: "warn", text: `gc too old (needs ${missing.operationId})` };
+  if (notices.some((n) => n.kind === "write-grant-required")) return { tone: "warn", text: "connected, read-only" };
+  if (live?.connection.kind === "connecting") return { tone: "busy", text: "connecting" };
+  return { tone: "ok", text: "connected" };
+}
+function chipOf(state, live) {
+  switch (state.phase) {
+    case "discovering":
+      return { tone: "busy", text: "looking for gc" };
+    case "no-endpoint":
+      return { tone: "error", text: noEndpointChip(state.failure) };
+    case "listing":
+      return { tone: "busy", text: `loading cities from ${state.endpoint.url}` };
+    case "cities-failed": {
+      const e = state.error;
+      if (isTransport(e)) return { tone: "error", text: `gc not reachable at ${state.endpoint.url} (${SOURCE_LABELS[state.endpoint.source]})` };
+      return { tone: "error", text: errorText(e) };
+    }
+    case "choose-city":
+      return { tone: "warn", text: state.cities.items.length === 0 ? "gc manages no cities" : "choose a city" };
+    case "city-unknown":
+      return { tone: "error", text: `city "${state.city}" is not registered with gc at ${state.endpoint.url}` };
+    case "city-stopped": {
+      const status2 = state.cause === "api" ? "gc answered: not running" : state.city.status ?? "not running";
+      const error = state.city.error ? `: ${state.city.error}` : "";
+      return { tone: "warn", text: `city stopped (${status2})${error}` };
+    }
+    case "city-running":
+      return runningChip(state.notices, live);
+  }
+}
+function headerModel(m, hostErrors = [], live = null) {
+  const { state, copy } = m;
+  const endpoint = "endpoint" in state ? state.endpoint : null;
+  const cities = "cities" in state ? state.cities : null;
+  const cityName = state.phase === "city-running" || state.phase === "city-stopped" ? state.city.name : state.phase === "city-unknown" ? state.city : null;
+  const banners = [];
+  if ((state.phase === "city-running" || state.phase === "city-stopped") && endpoint) {
+    for (const n of state.notices) banners.push(noticeBanner(n, endpoint.version));
+  }
+  if (cities && cities.unreadable.length > 0) {
+    const n = cities.unreadable.length;
+    banners.push(`${n} city ${n === 1 ? "entry" : "entries"} from gc could not be read (see diagnostics).`);
+  }
+  for (const e of hostErrors) banners.push(`Herdr: ${errorText(e)}.`);
+  const attempts = endpoint ? endpoint.attempts : state.phase === "no-endpoint" ? state.failure.attempts : [];
+  const diagnostics2 = attempts.map(attemptLine);
+  if (state.phase === "no-endpoint" && state.failure.reason === "invalid") {
+    diagnostics2.push(`${SOURCE_LABELS[state.failure.source]}: ${errorText(state.failure.error)}`);
+  }
+  for (const u of cities?.unreadable ?? []) {
+    diagnostics2.push(`unreadable city ${u.id ?? "(no name)"} (items[${u.index}]): ${errorText(u.error)}`);
+  }
+  const offerChoice = copy.pinned === null && cities !== null && (state.phase === "choose-city" || state.phase === "city-unknown" || state.phase === "city-running" || state.phase === "city-stopped");
+  const choices = offerChoice ? cities.items.filter((c) => c.name !== cityName).map((c) => ({ name: c.name, label: cityLabel(c) })) : null;
+  const running = state.phase === "city-running" ? live : null;
+  const chip = chipOf(state, running);
+  const needsYou = running && running.needsYou > 0 ? `${running.needsYou} ${running.needsYou === 1 ? "needs" : "need"} you` : null;
+  return {
+    chip: { tone: chip.tone, text: cleanLine(chip.text) },
+    endpoint: endpoint ? cleanLine(`gc ${endpoint.version} at ${endpoint.url} (from ${SOURCE_LABELS[endpoint.source]})`) : null,
+    city: cityName === null ? null : cleanLine(copy.pinned !== null ? `${cityName} (pinned)` : cityName),
+    others: (cities?.items ?? []).filter((c) => c.name !== cityName).map((c) => ({ name: cleanLine(c.name), running: c.running, label: cityLabel(c) })),
+    banners: banners.map(cleanLine),
+    choices,
+    canRetry: state.phase !== "discovering" && state.phase !== "listing",
+    diagnostics: diagnostics2.map(cleanLine),
+    needsYou,
+    age: running ? running.age : null
+  };
+}
+
+// src/vm/probe.ts
+var PROBE_SCHEMA = "gascity-herdr-probe/2";
+function probeSession(r, agent, group) {
+  return {
+    id: r.id,
+    label: r.label,
+    agent,
+    group,
+    status: r.status.label,
+    status_kind: r.status.kind,
+    status_source: r.status.source,
+    attached: r.attached,
+    active_bead: r.activeBead?.id ?? null
+  };
+}
+function sessionsOf(agents) {
+  if (agents === null) return [];
+  const out = [];
+  for (const g of agents.groups) for (const a of g.agents) for (const r of a.sessions) out.push(probeSession(r, a.name, g.key));
+  for (const r of agents.other) out.push(probeSession(r, null, null));
+  return out;
+}
+var card = (b) => ({ id: cleanLine(b.id), title: cleanLine(b.title) });
+function probeDocument(input) {
+  const { machine, header, snapshot: s, detail } = input;
+  const state = machine.state;
+  const endpoint = "endpoint" in state ? state.endpoint : null;
+  return {
+    schema: PROBE_SCHEMA,
+    mod_version: input.modVersion,
+    herdr_version: input.herdrVersion,
+    connection: { text: header.chip.text, tone: header.chip.tone },
+    discovery: endpoint ? { source: endpoint.source, url: endpoint.url, version: cleanLine(endpoint.version) } : null,
+    city: state.phase === "city-running" || state.phase === "city-stopped" ? cleanLine(state.city.name) : null,
+    city_phase: state.phase,
+    visibility: { on_screen: input.onScreen },
+    keyboard: input.keyboard,
+    needs_you: input.agents?.needsYou ?? 0,
+    data_age: input.agents?.region.age ?? null,
+    sessions: sessionsOf(input.agents),
+    board: {
+      ready: (s?.ready.value?.items ?? []).map(card),
+      in_progress: (s?.inProgress.value?.items ?? []).map(card),
+      closed_ring: (s?.closed.recent ?? []).map((c) => ({
+        ...card(c.bead),
+        seq: c.seq,
+        close_reason: c.bead.close_reason === void 0 ? null : cleanLine(c.bead.close_reason)
+      }))
+    },
+    detail: detail.kind !== "session" ? null : {
+      session: detail.id,
+      status: detail.status.label,
+      output: detail.output.text,
+      wake_reasons: detail.wakeReasons,
+      pending: detail.pending
+    },
+    actions: [],
+    exec_log: input.execLog.map((e) => ({ at: e.at, kind: e.kind, argv: [...e.argv] })),
+    errors: [...input.diagnostics],
+    refresh_count: input.refreshCount,
+    fetch_in_flight_max: input.fetchInFlightMax
+  };
+}
+
+// src/copy.ts
+var CITY_SCOPED = /* @__PURE__ */ new Set(["city-not-running", "write-grant-required", "read-grant-required", "read-only", "api-missing"]);
+function isCityScoped(e) {
+  return e !== null && CITY_SCOPED.has(e.kind);
+}
+var HOST_ERROR_LIMIT = 20;
+var CopyController = class {
+  constructor(deps) {
+    this.deps = deps;
+  }
+  deps;
+  selected = null;
+  collapsed = /* @__PURE__ */ new Set();
+  diagnosticsOpen = false;
+  refreshCount = 0;
+  onScreen = true;
+  cities = null;
+  citiesRev = -1;
+  city = null;
+  peek = null;
+  signature = "";
+  closed = false;
+  /** City-scoped errors already fed to the machine (each failure is a new object). */
+  applied = /* @__PURE__ */ new WeakSet();
+  /** Discovers gc's API and the cities; run it in a task of this copy (init). */
+  discover(task) {
+    return this.deps.discovery.run(task);
+  }
+  /**
+   * This copy's periodic timer (every TICK_MS) and nothing else calls this:
+   * subscribes and unsubscribes as the machine says, ticks the shared city
+   * list and city store, and writes the probe. Returns true when the view
+   * should be redrawn.
+   */
+  tick() {
+    if (this.closed) return false;
+    const { registry: registry3, discovery, clock } = this.deps;
+    this.readVisibility();
+    registry3.setOnScreen(this.onScreen);
+    const before = discovery.machine.state;
+    this.followCities("endpoint" in before ? before.endpoint.url : null, before.phase !== "city-running");
+    const state = discovery.machine.state;
+    const endpoint = "endpoint" in state ? state.endpoint : null;
+    const running = state.phase === "city-running" && endpoint !== null ? state.city.name : null;
+    this.followCity(endpoint !== null && running !== null ? { apiUrl: endpoint.url, city: running } : null);
+    this.followDetail();
+    const s = this.city?.snapshot();
+    if (s && running !== null) {
+      for (const slot of [s.rigs, s.agents, s.sessions, s.pending, s.events]) {
+        const error = slot.error;
+        if (!isCityScoped(error) || this.applied.has(error)) continue;
+        this.applied.add(error);
+        discovery.apply({ type: "city-error", city: running, error });
+      }
+      if (discovery.machine.state.phase !== "city-running") this.followCity(null);
+    }
+    if (this.deps.host.probeEnabled()) this.writeProbe(clock.now());
+    const signature = [
+      this.machineVersion(),
+      this.citiesRev,
+      this.city?.snapshot().rev ?? -1,
+      this.onScreen,
+      this.selected
+    ].join("|");
+    if (signature === this.signature) return false;
+    this.signature = signature;
+    return true;
+  }
+  /** The copy closes: unsubscribe everything. Starts nothing. */
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.peek?.release();
+    this.peek = null;
+    this.city?.unsubscribe();
+    this.city = null;
+    this.cities?.unsubscribe();
+    this.cities = null;
+  }
+  /** The view-models for render (and the probe). */
+  view(now) {
+    const { discovery } = this.deps;
+    const s = this.city?.snapshot() ?? null;
+    const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed }) : null;
+    const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
+    const citiesError = this.cities?.snapshot().error;
+    return {
+      header: headerModel(discovery.machine, discovery.hostErrors, live),
+      agents,
+      detail: s ? detailModel({ snapshot: s, now, selected: this.selected }) : { kind: "none" },
+      diagnostics: diagnosticsModel({
+        entries: [
+          ...s?.errors ?? [],
+          ...citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : [],
+          ...this.deps.probe.errors()
+        ],
+        drift: agents?.drift ?? [],
+        unreadable: agents?.unreadable.map((u) => u.text) ?? []
+      }),
+      diagnosticsOpen: this.diagnosticsOpen,
+      refreshCount: this.refreshCount,
+      onScreen: this.onScreen
+    };
+  }
+  // ---- actions (buttons; later also keys and commands) -------------------------
+  /**
+   * "Retry now". With a running city: refetch everything now, including held
+   * data, a backing-off endpoint's probe and the open detail, keeping what is
+   * shown meanwhile. Without one: rediscover gc's API and the cities.
+   */
+  retry(task) {
+    this.refreshCount++;
+    this.cities?.refresh();
+    if (this.city) {
+      this.city.retryNow();
+      this.city.refresh(ALL_DOMAINS);
+      if (this.selected !== null) this.city.refreshDetail(this.selected);
+      return Promise.resolve();
+    }
+    return this.discover(task);
+  }
+  /** The person chose a city (unpinned copies). */
+  selectCity(city) {
+    this.deps.discovery.select(city);
+  }
+  /** Opens (or, with null, closes) the detail of a session. */
+  selectSession(id) {
+    this.selected = id;
+    this.followDetail();
+  }
+  /** Collapses or expands a rig group. */
+  toggleGroup(key) {
+    if (!this.collapsed.delete(key)) this.collapsed.add(key);
+  }
+  toggleDiagnostics() {
+    this.diagnosticsOpen = !this.diagnosticsOpen;
+  }
+  // ---- subscriptions --------------------------------------------------------------
+  readVisibility() {
+    const v = this.deps.host.visibility();
+    if (v.ok) {
+      this.onScreen = mayBeOnScreen(v.value);
+      return;
+    }
+    this.onScreen = true;
+    this.hostError(v.error);
+  }
+  hostError(error) {
+    const errors = this.deps.discovery.hostErrors;
+    const text = JSON.stringify(error);
+    if (errors.some((e) => JSON.stringify(e) === text)) return;
+    this.deps.discovery.hostErrors = [...errors, error].slice(-HOST_ERROR_LIMIT);
+  }
+  followCities(apiUrl, fast) {
+    if (this.cities && this.cities.apiUrl !== apiUrl) {
+      this.cities.unsubscribe();
+      this.cities = null;
+    }
+    if (!this.cities && apiUrl !== null) {
+      const made = this.deps.registry.subscribeCities(apiUrl);
+      if (!made.ok) {
+        this.hostError(made.error);
+        return;
+      }
+      this.cities = made.value;
+      this.citiesRev = -1;
+    }
+    if (!this.cities) return;
+    const rev = this.cities.tick(fast);
+    if (rev === this.citiesRev) return;
+    this.citiesRev = rev;
+    const value = this.cities.snapshot().value;
+    if (value !== null) this.deps.discovery.apply({ type: "cities", result: { ok: true, value } });
+  }
+  followCity(key) {
+    const cur = this.city;
+    if (cur && (key === null || cur.key.city !== key.city || cur.key.apiUrl !== key.apiUrl)) {
+      this.peek?.release();
+      this.peek = null;
+      cur.unsubscribe();
+      this.city = null;
+    }
+    if (!this.city && key !== null) {
+      const made = this.deps.registry.subscribe(key);
+      if (!made.ok) {
+        this.hostError(made.error);
+        return;
+      }
+      this.city = made.value;
+      this.applied = /* @__PURE__ */ new WeakSet();
+    }
+    this.city?.tick();
+  }
+  followDetail() {
+    const want = this.city !== null ? this.selected : null;
+    if (this.peek && this.peek.id !== want) {
+      this.peek.release();
+      this.peek = null;
+    }
+    if (!this.peek && want !== null && this.city) this.peek = { id: want, release: this.city.watchPeek(want) };
+  }
+  machineVersion() {
+    const m = this.deps.discovery.machine;
+    return `${m.state.phase}:${selectedCity(m.state) ?? ""}:${machineIds.get(m) ?? remember(m)}:${this.deps.discovery.hostErrors.length}`;
+  }
+  writeProbe(now) {
+    const v = this.view(now);
+    const s = this.city?.snapshot() ?? null;
+    this.deps.probe.offer(probeDocument({
+      modVersion: MOD_VERSION,
+      herdrVersion: this.deps.host.herdrVersion(),
+      machine: this.deps.discovery.machine,
+      header: v.header,
+      onScreen: this.onScreen,
+      keyboard: false,
+      agents: v.agents,
+      snapshot: s,
+      detail: v.detail,
+      diagnostics: v.diagnostics,
+      execLog: this.deps.host.execLog(),
+      refreshCount: this.refreshCount,
+      fetchInFlightMax: this.deps.registry.budgetStats().maxInFlight
+    }), now, true);
+  }
+};
+var machineIds = /* @__PURE__ */ new WeakMap();
+var machineSeq = 0;
+function remember(m) {
+  const id = ++machineSeq;
+  machineIds.set(m, id);
+  return id;
 }
 
 // src/discovery/supervisorConfig.ts
@@ -3034,9 +5018,20 @@ var SOURCE_NAMES = {
   "supervisor-config": "supervisor.toml",
   default: "the default"
 };
-async function probe(host, client) {
-  const deadline = host.sleep(HEALTH_PROBE_MS).then(() => err({ kind: "timeout", url: `${client.baseUrl}/health`, ms: HEALTH_PROBE_MS }));
-  return Promise.race([getHealth(client), deadline]);
+async function probe(host, url) {
+  const pf = host.probeFetch();
+  const client = createGcClient({ baseUrl: url, fetch: pf.fetch });
+  if (!client.ok) return client;
+  let settled = false;
+  const answer = getHealth(client.value).then((r) => {
+    settled = true;
+    return r;
+  });
+  const deadline = host.sleep(HEALTH_PROBE_MS).then(() => {
+    if (!settled) pf.drop();
+    return err({ kind: "timeout", url: `${client.value.baseUrl}/health`, ms: HEALTH_PROBE_MS });
+  });
+  return Promise.race([answer, deadline]);
 }
 async function resolveEndpoint(host) {
   const attempts = [];
@@ -3085,7 +5080,7 @@ async function resolveEndpoint(host) {
       continue;
     }
     probed.set(url, source);
-    const health = await probe(host, client.value);
+    const health = await probe(host, url);
     if (!health.ok) {
       attempts.push({ source, outcome: "unreachable", url, error: health.error });
       continue;
@@ -3097,7 +5092,7 @@ async function resolveEndpoint(host) {
 }
 
 // src/discovery/controller.ts
-var HOST_ERROR_LIMIT = 20;
+var HOST_ERROR_LIMIT2 = 20;
 var DiscoveryController = class {
   constructor(host, copy) {
     this.host = host;
@@ -3139,200 +5134,480 @@ var DiscoveryController = class {
     this.apply({ type: "select", city });
     if (this.machine === before) return;
     const remembered = this.host.rememberCity(city);
-    if (!remembered.ok) this.hostErrors = [...this.hostErrors, remembered.error].slice(-HOST_ERROR_LIMIT);
+    if (!remembered.ok) this.hostErrors = [...this.hostErrors, remembered.error].slice(-HOST_ERROR_LIMIT2);
   }
 };
 
-// src/vm/errorText.ts
-var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
-function seconds(ms) {
-  return `${Math.round(ms / 1e3)} s`;
-}
-function drift(value) {
-  return isUnrecognized(value) ? value.raw : String(value);
-}
-function errorText(e) {
-  switch (e.kind) {
-    case "unreachable":
-      return `cannot reach ${e.url}: ${e.cause}`;
-    case "timeout":
-      return `no answer from ${e.url} within ${seconds(e.ms)}`;
-    case "too-large":
-      return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
-    case "http": {
-      const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
-      return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
-    }
-    case "csrf-rejected":
-      return "gc refused a change without X-GC-Request (a bug in the mod)";
-    case "read-only":
-      return `gc serves this API read-only (${e.detail})`;
-    case "write-grant-required":
-      return `this city requires a signed write grant (${e.detail})`;
-    case "read-grant-required":
-      return `this city requires a signed read grant (${e.detail})`;
-    case "city-not-running":
-      return `city "${e.city}" is not running`;
-    case "api-missing":
-      return `gc too old (needs ${e.operationId})`;
-    case "decode":
-      return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
-    case "outcome-failed":
-      return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
-    case "outcome-unknown":
-      return `outcome of ${e.operationId} unknown (${e.cause})`;
-    case "exec":
-      return e.code === null ? `${e.argv.join(" ")} did not run: ${e.stderr}` : `${e.argv.join(" ")} exited with code ${e.code}: ${e.stderr}`;
-    case "host-incompatible":
-      return `this herdr-app lacks ${e.missing.join(", ")}`;
-    case "host-decode":
-      return `unreadable ${e.api}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
-    case "host-call":
-      return `${e.api} failed: ${e.cause}`;
-    case "supervisor-config":
-      return `${e.path} line ${e.line}: ${e.issue}`;
-    case "attach-not-started":
-      return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
-    case "not-loopback":
-      return LOOPBACK_ONLY;
+// src/probe.ts
+var PROBE_HEARTBEAT_MS = 5e3;
+var PROBE_WRITE_DEADLINE_MS = 5e3;
+var ERROR_LIMIT = 20;
+var ProbeWriter = class {
+  constructor(io) {
+    this.io = io;
   }
+  io;
+  /** What the file holds, as far as the writer knows; undefined: read it before writing. */
+  expected = void 0;
+  inFlight = null;
+  tokens = 0;
+  lastBody = null;
+  lastWriteAt = -Infinity;
+  seq = 0;
+  failures = [];
+  /** Recent write failures, oldest first. */
+  errors() {
+    return this.failures;
+  }
+  /** Called from a copy's own tick: writes `body` if the probe is on and the document changed or a heartbeat is due. */
+  offer(body, now, enabled) {
+    if (!enabled) return;
+    if (this.inFlight) {
+      if (now - this.inFlight.startedAt < PROBE_WRITE_DEADLINE_MS) return;
+      this.fail(now, { kind: "host-call", api: `writeTextFile(${this.io.path()})`, cause: `no answer within ${PROBE_WRITE_DEADLINE_MS} ms` });
+      this.inFlight = null;
+    }
+    const json = JSON.stringify(body);
+    if (json === this.lastBody && now - this.lastWriteAt < PROBE_HEARTBEAT_MS) return;
+    const token = ++this.tokens;
+    this.inFlight = { token, startedAt: now };
+    const text = `${JSON.stringify({ ...body, seq: ++this.seq, ts: new Date(now).toISOString() }, null, 2)}
+`;
+    const path = this.io.path();
+    const known = this.expected;
+    const expected = known === void 0 ? this.io.read(path) : Promise.resolve({ ok: true, value: known });
+    void expected.then((r) => r.ok ? this.io.write(path, text, r.value) : r).then((r) => {
+      if (this.inFlight?.token !== token) return;
+      this.inFlight = null;
+      if (r.ok) {
+        this.expected = text;
+        this.lastBody = json;
+        this.lastWriteAt = now;
+      } else {
+        this.fail(now, r.error);
+      }
+    });
+  }
+  fail(at2, error) {
+    this.expected = void 0;
+    this.failures = [...this.failures, { at: at2, source: "probe", error }].slice(-ERROR_LIMIT);
+  }
+};
+var shared2 = null;
+function sharedProbeWriter(create) {
+  shared2 ??= create();
+  return shared2;
 }
 
-// src/vm/header.ts
-var SOURCE_LABELS = {
-  setting: "apiUrl setting",
-  "gc-reported": "gc supervisor status",
-  "supervisor-config": "~/.gc/supervisor.toml",
-  default: "built-in default"
+// src/sync/clock.ts
+var systemClock = { now: () => Date.now() };
+
+// src/sync/endpoint.ts
+var PROBE_DEADLINE_MS = RECLAIM_AFTER_MS + 5e3;
+var Endpoint = class _Endpoint {
+  constructor(baseUrl, clients, budget, clock, random) {
+    this.baseUrl = baseUrl;
+    this.clients = clients;
+    this.budget = budget;
+    this.clock = clock;
+    this.random = random;
+  }
+  baseUrl;
+  clients;
+  budget;
+  clock;
+  random;
+  listeners = /* @__PURE__ */ new Set();
+  backoff = null;
+  probe = null;
+  probeTokens = 0;
+  connected = false;
+  /** An endpoint for a loopback API URL; `not-loopback` otherwise. */
+  static create(apiUrl, budget, clock, random) {
+    const clients = {};
+    let baseUrl = apiUrl;
+    for (const p of PRIORITIES) {
+      const made = createGcClient({ baseUrl: apiUrl, fetch: (url, init) => budget.fetchFor(baseUrl, p)(url, init), now: () => clock.now() });
+      if (!made.ok) return err(made.error);
+      baseUrl = made.value.baseUrl;
+      clients[p] = made.value;
+    }
+    return ok(new _Endpoint(baseUrl, clients, budget, clock, random));
+  }
+  /**
+   * The client whose requests queue at `priority`. With a `group` (a sync
+   * step), its queued requests can be dropped together (dropQueued).
+   */
+  client(priority, group = null) {
+    if (group === null) return this.clients[priority];
+    const options = {
+      baseUrl: this.baseUrl,
+      fetch: (url, init) => this.budget.fetchFor(this.baseUrl, priority, group)(url, init),
+      now: () => this.clock.now()
+    };
+    const made = createGcClient(options);
+    return made.ok ? made.value : { baseUrl: this.baseUrl, call: () => Promise.resolve(made) };
+  }
+  /** Drops the group's queued requests (they reject as cancelled and are never sent). Starts nothing. */
+  dropQueued(group) {
+    this.budget.dropQueued(group);
+  }
+  addListener(l) {
+    this.listeners.add(l);
+  }
+  /** Removes a listener; returns how many remain. */
+  removeListener(l) {
+    this.listeners.delete(l);
+    return this.listeners.size;
+  }
+  connection() {
+    if (this.backoff) return { kind: "backing-off", attempt: this.backoff.attempt, retryAt: this.backoff.retryAt, cause: this.backoff.cause };
+    return this.connected ? { kind: "connected" } : { kind: "connecting" };
+  }
+  /** Whether reads are open at `now`, without claiming the probe: "open", "probe" (one is due; token 0) or "wait". */
+  peekGate(now) {
+    if (!this.backoff) return { kind: "open" };
+    if (this.probe && now < this.probe.until) return { kind: "wait", until: this.probe.until };
+    if (now < this.backoff.retryAt) return { kind: "wait", until: this.backoff.retryAt };
+    return { kind: "probe", token: 0 };
+  }
+  /**
+   * Whether a store may read at `now`. While backing off, the first store to
+   * ask after the retry time gets "probe" and must call endProbe(token) when
+   * its one read is done; the others wait for the probe's outcome or its
+   * deadline.
+   */
+  gate(now) {
+    const g = this.peekGate(now);
+    if (g.kind !== "probe") return g;
+    this.probe = { token: ++this.probeTokens, until: now + PROBE_DEADLINE_MS };
+    return { kind: "probe", token: this.probe.token };
+  }
+  /** Ends the probe granted with `token`; a stale token (an expired probe) is ignored. */
+  endProbe(token) {
+    if (this.probe?.token === token) this.probe = null;
+  }
+  /** gc answered a read (any answer that does not back off). */
+  succeeded() {
+    const recovered = this.backoff !== null;
+    const changed = recovered || !this.connected;
+    this.backoff = null;
+    this.probe = null;
+    this.connected = true;
+    if (recovered) this.budget.setDegraded(this.baseUrl, false);
+    if (changed) this.notify(recovered);
+  }
+  /** A read failed in a way that backs off (backoff.ts backsOff): back off (again). */
+  failed(cause) {
+    this.backoff = failBackoff(this.backoff, this.clock.now(), cause, this.random);
+    this.budget.setDegraded(this.baseUrl, true);
+    this.notify(false);
+  }
+  /** "Retry now": the next read is due at once. */
+  retryNow() {
+    if (!this.backoff) return;
+    this.backoff = retryBackoffNow(this.backoff, this.clock.now());
+    this.notify(false);
+  }
+  /** Forgets the endpoint in the budget when the last user goes (from a copy's close: starts nothing). */
+  dispose() {
+    this.budget.forgetEndpoint(this.baseUrl);
+  }
+  notify(recovered) {
+    for (const l of [...this.listeners]) l.endpointChanged(recovered);
+  }
 };
-function cityLabel(c) {
-  return c.running ? "running" : c.status ?? "stopped";
-}
-function attemptLine(a) {
-  const label = SOURCE_LABELS[a.source];
-  switch (a.outcome) {
-    case "absent":
-      return `${label}: ${a.detail}`;
-    case "unavailable":
-      return `${label}: ${errorText(a.error)}`;
-    case "refused":
-      return `${label}: ${a.url} refused: ${errorText(a.error)}`;
-    case "unreachable":
-      return `${label}: ${a.url} unreachable: ${errorText(a.error)}`;
-    case "ok":
-      return `${label}: ${a.url} ok (gc ${a.version})`;
+
+// src/sync/cities.ts
+var CITIES_FAST_MS = 1e4;
+var CITIES_SLOW_MS = 6e4;
+var POLL_DEADLINE_MS = RECLAIM_AFTER_MS + 5e3;
+var CitiesPoller = class {
+  constructor(endpoint, clock) {
+    this.endpoint = endpoint;
+    this.clock = clock;
+    endpoint.addListener(this);
   }
-}
-function noEndpointChip(failure2) {
-  if (failure2.reason === "refused") {
-    const url = failure2.error.kind === "not-loopback" ? failure2.error.url : "";
-    return `refusing ${url} (${SOURCE_LABELS[failure2.source]}): ${LOOPBACK_ONLY}`;
+  endpoint;
+  clock;
+  snap = { rev: 0, value: null, fetchedAt: null, error: null };
+  last = null;
+  wanted = false;
+  poll = null;
+  disposed = false;
+  snapshot() {
+    return this.snap;
   }
-  if (failure2.reason === "invalid") {
-    const what = failure2.source === "setting" ? "gascity.settings" : SOURCE_LABELS[failure2.source];
-    return `cannot use ${what}: ${errorText(failure2.error)}`;
-  }
-  const tried = failure2.attempts.filter((a) => a.outcome === "unreachable");
-  const first = tried[0];
-  if (!first) return "gc not reachable";
-  const more = tried.length > 1 ? `; ${tried.length - 1} more tried` : "";
-  return `gc not reachable at ${first.url} (${SOURCE_LABELS[first.source]})${more}`;
-}
-function isTransport(e) {
-  return e.kind === "unreachable" || e.kind === "timeout";
-}
-function noticeBanner(n, version2) {
-  switch (n.kind) {
-    case "write-grant-required":
-      return `This city requires signed write grants; the Herdr mod does not mint them, so it is read-only here (gc: ${n.detail}).`;
-    case "read-grant-required":
-      return `This city requires signed read grants; the Herdr mod does not mint them, so it cannot show this city's data (gc: ${n.detail}).`;
-    case "read-only":
-      return `gc serves this API read-only (${n.detail}).`;
-    case "api-missing":
-      return `gc ${version2} lacks ${n.operationId}: update gc.`;
-  }
-}
-function runningChip(notices) {
-  if (notices.some((n) => n.kind === "read-grant-required")) return { tone: "error", text: "read grant required" };
-  const readOnly = notices.find((n) => n.kind === "read-only");
-  if (readOnly) return { tone: "warn", text: "read-only server" };
-  const missing = notices.find((n) => n.kind === "api-missing");
-  if (missing) return { tone: "warn", text: `gc too old (needs ${missing.operationId})` };
-  if (notices.some((n) => n.kind === "write-grant-required")) return { tone: "warn", text: "connected, read-only" };
-  return { tone: "ok", text: "connected" };
-}
-function chipOf(state) {
-  switch (state.phase) {
-    case "discovering":
-      return { tone: "busy", text: "looking for gc" };
-    case "no-endpoint":
-      return { tone: "error", text: noEndpointChip(state.failure) };
-    case "listing":
-      return { tone: "busy", text: `loading cities from ${state.endpoint.url}` };
-    case "cities-failed": {
-      const e = state.error;
-      if (isTransport(e)) return { tone: "error", text: `gc not reachable at ${state.endpoint.url} (${SOURCE_LABELS[state.endpoint.source]})` };
-      return { tone: "error", text: errorText(e) };
+  /**
+   * Called by a subscribed copy in its own turn; `fast` when that copy shows
+   * no running city. Starts a poll if one is due and none is running.
+   */
+  tick(starter, fast) {
+    if (this.disposed) return;
+    const now = this.clock.now();
+    if (this.poll) {
+      if (now - this.poll.startedAt <= POLL_DEADLINE_MS) return;
+      this.abandon();
     }
-    case "choose-city":
-      return { tone: "warn", text: state.cities.items.length === 0 ? "gc manages no cities" : "choose a city" };
-    case "city-unknown":
-      return { tone: "error", text: `city "${state.city}" is not registered with gc at ${state.endpoint.url}` };
-    case "city-stopped": {
-      const status = state.cause === "api" ? "gc answered: not running" : state.city.status ?? "not running";
-      const error = state.city.error ? `: ${state.city.error}` : "";
-      return { tone: "warn", text: `city stopped (${status})${error}` };
+    const interval = fast ? CITIES_FAST_MS : CITIES_SLOW_MS;
+    if (!this.wanted && this.last !== null && now < this.last + interval) return;
+    const gate = this.endpoint.gate(now);
+    if (gate.kind === "wait") return;
+    const poll = { starter, startedAt: now, probe: gate.kind === "probe" ? gate.token : null };
+    this.poll = poll;
+    this.wanted = false;
+    this.last = now;
+    void listCities(this.endpoint.client("snapshot", poll)).then((r) => this.settle(poll, r));
+  }
+  /** Polls at the next tick (a city.* event, "retry now"). */
+  refresh() {
+    this.wanted = true;
+  }
+  /** The copy `starter` closes: drop the poll it started. Starts nothing. */
+  abandonStartedBy(starter) {
+    if (this.poll?.starter === starter) {
+      this.abandon();
+      this.wanted = true;
     }
-    case "city-running":
-      return runningChip(state.notices);
   }
+  dispose() {
+    this.abandon();
+    this.disposed = true;
+    this.endpoint.removeListener(this);
+  }
+  endpointChanged(recovered) {
+    if (recovered) this.wanted = true;
+  }
+  abandon() {
+    const poll = this.poll;
+    if (!poll) return;
+    this.poll = null;
+    if (poll.probe !== null) this.endpoint.endProbe(poll.probe);
+    this.endpoint.dropQueued(poll);
+  }
+  settle(poll, r) {
+    if (poll.probe !== null) this.endpoint.endProbe(poll.probe);
+    if (this.poll !== poll || this.disposed) return;
+    this.poll = null;
+    const now = this.clock.now();
+    if (r.ok) {
+      this.endpoint.succeeded();
+      this.snap = { rev: this.snap.rev + 1, value: r.value, fetchedAt: now, error: null };
+      return;
+    }
+    if (r.error.kind === "cancelled") {
+      this.wanted = true;
+      return;
+    }
+    if (backsOff(r.error)) this.endpoint.failed(r.error);
+    else this.endpoint.succeeded();
+    this.snap = { ...this.snap, rev: this.snap.rev + 1, error: r.error };
+  }
+};
+
+// src/sync/registry.ts
+var TICK_MS = 250;
+function originOf2(url) {
+  return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i.exec(url)?.[0] ?? url;
 }
-function headerModel(m, hostErrors = []) {
-  const { state, copy } = m;
-  const endpoint = "endpoint" in state ? state.endpoint : null;
-  const cities = "cities" in state ? state.cities : null;
-  const cityName = state.phase === "city-running" || state.phase === "city-stopped" ? state.city.name : state.phase === "city-unknown" ? state.city : null;
-  const banners = [];
-  if ((state.phase === "city-running" || state.phase === "city-stopped") && endpoint) {
-    for (const n of state.notices) banners.push(noticeBanner(n, endpoint.version));
+function storeId(apiUrl, city) {
+  return `${apiUrl}\0${city}`;
+}
+var SyncRegistry = class {
+  constructor(deps) {
+    this.deps = deps;
+    this.clock = deps.clock ?? systemClock;
+    this.budget = new FetchBudget(deps.fetch, this.clock);
+    this.random = deps.random ?? Math.random;
   }
-  if (cities && cities.unreadable.length > 0) {
-    const n = cities.unreadable.length;
-    banners.push(`${n} city ${n === 1 ? "entry" : "entries"} from gc could not be read (see diagnostics).`);
+  deps;
+  budget;
+  clock;
+  random;
+  endpoints = /* @__PURE__ */ new Map();
+  stores = /* @__PURE__ */ new Map();
+  pollers = /* @__PURE__ */ new Map();
+  listeners = /* @__PURE__ */ new Set();
+  onScreen = false;
+  /** Subscribes a copy to a city on a loopback gc API; `not-loopback` otherwise. */
+  subscribe(key) {
+    const endpoint = this.endpointFor(key.apiUrl);
+    if (!endpoint.ok) return endpoint;
+    const id = storeId(endpoint.value.baseUrl, key.city);
+    let entry = this.stores.get(id);
+    if (!entry) {
+      const store = new CityStore({ apiUrl: endpoint.value.baseUrl, city: key.city }, {
+        endpoint: endpoint.value,
+        clock: this.clock,
+        onScreen: this.onScreen,
+        emit: (batch) => {
+          if (batch.citiesChanged) this.pollers.get(endpoint.value.baseUrl)?.poller.refresh();
+          for (const l of [...this.listeners]) l(batch);
+        },
+        onError: (k, e) => this.deps.onError?.(k, e)
+      });
+      entry = { store, subs: 0 };
+      this.stores.set(id, entry);
+    }
+    entry.subs++;
+    return ok(this.subscription(id, entry.store, endpoint.value));
   }
-  for (const e of hostErrors) banners.push(`Herdr: ${errorText(e)}.`);
-  const attempts = endpoint ? endpoint.attempts : state.phase === "no-endpoint" ? state.failure.attempts : [];
-  const diagnostics = attempts.map(attemptLine);
-  if (state.phase === "no-endpoint" && state.failure.reason === "invalid") {
-    diagnostics.push(`${SOURCE_LABELS[state.failure.source]}: ${errorText(state.failure.error)}`);
+  /** Subscribes a copy to a loopback gc API's shared city list; `not-loopback` otherwise. */
+  subscribeCities(apiUrl) {
+    const endpoint = this.endpointFor(apiUrl);
+    if (!endpoint.ok) return endpoint;
+    const ep = endpoint.value;
+    let entry = this.pollers.get(ep.baseUrl);
+    if (!entry) {
+      entry = { poller: new CitiesPoller(ep, this.clock), subs: 0 };
+      this.pollers.set(ep.baseUrl, entry);
+    }
+    entry.subs++;
+    const { poller } = entry;
+    const owner = {};
+    let active = true;
+    return ok({
+      apiUrl: ep.baseUrl,
+      snapshot: () => poller.snapshot(),
+      tick: (fast) => {
+        if (active) {
+          this.budget.reclaim();
+          poller.tick(owner, fast);
+        }
+        return poller.snapshot().rev;
+      },
+      refresh: () => {
+        if (active) poller.refresh();
+      },
+      unsubscribe: () => {
+        if (!active) return;
+        active = false;
+        poller.abandonStartedBy(owner);
+        const e = this.pollers.get(ep.baseUrl);
+        if (e && --e.subs <= 0) {
+          this.pollers.delete(ep.baseUrl);
+          poller.dispose();
+          this.releaseEndpoint(ep, poller);
+        }
+      }
+    });
   }
-  for (const u of cities?.unreadable ?? []) {
-    diagnostics.push(`unreadable city ${u.id ?? "(no name)"} (items[${u.index}]): ${errorText(u.error)}`);
+  /**
+   * A fetch for discovery's probes (/health, /v0/cities) through the app-wide
+   * budget, at snapshot priority, so discovery never adds a third request in
+   * flight. A probe that lost its race stays counted until herdr settles it.
+   */
+  probeFetch() {
+    const group = {};
+    return {
+      fetch: (url, init) => this.budget.fetchFor(originOf2(url), "snapshot", group)(url, init),
+      drop: () => {
+        this.budget.dropQueued(group);
+      }
+    };
   }
-  const offerChoice = copy.pinned === null && cities !== null && (state.phase === "choose-city" || state.phase === "city-unknown" || state.phase === "city-running" || state.phase === "city-stopped");
-  const choices = offerChoice ? cities.items.filter((c) => c.name !== cityName).map((c) => ({ name: c.name, label: cityLabel(c) })) : null;
-  return {
-    chip: chipOf(state),
-    endpoint: endpoint ? `gc ${endpoint.version} at ${endpoint.url} (from ${SOURCE_LABELS[endpoint.source]})` : null,
-    city: cityName === null ? null : copy.pinned !== null ? `${cityName} (pinned)` : cityName,
-    others: (cities?.items ?? []).filter((c) => c.name !== cityName).map((c) => ({ name: c.name, running: c.running, label: cityLabel(c) })),
-    banners,
-    choices,
-    canRetry: state.phase !== "discovering" && state.phase !== "listing",
-    diagnostics
-  };
+  /** Sets the app-wide "a gascity view may be on screen" (visibility.ts) for every store. */
+  setOnScreen(onScreen) {
+    this.onScreen = onScreen;
+    for (const { store } of this.stores.values()) store.setOnScreen(onScreen);
+  }
+  /** Registers an app-wide listener for new events of every store; returns the removal. */
+  onEvents(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  /** Live stores. */
+  storeCount() {
+    return this.stores.size;
+  }
+  /** The fetch budget's counters. */
+  budgetStats() {
+    return this.budget.stats();
+  }
+  endpointFor(apiUrl) {
+    const made = Endpoint.create(apiUrl, this.budget, this.clock, this.random);
+    if (!made.ok) return err(made.error);
+    const existing = this.endpoints.get(made.value.baseUrl);
+    if (existing) return ok(existing);
+    this.endpoints.set(made.value.baseUrl, made.value);
+    return made;
+  }
+  /** Drops an endpoint once its last store or poller has gone (from a close: starts nothing). */
+  releaseEndpoint(endpoint, user) {
+    if (endpoint.removeListener(user) > 0) return;
+    endpoint.dispose();
+    this.endpoints.delete(endpoint.baseUrl);
+  }
+  subscription(id, store, endpoint) {
+    const owner = {};
+    const peeks = /* @__PURE__ */ new Set();
+    let active = true;
+    const unsubscribe = () => {
+      if (!active) return;
+      active = false;
+      for (const release of [...peeks]) release();
+      peeks.clear();
+      store.abandonStartedBy(owner);
+      const entry = this.stores.get(id);
+      if (entry && --entry.subs <= 0) {
+        this.stores.delete(id);
+        store.dispose();
+        this.releaseEndpoint(endpoint, store);
+      }
+    };
+    return {
+      key: store.key,
+      snapshot: () => store.snapshot(),
+      tick: () => {
+        if (active) {
+          this.budget.reclaim();
+          store.tick(owner);
+        }
+        return store.snapshot().rev;
+      },
+      watchPeek: (sessionId) => {
+        if (!active) return () => {
+        };
+        const release = store.watchPeek(sessionId);
+        const once = () => {
+          peeks.delete(once);
+          release();
+        };
+        peeks.add(once);
+        return once;
+      },
+      refreshDetail: (sessionId) => {
+        if (active) store.refreshDetail(sessionId);
+      },
+      retryNow: () => {
+        if (active) store.retryNow();
+      },
+      refresh: (domains) => {
+        if (active) store.refresh(domains);
+      },
+      client: () => endpoint.client("mutation"),
+      unsubscribe
+    };
+  }
+};
+var shared3 = null;
+function sharedRegistry(create) {
+  shared3 ??= create();
+  return shared3;
 }
 
 // src/view/panel.ts
-import { div } from "gpui-kit";
+import { div as div5 } from "gpui-kit";
+import { v_flex as v_flex4 } from "gpui-base";
+
+// src/view/agents.ts
+import { div as div2 } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-var TITLE = "Gas City";
-function hostIncompatibleText(missing) {
-  return `This herdr-app is too old for the Gas City mod: it lacks ${missing.join(", ")}.`;
-}
-function copyInvalidText(error) {
-  return `This copy of the Gas City mod was opened with props it cannot read: ${error}`;
+
+// src/view/text.ts
+import { div } from "gpui-kit";
+function label(id, text) {
+  return div().id(id).child(cleanLine(text));
 }
 function tinted(el, color, apply) {
   return color === void 0 ? el : apply(el, color);
@@ -3340,94 +5615,252 @@ function tinted(el, color, apply) {
 function muted(el, theme2) {
   return tinted(el, theme2.colors.muted, (e, c) => e.text_color(c));
 }
-function themedRoot(theme2) {
-  const root = v_flex().id("gascity-root").size_full().p(12).gap(8);
+function greyedIf(el, stale, theme2) {
+  return stale ? muted(el, theme2) : el;
+}
+function themedRoot(theme2, el) {
   const { colors } = theme2;
-  return tinted(tinted(root, colors.background, (el, c) => el.bg(c)), colors.foreground, (el, c) => el.text_color(c));
+  return tinted(tinted(el, colors.background, (e, c) => e.bg(c)), colors.foreground, (e, c) => e.text_color(c));
 }
-function themeIssues(el, theme2) {
-  return el.when(theme2.issues.length > 0, (e) => e.child(div().id("gascity-host-decode").child(theme2.issues.join("; "))));
+
+// src/view/agents.ts
+function statusText(row) {
+  return row.status.detail === null ? row.status.label : `${row.status.label} · ${row.status.detail}`;
 }
-function header(model) {
-  const { header: h, theme: theme2, actions } = model;
+function sessionRow(r, id, theme2, actions) {
+  const parts = [r.label, statusText(r)];
+  if (r.activeBead !== null) {
+    parts.push(r.activeBead.title === null ? `bead ${r.activeBead.id} (${r.activeBead.note ?? ""})` : `bead ${r.activeBead.id} "${r.activeBead.title}"`);
+  } else {
+    parts.push("no active bead");
+  }
+  if (r.attached) parts.push("terminal attached");
+  const row = h_flex().id(id).gap(8).on_click((_, cx) => actions.selectSession(r.selected ? null : r.id, cx)).child(label(`${id}-text`, `${r.selected ? "▸ " : ""}session ${r.id}: ${parts.join(" · ")}`));
+  return r.selected ? row : muted(row, theme2);
+}
+function agentRow(a, id, theme2, actions) {
+  const head = [a.label];
+  if (a.pool !== null) head.push(a.pool);
+  head.push(statusText(a));
+  const el = v_flex().id(id).gap(2).child(label(`${id}-head`, head.join(" · ")));
+  return el.children(a.sessions.map((r, k) => sessionRow(r, `${id}-session-${k}`, theme2, actions)));
+}
+function renderAgents(m, theme2, actions) {
+  let region = v_flex().id("gascity-agents").gap(6).child(label("gascity-agents-title", "Agents"));
+  const state = m.region;
+  if (state.kind === "loading") region = region.child(muted(label("gascity-agents-loading", "loading…"), theme2));
+  if (state.age !== null) region = region.child(muted(label("gascity-agents-age", state.stale ? `${state.age} (may be out of date)` : state.age), theme2));
+  if (state.error !== null) region = region.child(label("gascity-agents-error", state.error));
+  m.banners.forEach((b, i) => {
+    region = region.child(label(`gascity-agents-banner-${i}`, b));
+  });
+  const groups = m.groups.map((g, i) => {
+    const counts = g.counts === null ? g.listed ? "" : " (not in gc's rig list)" : ` · ${g.counts}`;
+    const head = label(`gascity-group-${i}`, `${g.collapsed ? "▸" : "▾"} ${g.title}${g.suspended ? " (suspended)" : ""}${counts}`).on_click((_, cx) => actions.toggleGroup(g.key, cx));
+    return v_flex().id(`gascity-group-${i}-body`).gap(4).child(head).children(g.agents.map((a, j) => agentRow(a, `gascity-agent-${i}-${j}`, theme2, actions)));
+  });
+  let body = v_flex().id("gascity-agents-body").gap(6).children(groups);
+  if (m.other.length > 0) {
+    body = body.child(v_flex().id("gascity-other").gap(2).child(label("gascity-other-title", "Other sessions")).children(m.other.map((r, k) => sessionRow(r, `gascity-other-${k}`, theme2, actions))));
+  }
+  if (m.unreadable.length > 0) {
+    body = body.child(v_flex().id("gascity-unreadable").gap(2).children(m.unreadable.map((u, k) => label(`gascity-unreadable-${k}`, u.text))));
+  }
+  if (state.kind === "ok" && m.groups.length === 0 && m.other.length === 0) body = body.child(muted(label("gascity-agents-empty", "gc lists no agents"), theme2));
+  return region.child(greyedIf(div2().id("gascity-agents-data").child(body), state.stale, theme2));
+}
+
+// src/view/detail.ts
+import { div as div3 } from "gpui-kit";
+import { h_flex as h_flex2, v_flex as v_flex2 } from "gpui-base";
+function pendingText(p) {
+  switch (p.kind) {
+    case "loading":
+      return ["Pending prompt: loading"];
+    case "failed":
+      return [`Pending prompt: unavailable: ${p.error}`];
+    case "unsupported":
+      return ["Pending prompt: this session's provider has none"];
+    case "none":
+      return ["Pending prompt: none"];
+    case "prompt":
+      return [
+        `Pending ${p.promptKind} (request ${p.requestId}): ${p.prompt ?? "(no prompt text)"}`,
+        `Options from gc: ${p.options.length > 0 ? p.options.join(", ") : "(none)"}`
+      ];
+  }
+}
+function renderDetail(m, theme2, actions) {
+  if (m.kind === "none") return null;
+  const close = div3().id("gascity-detail-close").on_click((_, cx) => actions.close(cx)).child("Close");
+  if (m.kind === "gone") return v_flex2().id("gascity-detail").gap(4).child(label("gascity-detail-gone", m.text)).child(close);
+  let el = v_flex2().id("gascity-detail").gap(4).child(h_flex2().id("gascity-detail-head").gap(8).child(label("gascity-detail-title", `Detail: ${m.title}`)).child(close)).child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`)).child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2)).child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`));
+  pendingText(m.pending).forEach((t, i) => {
+    el = el.child(label(`gascity-detail-pending-${i}`, t));
+  });
+  const out = m.output;
+  let output = v_flex2().id("gascity-detail-output").gap(0);
+  if (out.region.age !== null) output = output.child(muted(label("gascity-detail-output-age", `output, ${out.region.age}`), theme2));
+  if (out.region.error !== null) output = output.child(label("gascity-detail-output-error", out.region.error));
+  if (out.text === null) {
+    output = output.child(muted(label("gascity-detail-output-loading", out.region.kind === "failed" ? "no output" : "loading output…"), theme2));
+  } else {
+    output = output.children(out.text.split("\n").map((line, i) => label(`gascity-detail-line-${i}`, line)));
+  }
+  return el.child(greyedIf(output, out.region.stale, theme2));
+}
+
+// src/view/header.ts
+import { div as div4 } from "gpui-kit";
+import { h_flex as h_flex3, v_flex as v_flex3 } from "gpui-base";
+function renderHeader(h, theme2, actions) {
   const out = [];
-  const status = h_flex().id("gascity-status").gap(8).child(div().id("gascity-chip").child(h.chip.text));
-  out.push(h.canRetry ? status.child(div().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now")) : status);
-  if (h.endpoint !== null) out.push(muted(div().id("gascity-endpoint"), theme2).child(h.endpoint));
-  if (h.city !== null) out.push(div().id("gascity-city").child(`City: ${h.city}`));
-  h.banners.forEach((text, i) => out.push(div().id(`gascity-banner-${i}`).child(text)));
+  let status2 = h_flex3().id("gascity-status").gap(8).child(label("gascity-chip", h.chip.text));
+  if (h.needsYou !== null) status2 = status2.child(label("gascity-needs-you", h.needsYou));
+  if (h.age !== null) status2 = status2.child(muted(label("gascity-age", h.age), theme2));
+  if (h.canRetry) status2 = status2.child(div4().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now"));
+  out.push(status2);
+  if (h.endpoint !== null) out.push(muted(label("gascity-endpoint", h.endpoint), theme2));
+  if (h.city !== null) out.push(label("gascity-city", `City: ${h.city}`));
+  h.banners.forEach((text, i) => out.push(label(`gascity-banner-${i}`, text)));
   if (h.others.length > 0) {
     const others = h.others.map((o) => `${o.name} (${o.label})`).join(", ");
-    out.push(muted(div().id("gascity-others"), theme2).child(`Other cities: ${others}`));
+    out.push(muted(label("gascity-others", `Other cities: ${others}`), theme2));
   }
   if (h.choices !== null && h.choices.length > 0) {
     const heading = h.city === null ? "Choose a city:" : "Switch to:";
-    const list = v_flex().id("gascity-choices").gap(4).child(div().id("gascity-choices-heading").child(heading));
-    out.push(list.children(h.choices.map((c, i) => div().id(`gascity-choose-${i}`).on_click((_, cx) => actions.select(c.name, cx)).child(`${c.name} (${c.label})`))));
+    const list = v_flex3().id("gascity-choices").gap(4).child(label("gascity-choices-heading", heading));
+    out.push(list.children(h.choices.map((c, i) => label(`gascity-choose-${i}`, `${c.name} (${c.label})`).on_click((_, cx) => actions.select(c.name, cx)))));
   }
   if (h.diagnostics.length > 0) {
-    const lines = h.diagnostics.map((line, i) => muted(div().id(`gascity-diagnostic-${i}`), theme2).child(line));
-    out.push(v_flex().id("gascity-diagnostics").gap(2).child(div().id("gascity-diagnostics-heading").child("Discovery:")).children(lines));
+    const lines = h.diagnostics.map((line, i) => muted(label(`gascity-diagnostic-${i}`, line), theme2));
+    out.push(v_flex3().id("gascity-diagnostics").gap(2).child(label("gascity-diagnostics-heading", "Discovery:")).children(lines));
   }
   return out;
 }
+
+// src/view/panel.ts
+var TITLE = "Gas City";
+function hostIncompatibleText(missing) {
+  return `This herdr-app is too old for the Gas City mod: it lacks ${missing.join(", ")}.`;
+}
+function copyInvalidText(error) {
+  return `This copy of the Gas City mod was opened with props it cannot read: ${error}`;
+}
+function themeIssues(el, theme2) {
+  return el.when(theme2.issues.length > 0, (e) => e.child(label("gascity-host-decode", theme2.issues.join("; "))));
+}
+function diagnostics(model) {
+  const { view, theme: theme2, actions } = model;
+  if (view.diagnostics.length === 0) return null;
+  const toggle = div5().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
+  if (!view.diagnosticsOpen) return toggle;
+  const lines = view.diagnostics.map((d, i) => muted(label(`gascity-diag-${i}`, `${d.at ?? ""} ${d.source}: ${d.text}`.trim()), theme2));
+  return v_flex4().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
+}
 function renderPanel(model) {
-  const title = div().id("gascity-title").text_size(16).font_semibold().child(TITLE);
+  const title = div5().id("gascity-title").text_size(16).font_semibold().child(TITLE);
   if (model.kind === "host-incompatible") {
-    const root2 = v_flex().id("gascity-root").size_full().p(12).gap(8);
-    return root2.child(title).child(div().id("gascity-host-incompatible").child(hostIncompatibleText(model.missing)));
+    const root2 = v_flex4().id("gascity-root").size_full().p(12).gap(8);
+    return root2.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  const root = themedRoot(model.theme).child(title);
+  let root = themedRoot(model.theme, v_flex4().id("gascity-root").size_full().p(12).gap(8)).child(title);
   if (model.kind === "copy-invalid") {
-    return themeIssues(root.child(div().id("gascity-copy-invalid").child(copyInvalidText(model.error))), model.theme);
+    return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
-  return themeIssues(root.children(header(model)), model.theme);
+  const { view, theme: theme2, actions } = model;
+  root = root.children(renderHeader(view.header, theme2, actions));
+  if (view.agents !== null) root = root.child(renderAgents(view.agents, theme2, actions));
+  const detail = renderDetail(view.detail, theme2, actions);
+  if (detail !== null) root = root.child(detail);
+  const diag = diagnostics(model);
+  if (diag !== null) root = root.child(diag);
+  return themeIssues(root, theme2);
 }
 
 // src/main.ts
-function discover(discovery, cx) {
-  cx.spawn((task) => discovery.run({ notify: () => task.notify(), sleep: (ms) => task.sleep(ms) }));
+function registry2() {
+  return sharedRegistry(() => new SyncRegistry({
+    fetch: hostFetch,
+    onError: (key, entry) => logError(`gascity: ${key.city}: ${entry.source}: ${syncErrorText(entry.error)}`)
+  }));
+}
+function taskOf(task) {
+  return { notify: () => task.notify(), sleep: (ms) => task.sleep(ms) };
 }
 function setUp() {
   const missing = missingHostExports();
   if (missing.length > 0) return { kind: "host-incompatible", missing };
   const last = readLastCity();
-  const copy = decodeCopy(readProps(), last.ok ? last.value : null);
-  if (!copy.ok) return { kind: "copy-invalid", error: errorText(copy.error) };
+  const decoded = decodeCopy(readProps(), last.ok ? last.value : null);
+  if (!decoded.ok) return { kind: "copy-invalid", error: errorText(decoded.error) };
+  const reg = registry2();
   const discovery = new DiscoveryController({
     settings: readSharedSettings,
     gcStatus: execGcStatus,
     readSupervisorConfig,
-    fetch: hostFetch,
+    fetch: reg.probeFetch().fetch,
+    probeFetch: () => reg.probeFetch(),
     rememberCity
-  }, copy.value);
+  }, decoded.value);
   if (!last.ok) discovery.hostErrors.push(last.error);
-  return { kind: "ready", discovery };
+  const copy = new CopyController({
+    registry: reg,
+    discovery,
+    host: { visibility: readVisibility, probeEnabled: readProbeEnabled, herdrVersion: readHerdrVersion, execLog: readExecLog },
+    clock: systemClock,
+    probe: sharedProbeWriter(() => new ProbeWriter(probeIo))
+  });
+  return { kind: "ready", copy };
+}
+function actionsFor(copy) {
+  return {
+    retry: (cx) => {
+      cx.spawn((task) => copy.retry(taskOf(task)));
+      cx.notify();
+    },
+    select: (city, cx) => {
+      copy.selectCity(city);
+      cx.notify();
+    },
+    selectSession: (id, cx) => {
+      copy.selectSession(id);
+      cx.notify();
+    },
+    toggleGroup: (key, cx) => {
+      copy.toggleGroup(key);
+      cx.notify();
+    },
+    close: (cx) => {
+      copy.selectSession(null);
+      cx.notify();
+    },
+    toggleDiagnostics: (cx) => {
+      copy.toggleDiagnostics();
+      cx.notify();
+    }
+  };
 }
 var GasCity = class extends View {
-  copy = { kind: "copy-invalid", error: "init has not run" };
+  state = { kind: "copy-invalid", error: "init has not run" };
   init(_props, cx) {
-    this.copy = setUp();
-    if (this.copy.kind === "ready") discover(this.copy.discovery, cx);
+    this.state = setUp();
+    const state = this.state;
+    if (state.kind !== "ready") return;
+    cx.spawn((task) => state.copy.discover(taskOf(task)));
+    cx.timer.every(TICK_MS, (tcx) => {
+      if (state.copy.tick()) tcx.notify();
+    });
+  }
+  close(_cx) {
+    if (this.state.kind === "ready") this.state.copy.close();
   }
   render(_cx) {
-    const copy = this.copy;
-    if (copy.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: copy.missing });
+    const state = this.state;
+    if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme2 = readTheme();
-    if (copy.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme: theme2, error: copy.error });
-    const { discovery } = copy;
-    return renderPanel({
-      kind: "city",
-      theme: theme2,
-      header: headerModel(discovery.machine, discovery.hostErrors),
-      actions: {
-        retry: (cx) => discover(discovery, cx),
-        select: (city, cx) => {
-          discovery.select(city);
-          cx.notify();
-        }
-      }
-    });
+    if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme: theme2, error: state.error });
+    return renderPanel({ kind: "city", theme: theme2, view: state.copy.view(systemClock.now()), actions: actionsFor(state.copy) });
   }
 };
 export {

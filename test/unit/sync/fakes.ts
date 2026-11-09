@@ -288,6 +288,8 @@ export class FakeGc {
 
   private defaultReply(req: SeenRequest): FakeReply {
     const p = req.path;
+    if (p === "/health") return { status: 200, body: fixtureBody("get-health", "ok") };
+    if (p === "/v0/cities") return { status: 200, body: fixtureBody("get-v0-cities", "ok") };
     if (p.endsWith("/events")) {
       const limit = Number(req.query.get("limit") ?? "50");
       const items = [...this.events].sort((a, b) => b.seq - a.seq).slice(0, limit).map((e) => ({
@@ -295,7 +297,11 @@ export class FakeGc {
       }));
       return { status: 200, body: { items, total: this.latest() } };
     }
-    if (p.endsWith("/sessions")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-sessions", "ok") };
+    if (p.endsWith("/sessions")) {
+      const name = req.query.get("wake_reasons") === "true" ? "wake-reasons" : "ok";
+      return { status: 200, body: fixtureBody("get-v0-city-by-city-name-sessions", name) };
+    }
+    if (/\/session\/[^/]+\/pending$/.test(p)) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-session-by-id-pending", "none") };
     if (p.endsWith("/pending")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-pending", "ok") };
     if (p.endsWith("/rigs")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-rigs", "ok") };
     if (p.endsWith("/agents")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-agents", "ok") };

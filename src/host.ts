@@ -9,9 +9,15 @@ import type { HostFetch } from "./gc/client.ts";
 import type { GcError } from "./gc/errors.ts";
 import { GC_STATUS_ARGS } from "./discovery/gcStatus.ts";
 import { SETTINGS_KEY, gcBinIssue } from "./discovery/settings.ts";
+import { decodeFocused, decodePanes, layoutModNames, type HostDecodeError } from "./host.schemas.ts";
+import type { ProbeIo } from "./probe.ts";
+import type { VisibilityInput } from "./sync/visibility.ts";
+import type { ExecRecord } from "./vm/probe.ts";
 
 /** The herdr exports and script globals this build calls. */
-export const REQUIRED_HOST_EXPORTS = ["theme", "props", "shared", "home", "readTextFile", "exec", "fetch", "localStorage"] as const;
+export const REQUIRED_HOST_EXPORTS = [
+  "theme", "props", "shared", "home", "readTextFile", "exec", "fetch", "localStorage", "panes", "focused", "layout", "appHome", "writeTextFile",
+] as const;
 export type HostExport = (typeof REQUIRED_HOST_EXPORTS)[number];
 
 /** The required herdr exports and globals this herdr-app does not provide, in declaration order. */
@@ -25,6 +31,11 @@ export function missingHostExports(): HostExport[] {
     exec: typeof herdr.exec === "function",
     fetch: typeof fetch === "function",
     localStorage: typeof localStorage === "object" && localStorage !== null,
+    panes: typeof herdr.panes === "function",
+    focused: typeof herdr.focused === "function",
+    layout: typeof herdr.layout === "function",
+    appHome: typeof herdr.appHome === "function",
+    writeTextFile: typeof herdr.writeTextFile === "function",
   };
   return REQUIRED_HOST_EXPORTS.filter((name) => !present[name]);
 }
@@ -84,6 +95,71 @@ export async function readSupervisorConfig(): Promise<Result<{ path: string; tex
   }
 }
 
+/** The shared key of the "needs you" overlay window's open flag. */
+export const WINDOW_KEY = "gascity.window";
+/** The shared key that turns the probe file on (the probe command sets it). */
+export const PROBE_KEY = "gascity.probe";
+
+/** What "may a gascity view be on screen?" reads, decoded; a host-decode error when herdr's data cannot be read. */
+export function readVisibility(): Result<VisibilityInput, HostDecodeError> {
+  const panes = decodePanes(herdr.panes());
+  if (!panes.ok) return panes;
+  const focus = decodeFocused(herdr.focused());
+  if (!focus.ok) return focus;
+  const first = panes.value.errors[0];
+  if (first) return err(first);
+  return ok({ windowOpen: herdr.shared(WINDOW_KEY) === true, layoutMods: layoutModNames(herdr.layout()), panes: panes.value.items, focus: focus.value });
+}
+
+/** Whether the probe file is on. */
+export function readProbeEnabled(): boolean {
+  return herdr.shared(PROBE_KEY) === true;
+}
+
+/** herdr-app's version, when this herdr-app reports it (an optional export). */
+export function readHerdrVersion(): string | null {
+  try {
+    if (typeof herdr.updates !== "function") return null;
+    const v: unknown = herdr.updates()?.app?.version;
+    return typeof v === "string" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The probe file's host calls: path under the app home, read, compare-and-swap write. */
+export const probeIo: ProbeIo = {
+  path: () => `${herdr.appHome().replace(/\/+$/, "")}/data/gascity-probe/probe.json`,
+  read: async (path) => {
+    try {
+      return ok(await herdr.readTextFile(path));
+    } catch (cause) {
+      return err({ kind: "host-call", api: `readTextFile(${path})`, cause: messageOf(cause) });
+    }
+  },
+  write: async (path, text, expected) => {
+    try {
+      await herdr.writeTextFile(path, text, expected);
+      return ok(null);
+    } catch (cause) {
+      return err({ kind: "host-call", api: `writeTextFile(${path})`, cause: messageOf(cause) });
+    }
+  },
+};
+
+/** Programs run and app commands sent, newest last (the probe's exec/run log). */
+const EXEC_LOG_LIMIT = 50;
+let execLog: ExecRecord[] = [];
+
+/** The exec/run log. */
+export function readExecLog(): readonly ExecRecord[] {
+  return execLog;
+}
+
+function logExec(argv: string[]): void {
+  execLog = [...execLog, { at: Date.now(), kind: "exec" as const, argv }].slice(-EXEC_LOG_LIMIT);
+}
+
 /** How long `gc supervisor status --json` may run. */
 export const GC_STATUS_TIMEOUT_MS = 10_000;
 /** stderr is kept up to this many characters. */
@@ -99,12 +175,22 @@ export async function execGcStatus(gcBin: string): Promise<Result<string, GcErro
   const argv = [gcBin, ...GC_STATUS_ARGS];
   const refused = gcBinIssue(gcBin);
   if (refused) return err({ kind: "exec", argv, code: null, stderr: `not run: gcBin ${refused}` });
+  logExec(argv);
   return herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS }).then(
     (result): Result<string, GcError> => result.code === 0
       ? ok(result.stdout)
       : err({ kind: "exec", argv, code: result.code, stderr: result.stderr.trim().slice(0, STDERR_LIMIT) }),
     (cause: unknown): Result<string, GcError> => err({ kind: "exec", argv, code: null, stderr: messageOf(cause) }),
   );
+}
+
+/** The script console, when the engine provides one (herdr-app writes it to its log). */
+type ScriptConsole = { error(...data: unknown[]): void };
+
+/** Writes one line to herdr-app's log; nothing when the engine has no console. */
+export function logError(line: string): void {
+  const c = (globalThis as { console?: ScriptConsole }).console;
+  if (c !== undefined && typeof c.error === "function") c.error(line);
 }
 
 /** The theme colours the panel uses. */

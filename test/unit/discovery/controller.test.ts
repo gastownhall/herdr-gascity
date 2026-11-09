@@ -21,6 +21,7 @@ function fakeHost(fetch: HostFetch, remember: Result<null, GcError> = ok(null)) 
     gcStatus: () => Promise.resolve(ok("{}")),
     readSupervisorConfig: () => Promise.resolve(ok({ path: "/h/.gc/supervisor.toml", text: null })),
     fetch,
+    probeFetch: () => ({ fetch, drop: () => {} }),
     rememberCity: (city) => {
       remembered.push(city);
       return remember;
