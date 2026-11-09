@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 const DIR = join(import.meta.dir, "../../.github/workflows");
 
-interface Step { uses?: string; run?: string; with?: Record<string, unknown>; name?: string }
+interface Step { uses?: string; run?: string; if?: string; with?: Record<string, unknown>; name?: string }
 interface Job { if?: string; needs?: string | string[]; permissions?: Record<string, string>; steps: Step[] }
 interface Workflow { permissions?: Record<string, string>; jobs: Record<string, Job> }
 
