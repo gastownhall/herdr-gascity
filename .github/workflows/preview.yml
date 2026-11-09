@@ -1,0 +1,134 @@
+name: Preview screenshot
+
+# Takes gascity/preview.png from a real run (canary/preview-linux.sh): gc built
+# from the commit in api/PIN runs a scratch city, the released herdr-app runs
+# headless on Xvfb, install.sh installs the mod and opens its tab, and
+# `herdr-app shot` captures the window. The image is uploaded as an artifact;
+# a person reviews it and commits it as gascity/preview.png.
+#
+# This job runs herdr's published install.sh: it is never given a secret.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - .github/workflows/preview.yml
+      - canary/preview-linux.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Mod preview (ubuntu-24.04, Xvfb, lavapipe)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HC_SESSION: canary
+      CANARY_DISPLAY: xvfb
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: The pinned gascity commit
+        id: pin
+        run: |
+          commit=$(sed -n 's/^commit=//p' api/PIN)
+          [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "::error::api/PIN has no commit"; exit 1; }
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: gastownhall/gascity
+          ref: ${{ steps.pin.outputs.commit }}
+          path: gascity-src
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: gascity-src/go.mod
+          cache-dependency-path: gascity-src/go.sum
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: S0 preflight (packages, lavapipe)
+        timeout-minutes: 6
+        run: |
+          canary/bootstrap-linux.sh preflight
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libicu-dev
+
+      - name: S0 resolve current stable release
+        id: resolve
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh resolve
+
+      - name: S0 restore release mirror
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: S0 fill and serve release mirror
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh mirror
+
+      - name: S1 install herdr-app via published install.sh
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh install
+
+      - name: P1 build gc at the pinned commit
+        timeout-minutes: 12
+        env:
+          GASCITY_SRC: ${{ github.workspace }}/gascity-src
+        run: canary/preview-linux.sh gc
+
+      - name: P2 scratch city
+        timeout-minutes: 4
+        run: canary/preview-linux.sh city
+
+      - name: S4a display (Xvfb)
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh display
+
+      - name: S4b app up, status, space.new
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh app
+
+      - name: P3 install the mod with install.sh
+        timeout-minutes: 3
+        run: canary/preview-linux.sh install
+
+      - name: P4 screenshot
+        timeout-minutes: 4
+        run: canary/preview-linux.sh shot
+
+      - name: Teardown
+        if: always()
+        timeout-minutes: 2
+        run: |
+          canary/preview-linux.sh teardown
+          canary/bootstrap-linux.sh teardown
+
+      - name: Result
+        if: always()
+        run: canary/result.sh S0-preflight S0-resolve S0-mirror S1-install P1-gc P2-city S4a-display S4b-app P3-install P4-shot
+
+      - name: Upload the preview and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gascity-preview-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herdr-canary/out
+          if-no-files-found: error
+          retention-days: 14
