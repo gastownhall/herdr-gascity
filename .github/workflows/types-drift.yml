@@ -1,0 +1,146 @@
+name: herdr-app types drift
+
+# Type-checks the mod's sources against the host declarations the current
+# herdr-app release generates (`herdr-app types`, headless, no display) instead
+# of the hand-written subsets in types/. Hourly it only looks for a new release
+# (releases.herdr.dev/app/latest.json) and checks one it has not checked yet;
+# once a day it checks the current release regardless. A failing run is the
+# signal; the job summary shows the type errors and what changed in the host
+# declarations the mod uses since the last checked release.
+#
+# This job runs herdr's published install.sh: it is never given a secret.
+
+on:
+  schedule:
+    - cron: "23 * * * *" # hourly: a new release?
+    - cron: "41 6 * * *" # daily: the current release, always
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: types-drift-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DAILY_SCHEDULE: "41 6 * * *"
+  HC_SESSION: canary
+
+jobs:
+  types:
+    name: src/ against herdr-app's generated declarations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve the current herdr-app release
+        id: resolve
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh resolve
+
+      - name: Was this release checked already?
+        id: seen
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/host-types
+          key: herdr-host-types-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}
+          lookup-only: true
+
+      - name: Decide
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          HERDR_APP_VERSION: ${{ steps.resolve.outputs.app }}
+          CHECKED: ${{ steps.seen.outputs.cache-hit }}
+        run: canary/types-drift.sh decide
+
+      - name: S0 preflight (packages)
+        if: steps.decide.outputs.check == 'true'
+        timeout-minutes: 6
+        run: canary/bootstrap-linux.sh preflight
+
+      - name: S0 restore release mirror
+        id: mirror-cache
+        if: steps.decide.outputs.check == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: S0 fill and serve release mirror
+        id: mirror
+        if: steps.decide.outputs.check == 'true'
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh mirror
+
+      # Saved even when a later step fails: one download per release.
+      - name: S0 save release mirror
+        if: always() && steps.mirror.outcome == 'success' && steps.mirror-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: S1 install herdr-app via published install.sh
+        if: steps.decide.outputs.check == 'true'
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh install
+
+      - name: T0 herdr-app types (headless)
+        id: generate
+        if: steps.decide.outputs.check == 'true'
+        timeout-minutes: 2
+        run: canary/spike-linux.sh types
+
+      - name: T0 restore the last checked release's declarations
+        if: steps.generate.outcome == 'success'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/host-types
+          key: herdr-host-types-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}
+          restore-keys: herdr-host-types-${{ steps.resolve.outputs.target }}-app
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: steps.generate.outcome == 'success'
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies (frozen lockfile)
+        if: steps.generate.outcome == 'success'
+        run: bun install --frozen-lockfile
+
+      - name: T1 type-check src/ against the generated declarations
+        if: steps.generate.outcome == 'success'
+        timeout-minutes: 3
+        run: canary/types-drift.sh check
+
+      # Marks the release checked (the hourly run skips it), pass or fail.
+      - name: T2 remember this release's declarations
+        if: always() && steps.generate.outcome == 'success' && steps.seen.outputs.cache-hit != 'true'
+        run: canary/types-drift.sh remember
+
+      - name: T2 save this release's declarations
+        if: always() && steps.generate.outcome == 'success' && steps.seen.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/host-types
+          key: herdr-host-types-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}
+
+      - name: Teardown
+        if: always() && steps.decide.outputs.check == 'true'
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh teardown
+
+      - name: Upload declarations, report and logs
+        if: always() && steps.decide.outputs.check == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: herdr-app-types-drift-${{ steps.resolve.outputs.app }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herdr-canary/out
+          if-no-files-found: error
+          retention-days: 14

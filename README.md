@@ -16,10 +16,12 @@ Live data (the sync engine) and the agents and work panels come next.
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
+| `compat/host-aliases.ts` | Maps the global names in `types/` onto the declarations herdr-app generates, for the types-drift check. |
 | `gascity/` | The mod folder as herdr-app loads it: the built, committed, readable `main.js` and `mod.json`. |
 | `build.ts` | esbuild bundle of `src/` into `gascity/main.js`. Deterministic; the header names the version and a sha256 digest of the build inputs. |
 | `scripts/authority.ts` | The authority lint (see below). |
 | `scripts/bundle-fresh.ts` | Fails when the committed `gascity/main.js` differs from a clean rebuild. |
+| `scripts/used-surface-diff.ts`, `scripts/types-drift.ts` | The drift checks (see below). |
 | `test/harness.ts` | Loads the built bundle under bun with fake `herdr`/`gpui-kit` modules and a Proxy element recorder, after herdr-app's own mod tests. |
 | `test/unit/` | Unit and render tests. |
 | `test/contract/` | Responses recorded from a scratch city at the pinned gc (`record.ts`), validated with ajv against the pin and decoded by the client. |
@@ -114,6 +116,33 @@ shows its last choice (kept in that copy's localStorage), else the only
 running city, else asks. City states: discovering, no endpoint, cities failed,
 choose a city, unknown city, running, stopped; a running city also shows
 read-only and "gc too old" notices from gc's answers.
+
+## Drift jobs
+
+Two scheduled workflows watch the two things the mod is built against. Each
+fails its run when something the mod uses changed, and says exactly what in
+the job summary; they need no secrets and only read.
+
+- **gc drift** (`.github/workflows/gc-drift.yml`, nightly, or dispatched with
+  any gascity branch, tag or commit): fetches gc's `internal/api/openapi.json`
+  and compares it with the pin, restricted to the used surface
+  (`scripts/used-surface-diff.ts`). A used operation, parameter or field that
+  is gone, moved, newly required, or that gc may now omit or send with another
+  type fails; additions the decoders absorb (a new enum value, a renamed model
+  with the same fields) are listed as compatible. Locally:
+  `scripts/fetch-gc-spec.sh main /tmp/gc.json` then
+  `bun run scripts/used-surface-diff.ts --upstream /tmp/gc.json --upstream-commit <sha>`.
+- **herdr-app types drift** (`.github/workflows/types-drift.yml`): hourly it
+  reads herdr-app's `latest.json` and checks a release it has not checked yet;
+  daily it checks the current release regardless. It installs the release the
+  way the canary does (the per-release mirror), runs `herdr-app types`
+  headless, and type-checks `src/` against the generated declarations with
+  `compat/host-aliases.ts` in place of the subsets in `types/`. The summary
+  shows the type errors and a diff of the host declarations `src/` uses
+  against the last checked release. When a new file in `types/` declares host
+  modules or globals, list it in `HOST_SUBSETS` in `scripts/types-drift.ts`
+  (a test refuses unclassified files) and map any global type it declares in
+  `compat/host-aliases.ts`.
 
 ## Develop
 
