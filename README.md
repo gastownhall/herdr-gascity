@@ -34,7 +34,8 @@ bytes, and runs `herdr-app check` on it before it replaces anything. An
 earlier install is moved to `<app home>/mod-backups/gascity-<time>/`
 (outside `mods/`, where herdr would load it as a second mod). With Herdr
 open it opens a "Gas City" tab in a space on this computer (`space.new`
-first when there is none, or when herdr answers "no space yet"), shows it,
+first when there is none, or when herdr answers "no space yet"; retried
+while herdr has not yet noticed the new folder), shows it,
 and sends `gascity.set-gc-bin:<gc>` until the new copy answers (15 s), so a
 Herdr started from the desktop runs the gc on your PATH. Every failed step
 prints herdr's message and exits non-zero. Options: `--gc-bin <gc or

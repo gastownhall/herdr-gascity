@@ -10,8 +10,9 @@
 #     (outside mods/: herdr loads every folder there) and puts the new one
 #     in <app home>/mods/gascity/;
 #   - when the app is open: opens a "Gas City" tab in a local space (making
-#     one if there is none), shows it, and stores the gc program the mod runs
-#     (gcBin) in its shared settings, retrying until the new copy answers.
+#     one if there is none; retrying until herdr has noticed the new folder),
+#     shows it, and stores the gc program the mod runs (gcBin) in its shared
+#     settings, retrying until the new copy answers.
 # Every failed step prints why and exits non-zero.
 #
 # Options and environment: see usage below.
@@ -250,10 +251,12 @@ local_spaces() {
     }'
 }
 
+made_space=0
 new_space() {
   herdr_do space.new
   space=$(field "$reply" space)
   [ -n "$space" ] || fail "space.new gave no space id: $reply"
+  made_space=1
 }
 
 if ! reply=$(herdr-app ls 2>&1); then
@@ -263,18 +266,28 @@ fi
 space=$(printf '%s\n' "$reply" | local_spaces | sed -n 1p)
 [ -n "$space" ] || new_space
 
-if ! reply=$(herdr-app "do" tab.new --mod "$mod" --name "$tab_name" --space "$space" 2>&1); then
+# herdr notices the new folder in mods/ a moment later: until then tab.new
+# answers that there is no such mod. A space that closed since ls answers
+# "no space yet": make one, once.
+deadline=$(($(date +%s) + wait_s))
+until reply=$(herdr-app "do" tab.new --mod "$mod" --name "$tab_name" --space "$space" 2>&1); do
   case $reply in
     *"no space yet"*)
-      new_space
-      herdr_do tab.new --mod "$mod" --name "$tab_name" --space "$space"
+      if [ "$made_space" = 0 ]; then
+        new_space
+        continue
+      fi
       ;;
-    *)
-      printf 'gascity: herdr-app do tab.new failed:\n%s\n' "$reply" >&2
-      exit 1
+    *"no mod "*"$mod"*" in mods/"*)
+      if [ "$(date +%s)" -lt "$deadline" ]; then
+        sleep 0.25
+        continue
+      fi
       ;;
   esac
-fi
+  printf 'gascity: herdr-app do tab.new failed:\n%s\n' "$reply" >&2
+  exit 1
+done
 tab=$(field "$reply" tab)
 [ -n "$tab" ] || fail "tab.new gave no tab id: $reply"
 say "opened a \"$tab_name\" tab ($tab) in space $space"

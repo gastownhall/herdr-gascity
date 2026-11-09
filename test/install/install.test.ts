@@ -225,6 +225,24 @@ describe("a fresh install with the app open", () => {
     ]);
   });
 
+  test("tab.new is retried while herdr has not seen the new mod folder yet", async () => {
+    await appRunning();
+    for (const n of [1, 2]) await reply("tab.new", herdrError('no mod "gascity" in mods/'), n);
+    const r = await run(["--from", fixture, "--gc-bin", "gc"], { env: { HERDR_GASCITY_WAIT: "10" } });
+    expect(r.code).toBe(0);
+    expect(r.dos.filter((d) => d[0] === "tab.new")).toHaveLength(3);
+    expect(r.dos.at(-1)).toEqual(["gascity.set-gc-bin:gc"]);
+  });
+
+  test("herdr never sees the mod folder within the wait: herdr's message, and a non-zero exit", async () => {
+    await appRunning();
+    await reply("tab.new", herdrError('no mod "gascity" in mods/'));
+    const r = await run(["--from", fixture, "--gc-bin", "gc"], { env: { HERDR_GASCITY_WAIT: "1" } });
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('no mod \\"gascity\\" in mods/');
+    expect(r.dos.some((d) => d[0]!.startsWith("gascity."))).toBe(false);
+  });
+
   test("set-gc-bin is retried until the new copy answers (it loads asynchronously)", async () => {
     await appRunning();
     for (const n of [1, 2, 3]) await reply("gascity.set-gc-bin", NOT_LOADED, n);
@@ -287,7 +305,7 @@ describe("a fresh install with the app open", () => {
 describe("every failed step exits non-zero", () => {
   const cases: [string, () => Promise<void>, string][] = [
     ["ls", () => reply("ls", herdrError("the window did not answer")), "the window did not answer"],
-    ["tab.new", () => reply("tab.new", herdrError('no mod "gascity" in mods/')), 'no mod \\"gascity\\" in mods/'],
+    ["tab.new", () => reply("tab.new", herdrError("this machine's layout is not loaded yet")), "this machine's layout is not loaded yet"],
     ["space.new", async () => {
       await reply("ls", `0\n${JSON.stringify({ spaces: [], recent: [] }, null, 2)}\n`);
       await reply("space.new", herdrError("this machine's layout is not loaded yet"));
