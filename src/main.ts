@@ -24,7 +24,7 @@ import { InputState } from "gpui-base";
 import {
   closeWindow, execGcStatus, hostFetch, logError, missingHostExports, nextCommand, openAttachTab, postNeedsYou, probeIo, readExecLog,
   readFocusTarget, readHerdrVersion, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTerminalScene,
-  readTheme, readVisibility, rememberCity, selectTab, setProbeEnabled, setWindowOpen,
+  readTheme, readVisibility, rememberCity, selectTab, setProbeEnabled, setWindowOpen, storeGcBin,
 } from "./host.ts";
 import { sharedCommandBook } from "./commandBook.ts";
 import { CopyController, type CommandUi } from "./copy.ts";
@@ -113,6 +113,8 @@ function setUp(): Copy {
       visibility: () => visibility().get(systemClock.now()),
       probeEnabled: readProbeEnabled,
       setProbe: setProbeEnabled,
+      settings: readSharedSettings,
+      setGcBin: storeGcBin,
       herdrVersion: readHerdrVersion,
       execLog: readExecLog,
       keyboard: () => focus.handle?.is_focused() ?? false,

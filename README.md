@@ -542,8 +542,9 @@ arguments separated by `:`; each argument is percent-encoded
   with the same text, keeps it claimed for 10 minutes, and becomes the
   Idempotency-Key where gc declares one. A copy that refuses a delivery gives
   its claim up. Commands that only change what a copy shows (`focus`,
-  `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) run in each copy
-  that gets them.
+  `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) and `set-gc-bin`
+  (which stores the same value whichever copy runs it) run in each copy that
+  gets them.
 - **Retrying a scripted command.** Sending the same nonce again within 10
   minutes is the same delivery: the command book logs it as a `duplicate`
   and nothing reaches gc (unless the first delivery was refused, which gives
@@ -592,6 +593,7 @@ arguments separated by `:`; each argument is percent-encoded
 | `refresh` | refetch everything now (Retry now; the r key) |
 | `probe:<on-or-off>` | turn the probe file on or off (shared for every copy) |
 | `cancel` | close the open question or form without acting (Cancel) |
+| `set-gc-bin:<gc-bin>` | store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it) |
 | `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
 | `wake:<city>:<session>` | wake a session (Wake) |
 | `suspend:<city>:<session>` | suspend a session (Suspend) |

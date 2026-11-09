@@ -354,6 +354,26 @@ describe("focus, keys and the probe", () => {
     expect(mod.shared.get("gascity.probe")).toBe(false);
   });
 
+  test("set-gc-bin stores gcBin in the shared settings every copy reads, keeping the other keys", async () => {
+    const mod = await running({ route: world().route, shared: { "gascity.settings": { apiUrl: "http://127.0.0.1:8372", later: 1 } } });
+    await mod.command("set-gc-bin:%2Fopt%2Fgc%20home%2Fbin%2Fgc");
+    expect(mod.shared.get("gascity.settings")).toEqual({ apiUrl: "http://127.0.0.1:8372", later: 1, gcBin: "/opt/gc home/bin/gc" });
+    expect(findById(mod.render(), "gascity-notice")).toBeUndefined();
+    await mod.command("set-gc-bin:gc");
+    expect(mod.shared.get("gascity.settings")).toEqual({ apiUrl: "http://127.0.0.1:8372", later: 1, gcBin: "gc" });
+  });
+
+  test("set-gc-bin refuses a program not named gc, and a stored value it cannot read; nothing is stored", async () => {
+    const mod = await running({ route: world().route });
+    await mod.command("set-gc-bin:/usr/bin/tmux");
+    expect(mod.shared.has("gascity.settings")).toBe(false);
+    expect(text(mod.render(), "gascity-notice")).toBe('gascity.set-gc-bin:/usr/bin/tmux: refused: set-gc-bin: must be "gc" or an absolute path to a program named gc, not "/usr/bin/tmux"');
+    const broken = await running({ route: world().route, shared: { "gascity.settings": "garbage" } });
+    await broken.command("set-gc-bin:gc");
+    expect(broken.shared.get("gascity.settings")).toBe("garbage");
+    expect(text(broken.render(), "gascity-notice")).toStartWith("gascity.set-gc-bin:gc: refused: ");
+  });
+
   test("city and session commands select as the header and the rows do", async () => {
     const mod = await running({ route: world().route });
     await mod.command("city:scratch");

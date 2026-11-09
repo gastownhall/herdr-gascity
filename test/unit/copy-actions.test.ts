@@ -45,6 +45,8 @@ function setup() {
     herdrVersion: () => ok("0.1.14"),
     execLog: () => [],
     setProbe: () => {},
+    settings: () => null,
+    setGcBin: () => ok(undefined),
     keyboard: () => false,
     focusTarget: () => null,
     terminal: {
