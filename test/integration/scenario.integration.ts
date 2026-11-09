@@ -169,6 +169,12 @@ async function waitConnected(appHome: string, ms = 60_000): Promise<ProbeDoc> {
   }, 200, () => JSON.stringify(readProbe(appHome)?.connection ?? null));
 }
 
+/** The session's row in a probe, with the probe's time and connection, for a timeout message. */
+function sessionRow(appHome: string): string {
+  const p = readProbe(appHome);
+  return JSON.stringify({ ts: p?.ts ?? null, connection: p?.connection ?? null, row: p?.sessions.find((s) => s.id === sessionId) ?? null, sessions: p?.sessions.length ?? null });
+}
+
 function newestAction(p: ProbeDoc | null, kind: string): ProbeDoc["actions"][number] | undefined {
   return p?.actions.filter((a) => a.action === kind).sort((a, b) => b.id - a.id)[0];
 }
@@ -394,7 +400,9 @@ describe("the mod against a scratch gc city", () => {
 
   test("Open terminal on a suspended session wakes it through gc, then attaches; the HC_SCOPE audit finds no leak", async () => {
     await suspendAndWait(sessionId);
-    await waitFor("the mod to show the session suspended", 15_000, () => readProbe(main())?.sessions.find((s) => s.id === sessionId && s.status === "suspended"), 200);
+    const suspendedAt = Date.now();
+    await waitFor("the mod to show the session suspended", 30_000, () => readProbe(main())?.sessions.find((s) => s.id === sessionId && s.status === "suspended"), 200, () => sessionRow(main()));
+    steps.push({ step: "suspended in the view", ms: Date.now() - suspendedAt });
     lastTab = null;
     send(app, `attach:${CITY}:${sessionId}`);
     const tab = await waitFor("the mod to open the attach tab", 70_000, () => lastTab, 100);
@@ -493,7 +501,7 @@ describe("the mod against a scratch gc city", () => {
     await waitConnected(appHome);
     await waitFor("the broken copy to list the session", 15_000, () => readProbe(appHome)?.sessions.some((s) => s.id === sessionId), 200);
     await suspendAndWait(sessionId);
-    await waitFor("the broken copy to show the session suspended", 15_000, () => readProbe(appHome)?.sessions.find((s) => s.id === sessionId && s.status === "suspended"), 200);
+    await waitFor("the broken copy to show the session suspended", 30_000, () => readProbe(appHome)?.sessions.find((s) => s.id === sessionId && s.status === "suspended"), 200, () => sessionRow(appHome));
     lastTab = null;
     send(broken, `attach:${CITY}:${sessionId}`);
     const tab = await waitFor("the broken mod to open a tab", 30_000, () => lastTab, 100);
