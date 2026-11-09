@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/bead/no-such-bead-mw8vmef1/close",
+    "query": "",
+    "body": {
+      "reason": "x"
+    }
+  },
+  "status": 404,
+  "body": {
+    "type": "urn:gascity:error:bead-not-found",
+    "title": "Bead Not Found",
+    "status": 404,
+    "detail": "bead no-such-bead-mw8vmef1 not found",
+    "code": "bead-not-found"
+  }
+}

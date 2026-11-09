@@ -11,11 +11,22 @@
     "lint:authority": "bun run scripts/authority.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.tools.json",
     "test": "bun test",
-    "ci": "bun run typecheck && bun run lint:authority && bun run check:bundle && bun test"
+    "ci": "bun run typecheck && bun run lint:authority && bun run check:bundle && bun test",
+    "gen:gc": "bun run scripts/gen-gc.ts",
+    "pin:gc": "bun run scripts/pin-gc-spec.ts",
+    "record:gc": "bun run test/contract/record.ts",
+    "notices": "bun run scripts/notices.ts"
   },
   "devDependencies": {
+    "@jitl/quickjs-ng-wasmfile-release-sync": "0.32.0",
     "@types/bun": "1.4.4",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "esbuild": "0.28.2",
+    "quickjs-emscripten-core": "0.32.0",
     "typescript": "6.0.3"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
   }
 }

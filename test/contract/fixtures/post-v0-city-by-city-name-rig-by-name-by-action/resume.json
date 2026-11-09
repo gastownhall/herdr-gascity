@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/rig/frontend/resume",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "status": "ok",
+    "action": "resume",
+    "rig": "frontend"
+  }
+}

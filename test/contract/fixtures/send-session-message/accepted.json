@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/sc-20/messages",
+    "query": "",
+    "body": {
+      "message": "note mw8vmef1"
+    }
+  },
+  "status": 202,
+  "body": {
+    "status": "accepted",
+    "request_id": "req-4373eba793a309d0249712ff",
+    "event_cursor": "266"
+  }
+}

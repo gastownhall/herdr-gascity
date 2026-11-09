@@ -1,0 +1,46 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/request/req-dcf538ab3205375e2178c0d1",
+    "query": "after_seq=239"
+  },
+  "status": 200,
+  "body": {
+    "request_id": "req-dcf538ab3205375e2178c0d1",
+    "operation": "session.create",
+    "state": "succeeded",
+    "event": {
+      "seq": 259,
+      "type": "request.result.session.create",
+      "ts": "2026-11-09T06:24:48.694921272Z",
+      "actor": "api",
+      "subject": "sc-76",
+      "payload": {
+        "request_id": "req-dcf538ab3205375e2178c0d1",
+        "session": {
+          "id": "sc-76",
+          "kind": "agent",
+          "template": "worker",
+          "state": "active",
+          "title": "recorder session",
+          "alias": "rec-mw8vmef1",
+          "agent_name": "rec-mw8vmef1",
+          "provider": "sh",
+          "display_name": "Sh",
+          "session_name": "s-sc-76",
+          "work_dir": "/scratch/city/.gc/worktrees/rec-mw8vmef1",
+          "created_at": "2026-11-09T06:24:47Z",
+          "attached": false,
+          "pool": "worker",
+          "agent_kind": "pool",
+          "running": false,
+          "submission_capabilities": {
+            "supports_follow_up": false,
+            "supports_interrupt_now": false,
+            "supports_steer": false
+          }
+        }
+      }
+    }
+  }
+}

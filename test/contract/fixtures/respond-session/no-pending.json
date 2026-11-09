@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/sc-20/respond",
+    "query": "",
+    "body": {
+      "action": "approve"
+    }
+  },
+  "status": 501,
+  "body": {
+    "type": "urn:gascity:error:not-implemented",
+    "title": "Not Implemented",
+    "status": 501,
+    "detail": "unsupported: session provider does not support interactive responses",
+    "code": "not-implemented"
+  }
+}

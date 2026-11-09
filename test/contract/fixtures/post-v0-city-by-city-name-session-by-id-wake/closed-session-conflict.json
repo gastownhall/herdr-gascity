@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/sc-76/wake",
+    "query": ""
+  },
+  "status": 409,
+  "body": {
+    "type": "urn:gascity:error:session-conflict",
+    "title": "Session State Conflict",
+    "status": 409,
+    "detail": "session sc-76 is closed",
+    "code": "session-conflict"
+  }
+}

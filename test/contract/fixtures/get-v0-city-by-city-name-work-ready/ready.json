@@ -1,0 +1,53 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/work/ready",
+    "query": "limit=50&exclude_type=session&exclude_type=message"
+  },
+  "status": 200,
+  "body": {
+    "items": [
+      {
+        "id": "sc-18",
+        "title": "Scratch task one",
+        "status": "open",
+        "issue_type": "task",
+        "priority": 2,
+        "created_at": "2026-11-09T06:18:23.149379142Z",
+        "updated_at": "2026-11-09T06:18:23.149379142Z",
+        "description": "test bead"
+      },
+      {
+        "id": "fe-1",
+        "title": "Frontend rig task",
+        "status": "open",
+        "issue_type": "task",
+        "created_at": "2026-11-09T06:18:23.176056982Z",
+        "updated_at": "2026-11-09T06:18:23.176056982Z"
+      },
+      {
+        "id": "sc-58",
+        "title": "recorder bead mw8vlhxl",
+        "status": "open",
+        "issue_type": "task",
+        "priority": 2,
+        "created_at": "2026-11-09T06:24:05.435096197Z",
+        "updated_at": "2026-11-09T06:24:05.476819165Z",
+        "description": "recorded for the herdr-gascity contract fixtures",
+        "metadata": {
+          "gc.routed_to": "worker"
+        }
+      },
+      {
+        "id": "sc-74",
+        "title": "recorder bead mw8vmef1",
+        "status": "open",
+        "issue_type": "task",
+        "priority": 2,
+        "created_at": "2026-11-09T06:24:47.530735668Z",
+        "updated_at": "2026-11-09T06:24:47.530735668Z",
+        "description": "recorded for the herdr-gascity contract fixtures"
+      }
+    ]
+  }
+}

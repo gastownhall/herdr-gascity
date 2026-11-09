@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/events",
+    "query": "limit=1"
+  },
+  "status": 200,
+  "body": {
+    "items": [
+      {
+        "seq": 232,
+        "type": "order.completed",
+        "ts": "2026-11-09T06:24:39.013096075Z",
+        "actor": "controller",
+        "subject": "gate-sweep",
+        "payload": {}
+      }
+    ],
+    "total": 232,
+    "next_cursor": "v1:eyJrIjoic3EiLCJzIjoyMzJ9"
+  }
+}

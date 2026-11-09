@@ -1,0 +1,18 @@
+{
+  "provenance": "synthesized: the scratch city's subprocess provider has no pending interactions (respond answers 501 there, see no-pending.json). Body per gc 9ba215cb internal/api/huma_handlers_sessions_command.go humaHandleSessionRespond: status \"accepted\", id, idempotency_key; validated against the pin like every fixture.",
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/sc-20/respond",
+    "query": "",
+    "body": {
+      "action": "approve",
+      "request_id": "perm-1"
+    }
+  },
+  "status": 202,
+  "body": {
+    "id": "sc-20",
+    "status": "accepted",
+    "idempotency_key": "rec-respond-synthesized"
+  }
+}

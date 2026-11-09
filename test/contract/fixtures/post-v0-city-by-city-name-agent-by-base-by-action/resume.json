@@ -1,0 +1,11 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/agent/worker/resume",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "status": "ok"
+  }
+}

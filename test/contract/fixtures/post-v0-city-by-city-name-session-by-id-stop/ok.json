@@ -1,0 +1,12 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/sc-20/stop",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "status": "ok",
+    "id": "sc-20"
+  }
+}

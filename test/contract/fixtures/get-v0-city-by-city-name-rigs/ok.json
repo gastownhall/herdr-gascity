@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/rigs",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "items": [
+      {
+        "name": "frontend",
+        "path": "/scratch/rig",
+        "suspended": false,
+        "prefix": "fe",
+        "agent_count": 2,
+        "running_count": 1
+      }
+    ],
+    "total": 1
+  }
+}

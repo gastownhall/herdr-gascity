@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/sling",
+    "query": "",
+    "body": {
+      "target": "worker",
+      "bead": "sc-74"
+    }
+  },
+  "status": 200,
+  "body": {
+    "status": "slung",
+    "target": "worker",
+    "bead": "sc-74",
+    "mode": "direct",
+    "dashboard_url": "http://127.0.0.1:18473/city/scratch/runs",
+    "convoy_id": "sc-75"
+  }
+}

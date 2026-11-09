@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/sessions",
+    "query": "",
+    "body": {
+      "kind": "agent",
+      "name": "worker",
+      "alias": "rec-mw8vmef1",
+      "title": "recorder session"
+    }
+  },
+  "status": 202,
+  "body": {
+    "status": "accepted",
+    "request_id": "req-dcf538ab3205375e2178c0d1",
+    "event_cursor": "239"
+  }
+}

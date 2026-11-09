@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v0/city/scratch/session/sc-20/submit",
+    "query": "",
+    "body": {
+      "message": "hello mw8vmef1",
+      "intent": "default"
+    }
+  },
+  "status": 202,
+  "body": {
+    "status": "accepted",
+    "request_id": "req-534743c774d98f4878bf26c4",
+    "event_cursor": "263"
+  }
+}
