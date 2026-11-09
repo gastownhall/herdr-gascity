@@ -11,3 +11,5 @@ type GpuiElement = import("gpui-kit").NativeElement;
 type GpuiContext = import("gpui-kit").Context;
 type GpuiAsyncContext = import("gpui-kit").AsyncContext;
 type GpuiTimer = import("gpui-kit").Timer;
+type GpuiFocusHandle = import("gpui-kit").FocusHandle;
+type GpuiKeyEvent = import("gpui-kit").KeyEvent;

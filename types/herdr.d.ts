@@ -45,4 +45,26 @@ declare module "herdr" {
 
   /** Herdr's and herdr-core's versions and what's waiting. */
   export function updates(): { app: { version: string } };
+
+  /** Sets a shared value; every mod re-renders so it can react. */
+  export function setShared(key: string, value: unknown): null;
+
+  /** Posts a notification (drawn by the toast mod, which runs `action` when clicked). Returns its id. */
+  export function notify(n: {
+    title: string;
+    body?: string;
+    level?: "info" | "success" | "warning" | "error";
+    timeout?: number;
+    icon?: string;
+    action?: { name: string; args?: Record<string, unknown> };
+  }): string;
+
+  /** Waits for the next command for this copy: keys.json `<mod>.<command>`, `herdr-app do <mod>.<command>`, or "focus". */
+  export function nextCommand(): Promise<string>;
+
+  /** Runs an app command (the ones keys.json binds). Returns null, not the result. */
+  export function run(name: string, args?: Record<string, unknown>): null;
+
+  /** Closes an overlay (a mod closes its own with closeOverlay(props().overlay)). */
+  export function closeOverlay(id: string): null;
 }

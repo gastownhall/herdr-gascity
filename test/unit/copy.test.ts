@@ -57,6 +57,9 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean; herdrVersi
     probeEnabled: () => probeOn,
     herdrVersion: opts.herdrVersion ?? (() => ok("0.1.14")),
     execLog: () => [],
+    setProbe: () => {},
+    keyboard: () => false,
+    focusTarget: () => null,
   };
   let n = 0;
   /** Opens a copy as main.ts does: discovery task and periodic timer, both in the copy's own scope. */

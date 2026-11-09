@@ -11,6 +11,16 @@ declare module "gpui-kit" {
   }
   export interface AsyncContext extends Context {}
 
+  export interface FocusHandle {
+    focus(): void;
+    is_focused(): boolean;
+  }
+
+  export interface KeyEvent {
+    key: string;
+    keystroke: string;
+  }
+
   export interface Timer {
     every(ms: number, handler: (cx: AsyncContext) => void): unknown;
   }

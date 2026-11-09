@@ -44,7 +44,8 @@ describe("probeDocument", () => {
       }, snap, NOW),
       diagnostics: [{ at: "2026-11-09T12:00:00Z", source: "events", text: "x" }],
       execLog: [{ at: 1, kind: "exec", argv: ["gc", "supervisor", "status", "--json"] }],
-      refreshCount: 2, fetchInFlightMax: 2,
+      refreshCount: 2, fetchInFlightMax: 2, window: true, notice: "gascity.wake:x: refused: no session",
+      commands: [{ at: 5, command: "wake:x", result: "refused", detail: "no session" }],
     });
     expect(JSON.parse(JSON.stringify(doc))).toEqual({
       schema: PROBE_SCHEMA,
@@ -84,6 +85,9 @@ describe("probeDocument", () => {
       errors: [{ at: "2026-11-09T12:00:00Z", source: "events", text: "x" }],
       refresh_count: 2,
       fetch_in_flight_max: 2,
+      window: true,
+      notice: "gascity.wake:x: refused: no session",
+      commands: [{ at: 5, command: "wake:x", result: "refused", detail: "no session" }],
     });
   });
 
@@ -93,14 +97,14 @@ describe("probeDocument", () => {
     const doc = probeDocument({
       modVersion: "0.0.0", herdrVersion: null, machine: m, header: headerModel(m), onScreen: false, keyboard: false, agents: null,
       board: { ...board, closed: { ...board.closed, banners: [] } }, beadDetail: { kind: "none" }, detail: { kind: "none" }, activity: null,
-      diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
+      diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0, window: false, notice: null, commands: [],
     });
     expect(doc.board?.closed.incomplete).toBe(true);
     const clean = boardModel({ snapshot: snapshot({}), now: NOW, selected: null });
     const other = probeDocument({
       modVersion: "0.0.0", herdrVersion: null, machine: m, header: headerModel(m), onScreen: false, keyboard: false, agents: null,
       board: { ...clean, closed: { ...clean.closed, banners: ["some other notice"] } }, beadDetail: { kind: "none" }, detail: { kind: "none" }, activity: null,
-      diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
+      diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0, window: false, notice: null, commands: [],
     });
     expect(other.board?.closed.incomplete).toBe(false);
   });
@@ -109,7 +113,7 @@ describe("probeDocument", () => {
     const m = initialMachine({ pinned: null, lastSelection: null });
     const doc = probeDocument({
       modVersion: "0.0.0", herdrVersion: null, machine: m, header: headerModel(m), onScreen: false, keyboard: false, agents: null,
-      board: null, beadDetail: { kind: "none" }, detail: { kind: "none" }, activity: null, diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
+      board: null, beadDetail: { kind: "none" }, detail: { kind: "none" }, activity: null, diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0, window: false, notice: null, commands: [],
     });
     expect(doc).toMatchObject({ connection: { text: "looking for gc", tone: "busy" }, discovery: null, city: null, city_phase: "discovering", sessions: [], board: null, bead_detail: null, detail: null, actions: [] });
   });

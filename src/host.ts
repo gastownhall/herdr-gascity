@@ -10,14 +10,17 @@ import type { GcError } from "./gc/errors.ts";
 import { GC_STATUS_ARGS } from "./discovery/gcStatus.ts";
 import { SETTINGS_KEY, gcBinIssue } from "./discovery/settings.ts";
 import { decodeFocused, decodePanes, layoutModNames, type HostDecodeError } from "./host.schemas.ts";
+import { FOCUS_KEY, nextFocus } from "./notify/focus.ts";
+import { toastText, type NeedsYou } from "./notify/needsYou.ts";
 import type { ProbeIo } from "./probe.ts";
-import type { VisibilityInput } from "./sync/visibility.ts";
+import { MOD_NAME, type VisibilityInput } from "./sync/visibility.ts";
 import type { ExecRecord } from "./vm/probe.ts";
 import { cleanLine } from "./vm/sanitize.ts";
 
 /** The herdr exports and script globals this build calls. */
 export const REQUIRED_HOST_EXPORTS = [
   "theme", "props", "shared", "home", "readTextFile", "exec", "fetch", "localStorage", "panes", "focused", "layout", "appHome", "writeTextFile",
+  "setShared", "notify", "nextCommand", "run", "closeOverlay",
 ] as const;
 export type HostExport = (typeof REQUIRED_HOST_EXPORTS)[number];
 
@@ -37,6 +40,11 @@ export function missingHostExports(): HostExport[] {
     layout: typeof herdr.layout === "function",
     appHome: typeof herdr.appHome === "function",
     writeTextFile: typeof herdr.writeTextFile === "function",
+    setShared: typeof herdr.setShared === "function",
+    notify: typeof herdr.notify === "function",
+    nextCommand: typeof herdr.nextCommand === "function",
+    run: typeof herdr.run === "function",
+    closeOverlay: typeof herdr.closeOverlay === "function",
   };
   return REQUIRED_HOST_EXPORTS.filter((name) => !present[name]);
 }
@@ -117,6 +125,66 @@ export function readProbeEnabled(): boolean {
   return herdr.shared(PROBE_KEY) === true;
 }
 
+/** Turns the probe file on or off for every copy (the probe command). */
+export function setProbeEnabled(on: boolean): void {
+  herdr.setShared(PROBE_KEY, on);
+}
+
+/** Whether the "needs you" window is open (its copy sets this in init and clears it in close). */
+export function readWindowOpen(): boolean {
+  return herdr.shared(WINDOW_KEY) === true;
+}
+
+/** The "needs you" window's copy says it opened (true) or closed (false). */
+export function setWindowOpen(open: boolean): void {
+  herdr.setShared(WINDOW_KEY, open);
+}
+
+/** The raw shared focus target (decoded by notify/focus.ts). */
+export function readFocusTarget(): unknown {
+  return herdr.shared(FOCUS_KEY);
+}
+
+/**
+ * Posts one "needs you" toast per item. Each first writes the shared focus
+ * target, so the window the toast opens (or the one already open) shows that
+ * session. While the window is open the toast has no action: mod.open
+ * toggles, and a click must never close the window.
+ */
+export function postNeedsYou(items: readonly NeedsYou[]): void {
+  for (const n of items) {
+    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), n.city, n.session, Date.now()));
+    const { title, body } = toastText(n);
+    try {
+      if (readWindowOpen()) {
+        herdr.notify({ title, body, level: "warning" });
+        logRecord("notify", []);
+      } else {
+        herdr.notify({ title, body, level: "warning", action: { name: "mod.open", args: { name: "gascity" } } });
+        logRecord("notify", ["mod.open", MOD_NAME]);
+      }
+    } catch (cause) {
+      logError(`gascity: notify failed: ${messageOf(cause)}`);
+    }
+  }
+}
+
+/** Shows a tab holding a Gas City pane (the window's "Show Gas City tab"). */
+export function selectTab(id: string): void {
+  logRecord("run", ["tab.select", id]);
+  herdr.run("tab.select", { id });
+}
+
+/** Closes this copy's overlay window. */
+export function closeWindow(overlay: string): void {
+  herdr.closeOverlay(overlay);
+}
+
+/** Waits for the next command herdr delivers to this copy (keys.json, `herdr-app do`, or "focus"). */
+export function nextCommand(): Promise<string> {
+  return herdr.nextCommand();
+}
+
 /**
  * herdr-app's version: null when this herdr-app does not export `updates`
  * (it is optional) or reports no version; an error when the call throws.
@@ -160,8 +228,8 @@ export function readExecLog(): readonly ExecRecord[] {
   return execLog;
 }
 
-function logExec(argv: string[]): void {
-  execLog = [...execLog, { at: Date.now(), kind: "exec" as const, argv }].slice(-EXEC_LOG_LIMIT);
+function logRecord(kind: ExecRecord["kind"], argv: string[]): void {
+  execLog = [...execLog, { at: Date.now(), kind, argv }].slice(-EXEC_LOG_LIMIT);
 }
 
 /** How long `gc supervisor status --json` may run. */
@@ -179,7 +247,7 @@ export async function execGcStatus(gcBin: string): Promise<Result<string, GcErro
   const argv = [gcBin, ...GC_STATUS_ARGS];
   const refused = gcBinIssue(gcBin);
   if (refused) return err({ kind: "exec", argv, code: null, stderr: `not run: gcBin ${refused}` });
-  logExec(argv);
+  logRecord("exec", argv);
   return herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS }).then(
     (result): Result<string, GcError> => result.code === 0
       ? ok(result.stdout)

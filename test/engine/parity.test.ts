@@ -78,6 +78,14 @@ interface SyncSummary {
   workPosts: { path: string; body: unknown; key: string }[];
 }
 
+/** The command scenario's report (test/engine/entry.ts commandScenario). */
+interface CommandSummary {
+  roundTrip: { raw: string; command?: unknown; written?: string; same?: boolean; error?: string }[];
+  refused: { raw: string; error?: string; accepted?: unknown }[];
+  toasts: string[][];
+  focus: unknown[];
+}
+
 const probe = await bundleProbe();
 const fixtures = JSON.stringify(await loadFixtures());
 
@@ -225,6 +233,16 @@ describe("the bundled gc client with zod, and the sync engine", () => {
       "line\nnext",
       "request to http://127.0.0.1:8372/health was cancelled: the Gas City view that started it closed",
     ]);
+    const commands = (JSON.parse(quick.output) as { commands: CommandSummary }).commands;
+    expect(commands.roundTrip.every((r) => r.same === true)).toBe(true);
+    expect(commands.roundTrip.find((r) => r.raw.startsWith("submit"))?.command).toEqual({ verb: "submit", session: "sc-20", text: "close fe-1: \u2713 done" });
+    expect(commands.refused.map((r) => r.error)).toEqual([
+      'unknown command "explode"', "wake: expected wake:<session>", "argument 1 has a bad percent escape",
+      'close: the argument after <session> can only be "confirm"', 'probe: expected "on" or "off", got "maybe"',
+      undefined,
+    ]);
+    expect(commands.toasts).toEqual([[], ["sc-6/b"], []]);
+    expect(commands.focus).toEqual([{ city: "scratch", session: "sc-20", seq: 2, at: 2000 }, null]);
     expect(quick.output).toBe(await runInBun());
   }, 60_000);
 

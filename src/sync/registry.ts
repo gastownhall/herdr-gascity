@@ -21,7 +21,10 @@
 //   render: reads the snapshots only;
 //   close: unsubscribe() both — it starts nothing.
 //
-// App-wide side effects (toasts) register once with `onEvents`, not per copy.
+// App-wide side effects register once, not per copy: event listeners with
+// `onEvents`, and the "needs you" toasts through `SyncDeps.onNeedsYou`, fed
+// by one notifier per city store (notify/needsYou.ts) from whichever
+// subscribed copy ticks, so several copies of a city post each toast once.
 // The visibility rule (visibility.ts) is per app: `setOnScreen` applies to
 // every store at their next tick.
 
@@ -35,6 +38,7 @@ import { systemClock, type Clock } from "./clock.ts";
 import { Endpoint, type EndpointListener } from "./endpoint.ts";
 import type { Domain } from "./invalidate.ts";
 import { CitiesPoller, type CitiesSnapshot } from "./cities.ts";
+import { NeedsYouNotifier, type NeedsYou } from "../notify/needsYou.ts";
 import { CityStore, type CityKey, type CitySnapshot, type ErrorEntry, type EventBatch } from "./store.ts";
 
 /** How often each copy should call `tick()`: the granularity of the 300 ms debounce and of "retry now". */
@@ -51,6 +55,8 @@ export interface SyncDeps {
   onError?: (key: CityKey, entry: ErrorEntry) => void;
   /** A fresh Idempotency-Key per action; default a random UUID. */
   newKey?: () => string;
+  /** New pending interactions to toast, once per app (called in the turn of the copy whose tick found them). */
+  onNeedsYou?: (items: readonly NeedsYou[]) => void;
 }
 
 /** One copy's subscription to one city store. */
@@ -132,7 +138,7 @@ export class SyncRegistry {
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly endpoints = new Map<string, Endpoint>();
-  private readonly stores = new Map<string, { store: CityStore; ledger: ActionLedger; subs: number }>();
+  private readonly stores = new Map<string, { store: CityStore; ledger: ActionLedger; notifier: NeedsYouNotifier; subs: number }>();
   private readonly pollers = new Map<string, { poller: CitiesPoller; subs: number }>();
   private readonly listeners = new Set<(batch: EventBatch) => void>();
   private onScreen = false;
@@ -171,11 +177,11 @@ export class SyncRegistry {
         refreshBead: (beadId) => store.refreshBead(beadId),
         newKey: this.deps.newKey ?? (() => newIdempotencyKey()),
       });
-      entry = { store, ledger, subs: 0 };
+      entry = { store, ledger, notifier: new NeedsYouNotifier(key.city), subs: 0 };
       this.stores.set(id, entry);
     }
     entry.subs++;
-    return ok(this.subscription(id, entry.store, entry.ledger, endpoint.value));
+    return ok(this.subscription(id, entry.store, entry.ledger, entry.notifier, endpoint.value));
   }
 
   /** Subscribes a copy to a loopback gc API's shared city list; `not-loopback` otherwise. */
@@ -284,7 +290,7 @@ export class SyncRegistry {
     this.endpoints.delete(endpoint.baseUrl);
   }
 
-  private subscription(id: string, store: CityStore, ledger: ActionLedger, endpoint: Endpoint): Subscription {
+  private subscription(id: string, store: CityStore, ledger: ActionLedger, notifier: NeedsYouNotifier, endpoint: Endpoint): Subscription {
     const owner = {};
     const watches = new Set<() => void>();
     let active = true;
@@ -320,6 +326,9 @@ export class SyncRegistry {
           this.budget.reclaim();
           store.tick(owner);
           ledger.tick(owner);
+          const s = store.snapshot();
+          const items = notifier.observe(s.pending.value, s.sessions.value, this.clock.now());
+          if (items.length > 0) this.deps.onNeedsYou?.(items);
         }
         return store.snapshot().rev;
       },
