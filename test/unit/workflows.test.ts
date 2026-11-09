@@ -120,3 +120,52 @@ describe("release.yml", () => {
     }
   });
 });
+
+describe("smoke.yml", () => {
+  const smoke = async () => {
+    const text = await readFile(join(DIR, "smoke.yml"), "utf8");
+    return { text, w: Bun.YAML.parse(text) as Workflow & { on: Record<string, { paths?: string[] } | unknown[]> } };
+  };
+
+  test("runs on pushes and pull requests touching the mod, and nightly; never dispatched", async () => {
+    const { w } = await smoke();
+    expect(Object.keys(w.on).sort()).toEqual(["pull_request", "push", "schedule"]);
+    for (const event of ["push", "pull_request"] as const) {
+      const paths = (w.on[event] as { paths?: string[] }).paths ?? [];
+      expect(paths).toContain("src/**");
+      expect(paths).toContain("gascity/**");
+      expect(paths).toContain(".github/workflows/smoke.yml");
+    }
+  });
+
+  test("is read-only, holds no secret and every job has a timeout", async () => {
+    const { text, w } = await smoke();
+    expect(w.permissions).toEqual({ contents: "read" });
+    expect(text).not.toMatch(/secrets\.|GITHUB_TOKEN|github\.token/);
+    for (const [name, job] of Object.entries(w.jobs)) {
+      expect({ name, permissions: job.permissions }).toEqual({ name, permissions: undefined });
+      expect({ name, timeout: typeof (job as { "timeout-minutes"?: number })["timeout-minutes"] }).toEqual({ name, timeout: "number" });
+    }
+  });
+
+  test("saves no cache: the release mirror is only restored", async () => {
+    const { w } = await smoke();
+    let restores = 0;
+    for (const { job, step } of steps(w)) {
+      const uses = step.uses ?? "";
+      if (!/^actions\/cache(\/[a-z]+)?@/.test(uses)) continue;
+      expect({ job, uses: uses.split("@")[0] }).toEqual({ job, uses: "actions/cache/restore" });
+      restores++;
+    }
+    expect(restores).toBeGreaterThan(0);
+  });
+
+  test("a broken bundle must fail the smoke at the check stage", async () => {
+    const { w } = await smoke();
+    const broken = w.jobs["broken-bundle"]!.steps;
+    expect(broken.some((s) => s.run === "canary/mod-linux.sh package --broken")).toBe(true);
+    expect(broken.some((s) => (s.run ?? "").includes('.failed_stage == "M2-check"'))).toBe(true);
+    const runs = w.jobs["smoke"]!.steps.map((s) => s.run ?? "");
+    for (const stage of ["package", "check", "install", "connected", "shot smoke.png"]) expect(runs).toContain(`canary/mod-linux.sh ${stage}`);
+  });
+});

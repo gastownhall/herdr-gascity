@@ -1,0 +1,263 @@
+name: Smoke - the mod in the released herdr-app
+
+# The real-app smoke: the mod as this commit packages it, loaded by the
+# current stable herdr-app before it ships. The released app runs headless
+# on Xvfb with software Vulkan (canary/bootstrap-linux.sh, installed by
+# herdr's published install.sh from a per-release local mirror); gc built
+# from the commit in api/PIN runs a scratch city; then canary/mod-linux.sh:
+# `herdr-app check` on the packaged mod, install.sh --from the package opens
+# the mod's tab, the mod's probe (gascity.probe:on) shows it connected to the
+# city, `herdr-app status` reports no errors, and the shot and logs are
+# uploaded. The broken-bundle job packages the same mod with a syntax error
+# in main.js and requires the smoke to fail at the check stage.
+#
+# Runs on pushes and pull requests that touch the mod or this path, and
+# nightly against the latest herdr-app release. It runs herdr's installer, gc
+# built from source and the Go modules gc pulls: it is never given a secret,
+# has read-only contents, saves no cache and restores only the release mirror
+# (its tarballs are checked against the release manifests' sha256 on every
+# run). It has no workflow_dispatch, so it only ever builds the gc commit the
+# checked-out api/PIN names. The release workflow restores no cache at all.
+
+on:
+  push:
+    paths: &paths
+      - "src/**"
+      - "gascity/**"
+      - "install.sh"
+      - "scripts/package.ts"
+      - "canary/bootstrap-linux.sh"
+      - "canary/lib.sh"
+      - "canary/mirror.sh"
+      - "canary/mod-linux.sh"
+      - "canary/result.sh"
+      - "api/PIN"
+      - "package.json"
+      - "bun.lock"
+      - ".bun-version"
+      - ".github/workflows/smoke.yml"
+  pull_request:
+    paths: *paths
+  schedule:
+    - cron: "37 4 * * *" # nightly: the latest herdr-app release
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+env:
+  HC_SESSION: canary
+  CANARY_DISPLAY: xvfb
+  # Every stage of the smoke, in order: the result needs all of them.
+  SMOKE_STAGES: >-
+    S0-preflight S0-resolve S0-mirror S1-install M1-package M2-check
+    P1-gc P2-city S4a-display S4b-app P3-install P4-connected P5-shot
+
+jobs:
+  smoke:
+    name: Mod in herdr-app (ubuntu-24.04, Xvfb, lavapipe)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GASCITY_SRC: ${{ github.workspace }}/gascity-src
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: The pinned gascity commit
+        id: pin
+        run: |
+          commit=$(sed -n 's/^commit=//p' api/PIN)
+          [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "::error::api/PIN has no commit"; exit 1; }
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: gastownhall/gascity
+          ref: ${{ steps.pin.outputs.commit }}
+          path: gascity-src
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: gascity-src/go.mod
+          # No cache: nothing this job downloads may be restored by another run.
+          cache: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+          # The binary is never cached: a cache saved by a workflow that runs
+          # downloaded code could be restored by the release build.
+          no-cache: true
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: S0 preflight (packages, lavapipe)
+        timeout-minutes: 6
+        run: |
+          canary/bootstrap-linux.sh preflight
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libicu-dev
+
+      - name: S0 resolve current stable release
+        id: resolve
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh resolve
+
+      - name: S0 restore release mirror
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: S0 fill and serve release mirror
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh mirror
+
+      - name: S1 install herdr-app via published install.sh
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh install
+
+      - name: M1 package the mod
+        timeout-minutes: 2
+        run: canary/mod-linux.sh package
+
+      - name: M2 herdr-app check (the packaged mod)
+        timeout-minutes: 2
+        run: canary/mod-linux.sh check
+
+      - name: P1 build gc at the pinned commit
+        timeout-minutes: 12
+        run: canary/mod-linux.sh gc
+
+      - name: P2 scratch city
+        timeout-minutes: 4
+        run: canary/mod-linux.sh city
+
+      - name: S4a display (Xvfb)
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh display
+
+      - name: S4b app up, status, space.new
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh app
+
+      - name: P3 install the mod with install.sh --from the package
+        timeout-minutes: 3
+        run: canary/mod-linux.sh install
+
+      - name: P4 the mod connected to the city (probe)
+        timeout-minutes: 3
+        run: canary/mod-linux.sh connected
+
+      - name: P5 shot and herdr-app status
+        timeout-minutes: 4
+        run: canary/mod-linux.sh shot smoke.png
+
+      - name: Teardown
+        if: always()
+        timeout-minutes: 2
+        run: |
+          canary/mod-linux.sh teardown
+          canary/bootstrap-linux.sh teardown
+
+      - name: Result
+        if: always()
+        run: |
+          read -ra stages <<<"$SMOKE_STAGES"
+          canary/result.sh "${stages[@]}"
+
+      - name: Upload the shot and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herdr-canary/out
+          if-no-files-found: error
+          retention-days: 14
+
+  broken-bundle:
+    name: A broken bundle fails the smoke at the check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+          # The binary is never cached: a cache saved by a workflow that runs
+          # downloaded code could be restored by the release build.
+          no-cache: true
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: S0 preflight (packages, lavapipe)
+        timeout-minutes: 6
+        run: canary/bootstrap-linux.sh preflight
+
+      - name: S0 resolve current stable release
+        id: resolve
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh resolve
+
+      - name: S0 restore release mirror
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: S0 fill and serve release mirror
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh mirror
+
+      - name: S1 install herdr-app via published install.sh
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh install
+
+      - name: M1 package the mod with a syntax error in main.js
+        timeout-minutes: 2
+        run: canary/mod-linux.sh package --broken
+
+      - name: M2 herdr-app check (expected to fail)
+        id: check
+        timeout-minutes: 2
+        continue-on-error: true
+        run: canary/mod-linux.sh check
+
+      - name: Teardown
+        if: always()
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh teardown
+
+      - name: The smoke failed at the check stage
+        if: always()
+        env:
+          CHECK: ${{ steps.check.outcome }}
+        run: |
+          [[ $CHECK == failure ]] || { echo "::error::herdr-app check did not fail on the broken bundle (outcome: $CHECK)"; exit 1; }
+          read -ra stages <<<"$SMOKE_STAGES"
+          if canary/result.sh "${stages[@]}"; then
+            echo "::error::the smoke passed a broken bundle"
+            exit 1
+          fi
+          jq -e '.failed_stage == "M2-check" and .failure_class == "product"' "$RUNNER_TEMP/herdr-canary/out/spike-result.json" >/dev/null ||
+            { echo "::error::the smoke did not fail at M2-check"; exit 1; }
+          echo "the smoke failed at M2-check, as it must"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-broken-bundle-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herdr-canary/out
+          if-no-files-found: error
+          retention-days: 14
