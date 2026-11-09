@@ -1,5 +1,5 @@
-import { exec } from "herdr";
+import * as herdr from "herdr";
 
 export async function killSession(name: string) {
-  return exec("tmux", ["kill-session", "-t", name]);
+  return herdr.exec("tmux", ["kill-session", "-t", name]);
 }

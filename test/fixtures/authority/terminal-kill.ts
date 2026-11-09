@@ -1,5 +1,5 @@
-import { run } from "herdr";
+import * as herdr from "herdr";
 
 export function stop(terminal: string) {
-  run("terminal.kill", { terminal });
+  herdr.run("terminal.kill", { terminal });
 }

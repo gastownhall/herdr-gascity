@@ -20,20 +20,33 @@ connect to gc yet; the gc API client comes next.
 
 ## Rules the build enforces
 
-- **gc is the only authority.** The mod never calls `hc`, `tmux` or `bd`, nor
-  herdr's `terminal.kill`/`send`/`keys`/`label`/`keep`. Every change to a gc
-  session, agent, rig or bead is a gc API call.
-- **No code compiled at run time.** No `eval`, no `Function` constructor, no
-  dynamic import. zod is imported only through `src/gc/zod.ts`, which must
-  call `z.config({ jitless: true })`.
+- **gc is the only authority.** Every change to a gc session, agent, rig or
+  bead is a gc API call. The mod never runs `hc`, `tmux` or `bd`, and never
+  names a herdr command that ends, re-homes, pins or types into a terminal
+  (`terminal.kill`, `keep`, `park`, `pin`, `right_click`, `paste`,
+  `paste_image`, and hc's `send`/`keys`/`label`).
+- **One door to the host.** Only `src/host.ts` imports `herdr`, and only as
+  `import * as herdr`. The namespace is used only as `herdr.<export>`.
+  `herdr.run` and `herdr.exec` are called directly with a string-literal first
+  argument from an allowlist: `tab.new`, `tab.select` and `mod.open`, and
+  the programs `xdg-open` and `open`. The mod imports nothing but `gpui-kit`,
+  `gpui-base`, `herdr`, zod and its own modules. It does not use the host's
+  `process` (whose `run` spawns programs).
+- **No code compiled at run time.** There is no `eval`, no `Function`
+  constructor in any spelling (including `x.constructor(...)` and
+  `Reflect.construct`), and no dynamic import. zod is imported only through
+  `src/gc/zod.ts`, which must call `z.config({ jitless: true })`.
 - **The bundle is the source.** `gascity/main.js` is unminified and must equal
   `bun run build` byte for byte, so a person or agent installing the mod can
-  read what runs.
+  read what runs. Its header has a digest of the git-tracked build inputs, so
+  `git add` a new source file before building.
 
-`scripts/authority.ts` checks the first two over `src/**/*.ts` and
-`gascity/**/*.js` with the TypeScript parser (comments never count). A hit is
-allowed only inside exact text listed in its `ALLOWLIST`, and an allowlist
-entry that matches nothing fails.
+`scripts/authority.ts` checks the first three rules over `src/**/*.ts` and
+`gascity/**/*.js` with the TypeScript parser, so comments never count. String
+literals are also scanned for `hc`/`tmux`/`bd` anywhere in a shell command
+and for the denied terminal commands. A hit is allowed only inside exact text
+listed in the lint's `ALLOWLIST`. An allowlist entry that matches nothing
+fails.
 
 ## Develop
 

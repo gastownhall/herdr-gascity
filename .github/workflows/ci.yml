@@ -29,14 +29,5 @@ jobs:
       - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Authority lint (no hc/tmux/bd, no terminal.kill/send/keys/label/keep, no eval/new Function)
-        run: bun run lint:authority
-
-      - name: Committed gascity/main.js matches a clean rebuild
-        run: bun run check:bundle
-
-      - name: Unit tests
-        run: bun test
+      - name: Typecheck, authority lint, bundle freshness, unit tests
+        run: bun run ci

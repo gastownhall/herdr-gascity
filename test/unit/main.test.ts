@@ -48,3 +48,29 @@ test("mod.json is valid (herdr-app silently ignores an invalid one) and is not a
   const hint = JSON.parse(await Bun.file(new URL("../../gascity/mod.json", import.meta.url)).text());
   expect(hint).toEqual({ place: "none", title: "Gas City" });
 });
+
+test("a theme colour that is not #rgb/#rrggbb/#rrggbbaa is reported, not drawn", async () => {
+  const mod = await loadMod({ theme: { ...FAKE_THEME, muted: "rgb(1, 2, 3)" } });
+  mod.init();
+  const root = mod.render();
+  expect(textOf(findById(root, "gascity-host-decode")!)).toBe(
+    'herdr theme colour "muted" is not a #rgb, #rrggbb or #rrggbbaa value: rgb(1, 2, 3)',
+  );
+  expect(callsTo(findById(root, "gascity-placeholder")!, "text_color")).toEqual([]);
+  expect(callsTo(root, "bg")).toEqual([[FAKE_THEME.background]]);
+});
+
+test("a theme without a colour the panel uses is reported", async () => {
+  const { background: _, ...theme } = FAKE_THEME;
+  const mod = await loadMod({ theme });
+  mod.init();
+  const root = mod.render();
+  expect(textOf(findById(root, "gascity-host-decode")!)).toBe('herdr theme has no colour "background"');
+  expect(callsTo(root, "bg")).toEqual([]);
+});
+
+test("a complete theme reports nothing", async () => {
+  const mod = await loadMod();
+  mod.init();
+  expect(findById(mod.render(), "gascity-host-decode")).toBeUndefined();
+});

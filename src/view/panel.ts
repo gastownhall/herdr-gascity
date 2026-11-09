@@ -1,13 +1,13 @@
 // Render functions for the panel. They read only the model they are given:
-// no host calls, no I/O (design §4).
+// no host calls, no I/O.
 
 import { div } from "gpui-kit";
 import { v_flex } from "gpui-base";
-import type { PanelColors } from "../host.ts";
+import type { ThemeRead } from "../host.ts";
 
 /** What the panel shows. */
 export type PanelModel =
-  | { kind: "placeholder"; colors: PanelColors }
+  | { kind: "placeholder"; theme: ThemeRead }
   | { kind: "host-incompatible"; missing: readonly string[] };
 
 export const TITLE = "Gas City";
@@ -18,7 +18,7 @@ export function hostIncompatibleText(missing: readonly string[]): string {
   return `This herdr-app is too old for the Gas City mod: it lacks ${missing.join(", ")}.`;
 }
 
-function tinted(el: GpuiElement, color: string | undefined, apply: (el: GpuiElement, color: string) => GpuiElement): GpuiElement {
+function tinted(el: GpuiElement, color: GpuiColor | undefined, apply: (el: GpuiElement, color: GpuiColor) => GpuiElement): GpuiElement {
   return color === undefined ? el : apply(el, color);
 }
 
@@ -29,8 +29,11 @@ export function renderPanel(model: PanelModel): GpuiElement {
   if (model.kind === "host-incompatible") {
     return root.child(title).child(div().id("gascity-host-incompatible").child(hostIncompatibleText(model.missing)));
   }
-  const { background, foreground, muted } = model.colors;
-  const placeholder = tinted(div().id("gascity-placeholder"), muted, (el, c) => el.text_color(c)).child(PLACEHOLDER_TEXT);
-  const themed = tinted(tinted(root, background, (el, c) => el.bg(c)), foreground, (el, c) => el.text_color(c));
-  return themed.child(title).child(placeholder);
+  const { colors, issues } = model.theme;
+  const placeholder = tinted(div().id("gascity-placeholder"), colors.muted, (el, c) => el.text_color(c)).child(PLACEHOLDER_TEXT);
+  const themed = tinted(tinted(root, colors.background, (el, c) => el.bg(c)), colors.foreground, (el, c) => el.text_color(c));
+  return themed
+    .child(title)
+    .child(placeholder)
+    .when(issues.length > 0, (el) => el.child(div().id("gascity-host-decode").child(issues.join("; "))));
 }

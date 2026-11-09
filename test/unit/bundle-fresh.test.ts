@@ -1,11 +1,11 @@
-// The committed bundle must be exactly what the source builds to (design §9:
-// a reviewer reads gascity/main.js, so it must be the code that runs).
+// The committed bundle must be exactly what the source builds to: a person or
+// agent installing the mod reads gascity/main.js, so it must be the code that runs.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUNDLE_FILE, buildBundle, digestOf } from "../../build.ts";
+import { BUNDLE_FILE, buildBundle, digestOf, inputPaths } from "../../build.ts";
 import { checkBundle } from "../../scripts/bundle-fresh.ts";
 
 const ROOT = join(import.meta.dir, "../..");
@@ -20,7 +20,7 @@ describe("build", () => {
     const out = await buildBundle(ROOT);
     const { version } = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
     expect(out.split("\n")[0]).toMatch(new RegExp(`^// herdr-gascity ${version.replace(/\./g, "\\.")} `));
-    expect(out).toMatch(/source digest sha256:[0-9a-f]{64}/);
+    expect(out).toMatch(/source digest sha256:[0-9a-f]{64} over the git-tracked src\/, build\.ts, package\.json, bun\.lock and tsconfig\.json/);
     expect(out).toContain("export {\n  GasCity as default\n};");
     expect(out.split("\n").length).toBeGreaterThan(20);
   });
@@ -30,6 +30,36 @@ describe("build", () => {
     expect(out).toContain('from "herdr";');
     expect(out).toContain('from "gpui-kit";');
     expect(out).toContain('from "gpui-base";');
+  });
+
+  test("the digest covers the git-tracked build inputs, including tsconfig.json, and nothing untracked", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "herdr-gascity-inputs-"));
+    try {
+      const git = (...args: string[]) => {
+        const r = Bun.spawnSync(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+        if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+      };
+      git("init", "-q");
+      for (const f of ["src/main.ts", "src/view/panel.ts", "build.ts", "package.json", "bun.lock", "tsconfig.json", "README.md"]) {
+        await Bun.write(join(dir, f), f);
+      }
+      git("add", ".");
+      await Bun.write(join(dir, "src/untracked.ts"), "x");
+      expect(await inputPaths(dir)).toEqual([
+        "build.ts", "bun.lock", "package.json", "src/main.ts", "src/view/panel.ts", "tsconfig.json",
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("outside a git checkout the build fails instead of guessing its inputs", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "herdr-gascity-nogit-"));
+    try {
+      await expect(inputPaths(dir)).rejects.toThrow("git ls-files");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("the source digest depends on every input's path and content, not their order", () => {

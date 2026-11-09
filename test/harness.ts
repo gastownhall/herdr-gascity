@@ -97,13 +97,14 @@ export function moduleBody(source: string): string {
     statement = statement.replace(/\s+/g, " ").replace("{ ", "{").replace(" }", "}");
     let m: RegExpMatchArray | null;
     if ((m = statement.match(NAMESPACE_IMPORT))) {
-      out.push(`const ${m[1]} = __host(${JSON.stringify(m[2])});`);
+      out.push(`const ${m[1]} = __host(${JSON.stringify(m[2])}, []);`);
     } else if ((m = statement.match(NAMED_IMPORT))) {
-      const names = m[1]!.split(",").map((s) => s.trim()).filter(Boolean)
-        .map((s) => s.replace(/^(\w+) as (\w+)$/, "$1: $2"));
-      out.push(`const {${names.join(", ")}} = __host(${JSON.stringify(m[2])});`);
+      const specifiers = m[1]!.split(",").map((s) => s.trim()).filter(Boolean);
+      const imported = specifiers.map((s) => s.split(" as ")[0]!);
+      const bindings = specifiers.map((s) => s.replace(/^(\w+) as (\w+)$/, "$1: $2"));
+      out.push(`const {${bindings.join(", ")}} = __host(${JSON.stringify(m[2])}, ${JSON.stringify(imported)});`);
     } else if ((m = statement.match(DEFAULT_IMPORT))) {
-      out.push(`const ${m[1]} = __host(${JSON.stringify(m[2])}).default;`);
+      out.push(`const ${m[1]} = __host(${JSON.stringify(m[2])}, ["default"]).default;`);
     } else {
       throw new Error(`harness: unsupported import shape: ${statement}`);
     }
@@ -123,23 +124,39 @@ export function moduleBody(source: string): string {
   }
   if (!name) throw new Error("harness: module has no default export");
   if (/^\s*export\b/m.test(body)) throw new Error("harness: unsupported export shape");
-  return `${body}\nreturn ${name};`;
+  return `"use strict";\n${body}\nreturn ${name};`;
 }
 
-/** Evaluates a module's source against the given host modules; returns its default export. */
+/**
+ * Evaluates a module's source (strict, like an ES module) against the given
+ * host modules; returns its default export. A named import the host module
+ * lacks throws before any module code runs, as herdr's module linker refuses
+ * to load such a mod.
+ */
 export function evaluateModule(source: string, modules: HostModules): any {
-  const host = (specifier: string) => {
+  const host = (specifier: string, names: readonly string[]) => {
     const mod = modules[specifier];
     if (!mod) throw new Error(`harness: no fake for host module "${specifier}"`);
+    for (const name of names) {
+      if (!(name in mod)) throw new SyntaxError(`module "${specifier}" does not provide an export named "${name}"`);
+    }
     return mod;
   };
   return new Function("__host", moduleBody(source))(host);
 }
 
-/** A fake per-callback context that counts notifies. */
-export function fakeContext() {
-  const cx = { notifies: 0, notify() { cx.notifies++; } };
+/** The context `init`, `close` and tasks get (gpui-kit `AsyncContext`); counts notifies. */
+export function asyncContext() {
+  const cx = { kind: "async" as const, notifies: 0, notify() { cx.notifies++; } };
   return cx;
+}
+
+/** The context `render` gets. Notifying from render would re-render forever, so it throws. */
+export function renderContext() {
+  return {
+    kind: "render" as const,
+    notify(): never { throw new Error("harness: cx.notify() during render"); },
+  };
 }
 
 /** The fake gpui-kit and gpui-base modules: a View base class and recording builders. */
@@ -150,18 +167,26 @@ export function fakeGpui(): HostModules {
   };
 }
 
-/** A herdr theme with the colour names herdr documents (values are tags, not real colours). */
+/** A herdr theme with some of the colour names herdr documents. */
 export const FAKE_THEME: Readonly<Record<string, string>> = Object.freeze({
-  background: "#background", foreground: "#foreground", muted: "#muted", dim: "#dim",
-  accent: "#accent", border: "#border", surface: "#surface", blocked: "#blocked",
+  background: "#101010", foreground: "#f0f0f0", muted: "#808080", dim: "#606060",
+  accent: "#3080ff", border: "#303030", surface: "#181818", blocked: "#ff5050",
 });
 
-/** A fake `herdr` module whose every call is recorded. Pass `omit` to drop exports. */
-export function fakeHerdr(options: { props?: Record<string, unknown>; omit?: string[] } = {}) {
+/** Options for the fake host: the copy's props (null = unpinned), the theme, exports to drop. */
+export interface FakeHostOptions {
+  props?: Record<string, unknown>;
+  theme?: Record<string, string>;
+  omit?: string[];
+}
+
+/** A fake `herdr` module whose every call is recorded. */
+export function fakeHerdr(options: FakeHostOptions = {}) {
   const calls: { name: string; args: unknown[] }[] = [];
   const all: Record<string, (...args: unknown[]) => unknown> = {
-    theme: () => ({ ...FAKE_THEME }),
-    props: () => ({ ...(options.props ?? {}) }),
+    theme: () => ({ ...(options.theme ?? FAKE_THEME) }),
+    // herdr returns the props a copy was opened with, and null for an unpinned copy.
+    props: () => (options.props ? structuredClone(options.props) : null),
   };
   const module: Record<string, unknown> = {};
   for (const [name, fn] of Object.entries(all)) {
@@ -173,18 +198,22 @@ export function fakeHerdr(options: { props?: Record<string, unknown>; omit?: str
 
 export const BUNDLE_PATH = new URL("../gascity/main.js", import.meta.url);
 
-/** Loads the committed bundle with fake host modules and constructs one copy of the mod. */
-export async function loadMod(options: { props?: Record<string, unknown>; omit?: string[] } = {}) {
-  const source = await readFile(BUNDLE_PATH, "utf8");
+/**
+ * Loads the committed bundle (or `source`) with fake host modules and
+ * constructs one copy, called the way herdr calls a root view: `init(undefined,
+ * asyncCx)` (props come from `props()`), then `render(renderCx)`.
+ */
+export async function loadMod(options: FakeHostOptions & { source?: string } = {}) {
+  const source = options.source ?? await readFile(BUNDLE_PATH, "utf8");
   const herdr = fakeHerdr(options);
   const Mod = evaluateModule(source, { ...fakeGpui(), herdr: herdr.module });
   const view = new Mod();
-  const cx = fakeContext();
+  const cx = asyncContext();
   return {
     view,
     cx,
     herdrCalls: herdr.calls,
-    init: () => view.init?.(options.props ?? {}, cx),
-    render: (): RecordedNode => nodeOf(view.render(cx)),
+    init: () => view.init?.(undefined, cx),
+    render: (): RecordedNode => nodeOf(view.render(renderContext())),
   };
 }
