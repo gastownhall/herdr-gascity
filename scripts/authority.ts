@@ -4,8 +4,11 @@
 // changes them only through gc's HTTP API. So it must never run hc, tmux or
 // bd, nor the herdr commands that end, park, pin or type into a terminal.
 // And a herdr mod runs with the person's full rights and no permission
-// prompt, so it must never compile code at run time: no eval, no Function
-// constructor (in any spelling), no dynamic import. zod is imported only
+// prompt, so it must never compile code at run time: no eval, no `Function`
+// identifier, no read of `.constructor` (the way to every Function-like
+// constructor without naming it) except `.constructor.name`,
+// `.constructor.prototype` and `===`/`!==` comparisons, no Reflect.construct,
+// no dynamic import. zod is imported only
 // through src/gc/zod.ts, which must turn on `jitless` (zod otherwise compiles
 // parsers with `new Function`).
 //
@@ -14,7 +17,7 @@
 // - the namespace is used only as `herdr.<export>`;
 // - `herdr.run` and `herdr.exec` are called directly with a string literal
 //   first argument from RUN_COMMANDS / EXEC_PROGRAMS (the one exception is
-//   in ALLOWLIST, matched by exact text);
+//   in ALLOWLIST, matched by exact text that must occur exactly once);
 // - modules other than gpui-kit, gpui-base, herdr, zod and relative paths are
 //   not imported (the host's `process` module and global can spawn programs).
 // String literals are also checked for hc/tmux/bd anywhere in a shell command
@@ -42,10 +45,12 @@ export type RuleId =
   | "process"
   | "eval"
   | "function-constructor"
+  | "constructor-read"
   | "dynamic-import"
   | "zod-import"
   | "zod-jitless"
-  | "stale-allowlist";
+  | "stale-allowlist"
+  | "allowlist-not-unique";
 
 /** One lint finding; line and column are 1-based. */
 export interface Violation {
@@ -58,8 +63,11 @@ export interface Violation {
 
 /**
  * An allowed hit: a hit of `rule` in `file` is allowed only if it lies inside
- * an occurrence of `text`, matched exactly. An entry that allows nothing is
- * itself a violation, so a changed dependency cannot leave a stale hole.
+ * `text`, matched exactly, and `text` occurs in the file exactly once. So an
+ * entry pins one place: the same text a second time (an identical call added
+ * elsewhere) allows nothing and is itself a violation. An entry that allows
+ * nothing is a violation too, so a changed dependency cannot leave a stale
+ * hole.
  */
 export interface AllowEntry {
   file: string;
@@ -78,10 +86,31 @@ export interface AllowEntry {
 const GC_STATUS_CALL = 'herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS })';
 const GC_STATUS_REASON = "endpoint discovery runs `<gcBin> supervisor status --json` (fixed argv; gcBin is a setting checked to name gc)";
 
+/**
+ * zod's isPlainObject (zod v4 core/util.js), bundled: it reads `o.constructor`
+ * only to compare it with undefined, check its type and read its
+ * `.prototype`; it never calls it. The text runs to that last use, so a
+ * changed check no longer matches.
+ */
+const ZOD_PLAIN_OBJECT = [
+  "const ctor = o.constructor;",
+  "  if (ctor === void 0)",
+  "    return true;",
+  '  if (typeof ctor !== "function")',
+  "    return true;",
+  "  const prot = ctor.prototype;",
+].join("\n");
+
 /** The allowlist for this repo. */
 export const ALLOWLIST: readonly AllowEntry[] = [
   { file: "src/host.ts", rule: "exec-program", text: GC_STATUS_CALL, reason: GC_STATUS_REASON },
   { file: "gascity/main.js", rule: "exec-program", text: GC_STATUS_CALL, reason: GC_STATUS_REASON },
+  {
+    file: "gascity/main.js",
+    rule: "constructor-read",
+    text: ZOD_PLAIN_OBJECT,
+    reason: "zod's isPlainObject reads o.constructor only to compare it and read its prototype; it never calls it",
+  },
 ];
 
 /** The only module that may import herdr. */
@@ -136,11 +165,15 @@ const MESSAGES: Readonly<Record<RuleId, string>> = {
   "module-import": "import only gpui-kit, gpui-base, herdr, zod and relative modules",
   process: "process is forbidden: process.run spawns programs",
   eval: "eval is forbidden: the mod never compiles code at run time",
-  "function-constructor": "the Function constructor is forbidden in every spelling: the mod never compiles code at run time",
+  "function-constructor": "the Function identifier and Reflect.construct are forbidden: the mod never compiles code at run time",
+  "constructor-read":
+    "reading .constructor is forbidden (it reaches Function and AsyncFunction without naming them), except "
+    + ".constructor.name, .constructor.prototype or an ===/!== comparison: the mod never compiles code at run time",
   "dynamic-import": "dynamic import is forbidden: all code is bundled",
   "zod-import": `import zod only through ${ZOD_MODULE}, which turns on jitless first`,
   "zod-jitless": `${ZOD_MODULE} must call z.config({ jitless: true })`,
   "stale-allowlist": "allowlist entry matches nothing: remove or update it",
+  "allowlist-not-unique": "allowlist entry text occurs more than once, so it pins no single place: it allows nothing",
 };
 
 interface Hit {
@@ -184,12 +217,62 @@ function unparen(node: ts.Expression): ts.Expression {
   return ts.isParenthesizedExpression(node) ? unparen(node.expression) : node;
 }
 
-/** `x.constructor` or `x["constructor"]`. */
-function isConstructorMember(node: ts.Expression): boolean {
-  const n = unparen(node);
-  if (ts.isPropertyAccessExpression(n)) return n.name.text === "constructor";
-  return ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)
-    && n.argumentExpression.text === "constructor";
+/** `x.constructor`, `x?.constructor` or `x["constructor"]`. */
+function isConstructorMember(node: ts.Node): node is ts.PropertyAccessExpression | ts.ElementAccessExpression {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text === "constructor";
+  return ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression)
+    && node.argumentExpression.text === "constructor";
+}
+
+/** The uses of a `.constructor` read that cannot reach the constructor itself. */
+const SAFE_CONSTRUCTOR_MEMBERS = new Set(["name", "prototype"]);
+const COMPARISONS = new Set([ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken]);
+
+/** Is this `.constructor` read used only as `.name`, `.prototype`, or in an ===/!== comparison? */
+function isSafeConstructorRead(node: ts.Expression): boolean {
+  let outer: ts.Node = node;
+  while (ts.isParenthesizedExpression(outer.parent)) outer = outer.parent;
+  const user = outer.parent;
+  if (ts.isPropertyAccessExpression(user) && user.expression === outer) return SAFE_CONSTRUCTOR_MEMBERS.has(user.name.text);
+  return ts.isBinaryExpression(user) && COMPARISONS.has(user.operatorToken.kind);
+}
+
+/** The property name a destructuring element or assignment-pattern property reads, if static. */
+function patternPropertyName(name: ts.PropertyName | ts.BindingName | undefined): string | null {
+  if (!name) return null;
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+  if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) return name.expression.text;
+  return null;
+}
+
+/** Is this object or array literal the target of a destructuring assignment (`({ a } = b)`, `for ({ a } of b)`)? */
+function isAssignmentPattern(node: ts.Node): boolean {
+  const p = node.parent;
+  if (!p) return false;
+  if (ts.isBinaryExpression(p)) return p.left === node && p.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+  if (ts.isForOfStatement(p) || ts.isForInStatement(p)) return p.initializer === node;
+  if (ts.isArrayLiteralExpression(p)) return isAssignmentPattern(p);
+  if (ts.isPropertyAssignment(p) && p.initializer === node) return isAssignmentPattern(p.parent);
+  if (ts.isShorthandPropertyAssignment(p) || ts.isSpreadElement(p) || ts.isSpreadAssignment(p)) return isAssignmentPattern(p.parent);
+  return false;
+}
+
+/** Does this destructuring element take out `constructor` (`const { constructor: F } = f`, `({ constructor } = f)`)? */
+function destructuresConstructor(node: ts.Node): boolean {
+  if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+    return patternPropertyName(node.propertyName ?? node.name) === "constructor";
+  }
+  if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && ts.isObjectLiteralExpression(node.parent)) {
+    return patternPropertyName(node.name) === "constructor" && isAssignmentPattern(node.parent);
+  }
+  return false;
+}
+
+/** A "constructor" string handed to a call (`Reflect.get(f, "constructor")`, `getOwnPropertyDescriptor(f, "constructor")`). */
+function isConstructorKeyArgument(node: ts.Node): boolean {
+  if (!ts.isStringLiteralLike(node) || node.text !== "constructor") return false;
+  const p = node.parent;
+  return !!p && (ts.isCallExpression(p) || ts.isNewExpression(p)) && (p.arguments ?? []).some((a) => a === node);
 }
 
 function isReflectConstruct(node: ts.Expression): boolean {
@@ -275,22 +358,29 @@ export function lintSource(file: string, text: string, allowlist: readonly Allow
       checkModule(node);
     } else if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) add("dynamic-import", node);
-      else if (isConstructorMember(node.expression) || isReflectConstruct(node.expression)) add("function-constructor", node);
+      else if (isReflectConstruct(node.expression)) add("function-constructor", node);
     }
+    if (isConstructorMember(node) && !isSafeConstructorRead(node)) add("constructor-read", node);
+    if (destructuresConstructor(node) || isConstructorKeyArgument(node)) add("constructor-read", node);
     if (isJitlessConfig(node)) jitless = true;
     ts.forEachChild(node, visit);
   };
   visit(sf);
 
   const entries = allowlist.filter((e) => e.file === file);
+  const occurrences = new Map(entries.map((e) => {
+    const found: number[] = [];
+    for (let at = text.indexOf(e.text); at >= 0; at = text.indexOf(e.text, at + 1)) found.push(at);
+    return [e, found] as const;
+  }));
   const used = new Set<AllowEntry>();
   const allowed = (hit: Hit) => entries.some((e) => {
-    if (e.rule !== hit.rule) return false;
-    for (let at = text.indexOf(e.text); at >= 0; at = text.indexOf(e.text, at + 1)) {
-      if (at <= hit.start && hit.end <= at + e.text.length) {
-        used.add(e);
-        return true;
-      }
+    const found = occurrences.get(e) ?? [];
+    if (e.rule !== hit.rule || found.length !== 1) return false;
+    const at = found[0] as number;
+    if (at <= hit.start && hit.end <= at + e.text.length) {
+      used.add(e);
+      return true;
     }
     return false;
   });
@@ -301,7 +391,10 @@ export function lintSource(file: string, text: string, allowlist: readonly Allow
   };
   const out = hits.filter((h) => !allowed(h)).map((h) => at(h.start, h.rule));
   if (file === ZOD_MODULE && !jitless) out.push(at(0, "zod-jitless"));
-  for (const e of entries) if (!used.has(e)) out.push(at(0, "stale-allowlist", `${MESSAGES["stale-allowlist"]} (${e.rule}: ${e.reason})`));
+  for (const e of entries) {
+    if ((occurrences.get(e)?.length ?? 0) > 1) out.push(at(0, "allowlist-not-unique", `${MESSAGES["allowlist-not-unique"]} (${e.rule}: ${e.reason})`));
+    else if (!used.has(e)) out.push(at(0, "stale-allowlist", `${MESSAGES["stale-allowlist"]} (${e.rule}: ${e.reason})`));
+  }
   return out.sort((a, b) => a.line - b.line || a.column - b.column);
 }
 

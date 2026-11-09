@@ -44,15 +44,22 @@ come next.
   `herdr.run` and `herdr.exec` are called directly with a string-literal first
   argument from an allowlist: `tab.new`, `tab.select` and `mod.open`, and
   the programs `xdg-open` and `open`. The one exception, listed in the lint's
-  `ALLOWLIST` by its exact text, is discovery's
+  `ALLOWLIST` by its exact text (which must occur exactly once), is discovery's
   `<gcBin> supervisor status --json` (fixed arguments; `src/host.ts` refuses a
   `gcBin` that does not name `gc` before spawning). The mod imports nothing but `gpui-kit`,
   `gpui-base`, `herdr`, zod and its own modules. It does not use the host's
   `process` (whose `run` spawns programs).
 - **No code compiled at run time.** There is no `eval`, no `Function`
-  constructor in any spelling (including `x.constructor(...)` and
-  `Reflect.construct`), and no dynamic import. zod is imported only through
-  `src/gc/zod.ts`, which must call `z.config({ jitless: true })`.
+  identifier, no `Reflect.construct`, and no dynamic import. Every read of
+  `.constructor` (the way to `Function`, `AsyncFunction` and their kin
+  without naming them) is refused, whether called, aliased
+  (`const F = f.constructor`), passed on (`Reflect.apply(f.constructor, …)`,
+  `.call`, `.bind`), destructured (`const { constructor: F } = f`) or read by
+  key (`Reflect.get(f, "constructor")`); only `.constructor.name`,
+  `.constructor.prototype` and `===`/`!==` comparisons are allowed. A key
+  computed at run time is beyond a syntax check, so review still matters.
+  zod is imported only through `src/gc/zod.ts`, which must call
+  `z.config({ jitless: true })`.
 - **The bundle is the source.** `gascity/main.js` is unminified and must equal
   `bun run build` byte for byte, so a person or agent installing the mod can
   read what runs. Its header has a digest of the git-tracked build inputs, so
@@ -62,8 +69,11 @@ come next.
 `gascity/**/*.js` with the TypeScript parser, so comments never count. String
 literals are also scanned for `hc`/`tmux`/`bd` anywhere in a shell command
 and for the denied terminal commands. A hit is allowed only inside exact text
-listed in the lint's `ALLOWLIST`. An allowlist entry that matches nothing
-fails.
+listed in the lint's `ALLOWLIST`, and only when that text occurs exactly once
+in the file, so an entry pins one place: an identical call added elsewhere
+fails. An allowlist entry that matches nothing fails. The bundle's entries are
+discovery's `gc supervisor status` call and zod's plain-object check, which
+reads `o.constructor` only to compare it and read its prototype.
 
 ## The gc client
 

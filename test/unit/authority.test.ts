@@ -70,7 +70,11 @@ describe("bypass fixtures", () => {
     "named-import.ts": ["host-import"],
     "process-module.ts": ["hc", "module-import", "process", "process"],
     "process-global.ts": ["process"],
-    "constructor.ts": ["function-constructor", "function-constructor", "function-constructor"],
+    "constructor.ts": ["constructor-read", "constructor-read", "function-constructor"],
+    "constructor-alias.ts": ["constructor-read"],
+    "constructor-call-bind.ts": ["constructor-read", "constructor-read"],
+    "constructor-reflect.ts": ["constructor-read", "constructor-read"],
+    "constructor-destructure.ts": ["constructor-read", "constructor-read", "constructor-read"],
   };
 
   test("every bypass fixture has an expectation", async () => {
@@ -179,11 +183,40 @@ describe("rules", () => {
     expect(rules("a.ts", 'Function("return 1")();')).toEqual(["function-constructor"]);
     expect(rules("a.ts", "const F = Function; new F(code);")).toEqual(["function-constructor"]);
     expect(rules("a.ts", 'globalThis["Function"];')).toEqual(["function-constructor"]);
-    expect(rules("a.ts", "(() => 0).constructor(code);")).toEqual(["function-constructor"]);
-    expect(rules("a.ts", "(async () => {}).constructor(code)();")).toEqual(["function-constructor"]);
-    expect(rules("a.ts", "new (function* () {})[\"constructor\"](code);")).toEqual(["function-constructor"]);
-    expect(rules("a.ts", "Reflect.construct(f.constructor, [code]);")).toEqual(["function-constructor"]);
+    expect(rules("a.ts", "(() => 0).constructor(code);")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "(async () => {}).constructor(code)();")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "new (function* () {})[\"constructor\"](code);")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "Reflect.construct(f.constructor, [code]);")).toEqual(["constructor-read", "function-constructor"]);
     expect(rules("a.ts", "Reflect.construct(C, [code]);")).toEqual(["function-constructor"]);
+  });
+
+  test("every read of .constructor is a hit, however indirect", () => {
+    expect(rules("a.ts", "const AsyncFunction = (async function () {}).constructor; new AsyncFunction(code);")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "f.constructor.call(null, code);")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "f.constructor.bind(null, code)();")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "Reflect.apply(f.constructor, undefined, [code]);")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", 'Reflect.get(f, "constructor")(code);')).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "const { constructor: F } = f;")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "const { constructor } = f;")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "({ constructor: F } = f);")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "[{ constructor: F }] = [f];")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "const c = f?.constructor;")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "const c = f.constructor; c.name;")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "use(f.constructor);")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "if (f.constructor == g) {}")).toEqual(["constructor-read"]);
+    expect(rules("a.ts", "f.constructor.prototype.constructor(code);")).toEqual(["constructor-read"]);
+  });
+
+  test("a .constructor read is allowed only for .name, .prototype or an ===/!== comparison", () => {
+    expect(rules("a.ts", "f.constructor.name; f.constructor.prototype; f?.constructor.name;")).toEqual([]);
+    expect(rules("a.ts", "f.constructor === g; g !== f.constructor; f[\"constructor\"] === Date;")).toEqual([]);
+    expect(rules("a.ts", "class A { constructor() {} } const o = { constructor: 1 }; const names = [\"constructor\"];")).toEqual([]);
+  });
+
+  test("the message says what is checked, not that every spelling is caught", () => {
+    const [v] = lintSource("a.ts", "f.constructor.call(null, code);");
+    expect(v?.message).toContain(".constructor");
+    expect(v?.message).not.toMatch(/every spelling|any spelling/);
   });
 
   test("dynamic import", () => {
@@ -206,11 +239,15 @@ describe("rules", () => {
 describe("the one allowlisted exec: gcBin supervisor status --json", () => {
   const GC_STATUS_CALL = 'herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS })';
 
-  test("the allowlist is exactly that call, in the source and in the bundle, each with a reason", () => {
-    expect(ALLOWLIST.map(({ file, rule, text }) => ({ file, rule, text }))).toEqual([
-      { file: "src/host.ts", rule: "exec-program", text: GC_STATUS_CALL },
-      { file: "gascity/main.js", rule: "exec-program", text: GC_STATUS_CALL },
+  test("the allowlist is exactly that call, in the source and in the bundle, and zod's plain-object check, each with a reason", () => {
+    expect(ALLOWLIST.map(({ file, rule }) => ({ file, rule }))).toEqual([
+      { file: "src/host.ts", rule: "exec-program" },
+      { file: "gascity/main.js", rule: "exec-program" },
+      { file: "gascity/main.js", rule: "constructor-read" },
     ]);
+    expect(ALLOWLIST[0]?.text).toBe(GC_STATUS_CALL);
+    expect(ALLOWLIST[1]?.text).toBe(GC_STATUS_CALL);
+    expect(ALLOWLIST[2]?.text).toStartWith("const ctor = o.constructor;");
     for (const e of ALLOWLIST) expect(e.reason.length).toBeGreaterThan(40);
     expect(GC_STATUS_CALL).toContain(JSON.stringify(GC_STATUS_ARGS).replaceAll(",", ", "));
   });
@@ -219,6 +256,13 @@ describe("the one allowlisted exec: gcBin supervisor status --json", () => {
     const violations = lintSource("src/host.ts", await fixture("exec-gc-status.ts"), ALLOWLIST);
     expect(violations.map((v) => [v.rule, v.line])).toEqual([
       ["exec-program", 6], ["exec-program", 7], ["exec-program", 8], ["exec-program", 9],
+    ]);
+  });
+
+  test("the entry pins one place: the same call a second time in src/host.ts is a hit, and the entry says so", () => {
+    const text = `import * as herdr from "herdr";\n${GC_STATUS_CALL};\nexport const again = () => ${GC_STATUS_CALL};`;
+    expect(lintSource("src/host.ts", text, ALLOWLIST).map((v) => [v.rule, v.line])).toEqual([
+      ["allowlist-not-unique", 1], ["exec-program", 2], ["exec-program", 3],
     ]);
   });
 
@@ -244,9 +288,32 @@ describe("allowlist", () => {
     expect(rules("gascity/main.js", edited, [entry])).toEqual(["function-constructor", "stale-allowlist"]);
   });
 
+  test("an entry whose text occurs more than once allows nothing", () => {
+    expect(rules("gascity/main.js", `${probe}\n${probe}`, [entry]))
+      .toEqual(["allowlist-not-unique", "function-constructor", "function-constructor"]);
+  });
+
+  test("zod's plain-object check is allowed in the bundle once, and only there", async () => {
+    const zodEntry = ALLOWLIST[2] as AllowEntry;
+    expect(rules("gascity/main.js", `function isPlainObject(o) {\n  ${zodEntry.text}\n}`, [zodEntry])).toEqual([]);
+    expect(rules("gascity/main.js", `function isPlainObject(o) {\n  ${zodEntry.text}\n}\nconst c = o.constructor;`, [zodEntry]))
+      .toEqual(["constructor-read"]);
+    const bundle = await readFile(join(ROOT, "gascity/main.js"), "utf8");
+    expect(bundle.split(zodEntry.text).length).toBe(2);
+  });
+
   test("an entry only covers its own rule and file", () => {
     expect(rules("src/other.ts", probe, [entry])).toEqual(["function-constructor"]);
     expect(rules("gascity/main.js", `${probe}\neval(x);`, [entry])).toEqual(["eval"]);
+  });
+});
+
+describe("the README", () => {
+  test("describes the constructor rule as it is checked", async () => {
+    const readme = await readFile(join(ROOT, "README.md"), "utf8");
+    expect(readme).not.toMatch(/in (any|every) spelling/);
+    expect(readme).toContain("`.constructor`");
+    expect(readme).toContain("exactly once");
   });
 });
 

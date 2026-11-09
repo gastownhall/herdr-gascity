@@ -156,9 +156,13 @@ async function runInBun(): Promise<string> {
 
 describe("the bundled gc client with zod, and the sync engine", () => {
   test("passes the authority lint with no allowlist: tree-shaken zod/mini keeps no Function site", () => {
-    // No allowlist entry may cover a code-compiling site; the probe is linted with none at all.
+    // No allowlist entry may cover a code-compiling site. The probe is linted
+    // with only the bundle's constructor-read entry (zod's plain-object check,
+    // matched by exact text, at most once): nothing else is allowed.
     expect(ALLOWLIST.filter((e) => e.rule === "function-constructor" || e.rule === "eval")).toEqual([]);
-    expect(lintSource("gascity/main.js", probe, [])).toEqual([]);
+    const reads = ALLOWLIST.filter((e) => e.rule === "constructor-read" && e.file === "gascity/main.js");
+    expect(reads).toHaveLength(1);
+    expect(lintSource("gascity/main.js", probe, reads).filter((v) => v.rule !== "stale-allowlist")).toEqual([]);
     expect(probe).toContain("config({ jitless: true });");
   });
 
