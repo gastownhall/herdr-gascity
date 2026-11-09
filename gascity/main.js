@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:9b321d4e1bf3f62c9ac393fb661e36a9df2fa51ff8d1b961b6ffd9076c9a450c over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:d57438b2778366247bcd18690b71a4206972f6db7bd2be7fedf642ecd3f987ed over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -4533,7 +4533,7 @@ var ActionLedger = class {
     this.commit();
     let next;
     try {
-      next = s.watch.step(this.deps.client("mutation", rec.group), this.deps.city);
+      next = s.watch.step(this.deps.client("mutation", rec.group), this.deps.city, () => this.live(rec, token) && rec.state.kind === "watching");
     } catch (cause) {
       next = Promise.reject(cause);
     }
@@ -6412,6 +6412,14 @@ var WAKE_DEADLINE_MS = 6e4;
 var CONFIRM_WITHIN_MS = 5e3;
 var EXIT_WATCH_MS = 1e4;
 var CONFIRM_POLL_MS = 250;
+var OPEN_WITHIN_MS = 2e3;
+var STARTING = /* @__PURE__ */ new Set(["creating", "start-pending"]);
+var STOPPING = /* @__PURE__ */ new Set(["draining", "drained", "closing", "closed", "archived"]);
+function readiness(s) {
+  if (STOPPING.has(s.state)) return "stopping";
+  if (STARTING.has(s.state)) return "starting";
+  return s.running ? "ready" : "not-running";
+}
 var LIFECYCLE3 = ["sessions", "agents"];
 function localSpace(spaces2) {
   const active = spaces2.find((s) => s.active);
@@ -6442,6 +6450,22 @@ function openTerminal(binding, name, deps) {
   const { host, clock } = deps;
   const failed = (error) => ({ kind: "failed", error });
   const exited = notStarted(id2, "attach-exited", "attach failed: see the tab for gc's reason (the tab stays open as a shell)");
+  const stoppingError = (s) => ({
+    kind: "attach-not-started",
+    sessionId: id2,
+    reason: "session-stopping",
+    detail: `gc reports the session ${stateText(s)}: it is stopping, so no terminal is opened (try again once it is asleep)`
+  });
+  const stopping = (s) => failed(stoppingError(s));
+  const notOpened = (why) => ({ kind: "not-sent", reason: `no tab was opened: ${why}` });
+  const openNow = () => ({
+    detail: "gc reports the session running: opening its tab",
+    nextAt: clock.now(),
+    deadline: clock.now() + OPEN_WITHIN_MS,
+    expired: notOpened(`the Gas City view that asked did not get to open it within ${OPEN_WITHIN_MS / 1e3} s`),
+    abandoned: notOpened("the Gas City view that asked closed first"),
+    step: (_c, _city, live) => Promise.resolve(live() ? openOrSelect() : notOpened("the action had already ended"))
+  });
   const openOrSelect = () => {
     const scene = host.scene();
     if (!scene.ok) return failed(scene.error);
@@ -6482,37 +6506,38 @@ function openTerminal(binding, name, deps) {
     if (!runsProgram(t)) return exited;
     return now - openedAt >= EXIT_WATCH_MS ? { kind: "done", detail: `opened in a new tab (terminal ${seen})` } : confirm(openedAt, before, seen);
   };
-  const waitRunning = (wokeAt, polls, last) => ({
-    detail: `woken: waiting for gc to report session ${id2} running`,
+  const waitRunning = (since, woken, polls, last) => ({
+    detail: `${woken ? "woken" : "starting"}: waiting for gc to report session ${id2} running`,
     nextAt: clock.now() + (WAKE_POLL_DELAYS_MS[polls] ?? WAKE_POLL_EVERY_MS),
-    deadline: wokeAt + WAKE_DEADLINE_MS,
-    expired: notStarted(id2, "not-running-after-wake", last.ok ? `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s of the wake; it is ${stateText(last.value)}` : `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s of the wake; last read failed: ${errorText(last.error)}`),
-    abandoned: {
-      kind: "not-sent",
-      reason: "no tab was opened: the Gas City view that asked closed before gc reported the session running (gc was asked to wake it)"
-    },
+    deadline: since + WAKE_DEADLINE_MS,
+    expired: notStarted(id2, "not-running-after-wake", last.ok ? `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s; it is ${stateText(last.value)}${last.value.running ? ", running" : ""}` : `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s; last read failed: ${errorText(last.error)}`),
+    abandoned: notOpened(`the Gas City view that asked closed before gc reported the session running${woken ? " (gc was asked to wake it)" : ""}`),
     step: async (c, city) => {
       const r = await getSession(c, city, id2);
-      if (r.ok && r.value.running) return openOrSelect();
-      return waitRunning(wokeAt, polls + 1, r);
+      if (r.ok && readiness(r.value) === "ready") return openNow();
+      if (r.ok && readiness(r.value) === "stopping") return stopping(r.value);
+      return waitRunning(since, woken, polls + 1, r);
     }
   });
-  const toSent = (next) => {
-    if ("step" in next) return ok({ kind: "watch", watch: next });
-    if (next.kind === "failed") return err(next.error);
-    if (next.kind === "done") return ok({ kind: "done", detail: next.detail });
-    return err({ kind: "host-call", api: "open terminal", cause: next.reason });
-  };
   const send = async (c, city, key) => {
     const s = await getSession(c, city, id2);
     if (!s.ok) return s;
-    if (s.value.running) return toSent(openOrSelect());
+    switch (readiness(s.value)) {
+      case "ready":
+        return ok({ kind: "watch", watch: openNow() });
+      case "stopping":
+        return err(stoppingError(s.value));
+      case "starting":
+        return ok({ kind: "watch", watch: waitRunning(clock.now(), false, 0, s) });
+      case "not-running":
+        break;
+    }
     const woke = await wakeSession(c, city, id2, key);
     if (!woke.ok) {
       if (woke.error.kind === "outcome-unknown") return woke;
       return err({ kind: "attach-not-started", sessionId: id2, reason: "wake-refused", detail: errorText(woke.error) });
     }
-    return ok({ kind: "watch", watch: waitRunning(clock.now(), 0, s) });
+    return ok({ kind: "watch", watch: waitRunning(clock.now(), true, 0, s) });
   };
   const wake = "post-v0-city-by-city-name-session-by-id-wake";
   return {
@@ -6936,6 +6961,13 @@ var CopyController = class {
     if (!binding.ok) return this.refuse(binding.error);
     const name = `${session.agent_name ?? session.template}/${session.id}`;
     return this.send(openTerminal(binding.value, name, { host: this.deps.host.terminal, clock: this.deps.clock }));
+  }
+  /** "Show Gas City tab" in the "needs you" window: selects tab `tab`; a refusal from herdr is shown in the notice. */
+  showTab(tab) {
+    const shown = this.deps.host.terminal.selectTab(tab);
+    if (!shown.ok) return this.refuse(`could not show the Gas City tab: ${errorText(shown.error)}`);
+    this.notice = null;
+    return true;
   }
   // ---- keys ---------------------------------------------------------------------------
   /** A key of the focused copy (keys.ts): the same methods as the buttons. Returns whether it did something. */
@@ -9129,8 +9161,7 @@ function actionsFor(state, inputs) {
   const copy = state.copy;
   return {
     showTab: (tab, cx) => {
-      const shown = selectTab(tab);
-      if (!shown.ok) logError(`gascity: ${errorText(shown.error)}`);
+      copy.showTab(tab);
       cx.notify();
     },
     showNext: (cx) => {

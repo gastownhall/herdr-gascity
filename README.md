@@ -473,10 +473,16 @@ every process carrying it when the terminal's holder dies, and `gc session
 attach` on a session that is not running starts its runtime in the CLI
 process. So gc must never start a runtime inside the tab:
 
-- **Wake first, through gc.** The mod reads the session from gc; if it is
-  not running it asks gc to wake it (`POST …/wake`, with the action's
+- **Wake first, through gc.** The mod reads the session from gc. A session
+  gc reports draining or closing (even if still running) is refused: an
+  attach could start it again. One gc is still starting (`creating`,
+  `start-pending`) is not woken, only waited for until it has settled. If it
+  is not running the mod asks gc to wake it (`POST …/wake`, with the action's
   Idempotency-Key), so the controller starts it from its own environment,
-  then reads it at 0.5 s, 1 s, then every 2 s until gc says `running`. A
+  then reads it at 0.5 s, 1 s, then every 2 s until gc says `running` (and
+  the session has settled). A poll only decides: the tab is opened by the
+  next tick of the copy that asked, after the action's deadline and
+  ownership checks, never in whatever turn a late answer arrives in. A
   refused wake, or a session still not running 60 s after the wake, opens
   no tab; the log says why (gc's reason, or its last state).
 - **The argv drops herdr-core's variables.** The tab runs `env -u HC_SCOPE
@@ -487,6 +493,11 @@ process. So gc must never start a runtime inside the tab:
   newer (by `/health`'s version; the first release after `--no-start`
   landed) the argv ends with `--no-start`, so the attach starts nothing; a
   `dev` or older gc gets no flag, and the wake through the API is the guard.
+  The gate reads the version of the gc that serves the API (the supervisor's
+  `/health`), while the flag goes to the `gcBin` program in the tab; these
+  can differ. If the program is older than the supervisor, it rejects the
+  unknown flag and the attach exits (shown as *attach exited*: it fails
+  closed, starting nothing); if it is newer, the flag is only left out.
 - **A local space.** The tab opens in the active space if it is on this
   computer, else in the first space that is; never in a remote machine's
   space (the attach would run on that host). With no local space, no tab:

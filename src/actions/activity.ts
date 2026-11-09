@@ -99,8 +99,15 @@ export interface Watch {
   readonly expired: WatchEnd;
   /** How it ends when the copy that started it closes first (it is never taken over: its next steps are that copy's). */
   readonly abandoned: WatchEnd;
-  /** The next step. Never rejects for a gc or host failure: those are a WatchEnd or the next Watch. */
-  step(c: GcClient, city: string): Promise<Watch | WatchEnd>;
+  /**
+   * The next step, called synchronously from a tick of the copy that started
+   * the action, after the ledger's deadline and ownership checks. `live()`
+   * says whether the action is still under way: a step that acts on herdr
+   * (opens a tab) does so synchronously in this call, never from a later
+   * turn (a fetch's answer), and checks `live()` first. Never rejects for a
+   * gc or host failure: those are a WatchEnd or the next Watch.
+   */
+  step(c: GcClient, city: string, live: () => boolean): Promise<Watch | WatchEnd>;
 }
 
 /**

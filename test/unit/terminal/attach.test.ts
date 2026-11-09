@@ -110,8 +110,13 @@ afterEach(() => {
   live = [];
 });
 
-/** gc with session sc-20 running or not: `running` is read at each GET of the session. */
-function setup(fixture: string, running: () => boolean) {
+/**
+ * gc with session sc-20 running or not: `running` is read at each GET of the
+ * session; `state` (default active/asleep) overrides gc's lifecycle state;
+ * while `hold.gets` is set, GETs of the session are held open (FakeGc.release).
+ */
+function setup(fixture: string, running: () => boolean, state: () => string | null = () => null) {
+  const hold = { gets: false, otherEvents: false };
   const host = new FakeHost();
   const gc = new FakeGc(host);
   gc.emit({ type: "order.fired", subject: "gate-sweep" });
@@ -119,9 +124,11 @@ function setup(fixture: string, running: () => boolean) {
   let wakeReply: FakeReply = { status: 200, body: fixtureBody("post-v0-city-by-city-name-session-by-id-wake", "ok") };
   gc.override = (req) => {
     if (req.method === "POST" && req.path === WAKE_PATH) return wakeReply;
+    if (hold.otherEvents && /^\/v0\/city\/(y|z)\/events$/.test(req.path)) return { hold: true };
     if (req.method === "GET" && req.path === SESSION_PATH) {
+      if (hold.gets) return { hold: true };
       const up = running();
-      return { status: 200, body: { ...session, running: up, state: up ? "active" : "asleep", ...(up ? {} : { reason: "idle" }) } };
+      return { status: 200, body: { ...session, running: up, state: state() ?? (up ? "active" : "asleep"), ...(up ? {} : { reason: "idle" }) } };
     }
     return undefined;
   };
@@ -129,10 +136,10 @@ function setup(fixture: string, running: () => boolean) {
   const reg = new SyncRegistry({ fetch: host.wrap(gc.fetch), clock: host, random: () => 0.5, newKey: () => `key-${++keys}` });
   reg.setOnScreen(true);
   const terminals = new FakeTerminalHost(fixture, host);
-  const open = async (owner = "copy-1"): Promise<Copy> => {
+  const open = async (owner = "copy-1", city = CITY): Promise<Copy> => {
     let copy: Copy | null = null;
     await host.run(owner, () => {
-      const made = reg.subscribe({ apiUrl: API, city: CITY });
+      const made = reg.subscribe({ apiUrl: API, city });
       if (!made.ok) throw new Error(JSON.stringify(made.error));
       const c: Copy = { owner, sub: made.value };
       c.sub.tick();
@@ -160,8 +167,9 @@ function setup(fixture: string, running: () => boolean) {
   const row = (c: Copy, id: number) => activityModel(c.sub.activity(), c.sub.snapshot(), host.now()).rows.find((r) => r.id === id);
   const posts = () => gc.seen.filter((r) => r.method === "POST" && r.path === WAKE_PATH);
   const sessionGets = () => gc.seen.filter((r) => r.method === "GET" && r.path === SESSION_PATH);
+  const runningBody = { ...session, running: true, state: "active" };
   return {
-    host, gc, terminals, open, act, entry, row, posts, sessionGets, spec,
+    host, gc, reg, terminals, open, act, entry, row, posts, sessionGets, spec, hold, runningBody,
     setWake: (r: FakeReply) => {
       wakeReply = r;
     },
@@ -173,7 +181,7 @@ describe("wake first: no gc runtime is started under a herdr terminal", () => {
     const t = setup("no-attach", () => true);
     const a = await t.open();
     const id = await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.posts()).toHaveLength(0);
     expect(t.sessionGets()).toHaveLength(1);
     expect(t.terminals.opened).toEqual([{ space: "s1", name: "worker/sc-20", argv: ARGV }]);
@@ -185,14 +193,14 @@ describe("wake first: no gc runtime is started under a herdr terminal", () => {
     let polls = 0;
     const t = setup("no-attach", () => ++polls >= 4);
     const a = await t.open();
+    const woke = t.host.now();
     const id = await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.posts()).toHaveLength(1);
     expect(t.posts()[0]?.init.headers["Idempotency-Key"]).toBe("key-1");
     expect(t.terminals.opened).toHaveLength(0);
     expect(t.row(a, id)?.detail).toContain("waiting for gc to report session sc-20 running");
-    const woke = t.host.now();
-    await t.host.advance(3500 + TICK_MS);
+    await t.host.advance(3500);
     // One GET before the wake, then polls at +0.5 s, +1.5 s and +3.5 s: the last one says running.
     expect(t.sessionGets().map((r) => r.at - woke)).toEqual([0, 500, 1500, 3500]);
     expect(t.terminals.opened).toHaveLength(1);
@@ -245,8 +253,135 @@ describe("wake first: no gc runtime is started under a herdr terminal", () => {
     const t = setup("no-attach", () => true);
     const a = await t.open();
     await t.act(a, t.spec({ ...BINDING, noStart: true }));
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.terminals.opened[0]?.argv).toEqual([...ARGV, "--no-start"]);
+  });
+});
+
+describe("the tab opens only from the asking copy's own tick, while the action is live", () => {
+  test("a poll in flight at the 60 s deadline that answers running afterwards opens no tab", async () => {
+    const t = setup("no-attach", () => false);
+    const a = await t.open();
+    const woke = t.host.now();
+    const id = await t.act(a);
+    // Polls at +0.5 s, +1.5 s, +3.5 s, then every 2 s: the one at +59.5 s is held past the deadline.
+    await t.host.advance(59_000);
+    t.hold.gets = true;
+    await t.host.advance(woke + 60_500 - t.host.now());
+    expect(t.gc.heldCount()).toBe(1);
+    expect(t.entry(a, id).state).toMatchObject({ kind: "failed", error: { reason: "not-running-after-wake" } });
+    t.hold.gets = false;
+    t.gc.release(200, t.runningBody);
+    await t.host.advance(5 * TICK_MS);
+    expect(t.terminals.opened).toHaveLength(0);
+    expect(t.entry(a, id).state).toMatchObject({ kind: "failed", error: { reason: "not-running-after-wake" } });
+  });
+
+  test("the asking copy closes with a poll in flight; the late 'running' answer opens no tab in the copy left", async () => {
+    const t = setup("no-attach", () => false);
+    const a = await t.open();
+    const b = await t.open("copy-2");
+    const id = await t.act(a);
+    await t.host.advance(1000);
+    t.hold.gets = true;
+    await t.host.advance(2000);
+    expect(t.gc.heldCount()).toBe(1);
+    await t.host.close(a.owner, () => a.sub.unsubscribe());
+    expect(t.entry(b, id).state).toMatchObject({ kind: "not-sent" });
+    t.hold.gets = false;
+    t.gc.release(200, t.runningBody);
+    await t.host.advance(20 * TICK_MS);
+    expect(t.terminals.opened).toHaveLength(0);
+    expect(t.entry(b, id).state).toMatchObject({ kind: "not-sent" });
+  });
+
+  test("a poll GET the fetch budget started in another copy's turn: the asking copy closes, the answer opens no tab there", async () => {
+    const t = setup("no-attach", () => false);
+    const a = await t.open("A");
+    const b = await t.open("B");
+    await t.open("C", "y");
+    await t.open("D", "z");
+    await t.host.advance(3000);
+    const id = await t.act(a);
+    await t.host.advance(TICK_MS);
+    // Two other cities' event polls fill the budget, so A's next poll queues…
+    t.hold.otherEvents = true;
+    for (let i = 0; i < 200 && t.reg.budgetStats().inFlight < 2; i++) await t.host.advance(25);
+    t.hold.otherEvents = false;
+    t.hold.gets = true;
+    for (let i = 0; i < 200 && t.reg.budgetStats().queued < 1; i++) await t.host.advance(25);
+    expect(t.reg.budgetStats().queued).toBeGreaterThan(0);
+    // …and starts in C's (or D's) turn when one of them answers.
+    t.gc.release(200, { items: [], total: 1 });
+    await t.host.runTurns();
+    const starter = t.host.starts.filter((x) => x.path === SESSION_PATH).at(-1)?.owner;
+    expect(starter === "C" || starter === "D").toBe(true);
+    await t.host.close(a.owner, () => a.sub.unsubscribe());
+    expect(t.entry(b, id).state).toMatchObject({ kind: "not-sent" });
+    t.gc.release(200, { items: [], total: 1 });
+    await t.host.runTurns();
+    t.hold.gets = false;
+    t.gc.release(200, t.runningBody);
+    await t.host.advance(20 * TICK_MS);
+    expect(t.terminals.opened).toHaveLength(0);
+    expect(t.entry(b, id).state).toMatchObject({ kind: "not-sent" });
+  });
+
+  test("a poll answering running opens the tab at the asking copy's next tick, not in the answer's turn", async () => {
+    const t = setup("no-attach", () => false);
+    const a = await t.open();
+    await t.open("copy-2");
+    const id = await t.act(a);
+    await t.host.advance(TICK_MS);
+    t.hold.gets = true;
+    await t.host.advance(2 * TICK_MS);
+    expect(t.gc.heldCount()).toBe(1);
+    t.hold.gets = false;
+    t.gc.release(200, t.runningBody);
+    await t.host.runTurns();
+    expect(t.terminals.opened).toHaveLength(0);
+    expect(t.row(a, id)?.detail).toContain("opening its tab");
+    await t.host.advance(TICK_MS);
+    expect(t.terminals.openedBy).toEqual(["copy-1"]);
+  });
+});
+
+describe("gc's lifecycle state, not only `running`", () => {
+  for (const state of ["draining", "closing"]) {
+    test(`a ${state} session (running) is refused: no wake, no tab`, async () => {
+      const t = setup("no-attach", () => true, () => state);
+      const a = await t.open();
+      const id = await t.act(a);
+      await t.host.advance(5 * TICK_MS);
+      expect(t.entry(a, id).state).toMatchObject({ kind: "failed", error: { kind: "attach-not-started", reason: "session-stopping" } });
+      expect(t.posts()).toHaveLength(0);
+      expect(t.terminals.opened).toHaveLength(0);
+    });
+  }
+
+  test("a session gc is still starting (running, start-pending) is not woken: the tab opens once it has settled", async () => {
+    let settled = false;
+    const t = setup("no-attach", () => true, () => (settled ? null : "start-pending"));
+    const a = await t.open();
+    const id = await t.act(a);
+    await t.host.advance(2000);
+    expect(t.posts()).toHaveLength(0);
+    expect(t.terminals.opened).toHaveLength(0);
+    expect(t.row(a, id)?.detail).toContain("starting: waiting for gc");
+    settled = true;
+    await t.host.advance(3000);
+    expect(t.terminals.opened).toHaveLength(1);
+  });
+
+  test("a woken session that turns to draining while polled: no tab", async () => {
+    let polls = 0;
+    const t = setup("no-attach", () => false, () => (++polls >= 3 ? "draining" : null));
+    const a = await t.open();
+    const id = await t.act(a);
+    await t.host.advance(5000);
+    expect(t.posts()).toHaveLength(1);
+    expect(t.entry(a, id).state).toMatchObject({ kind: "failed", error: { reason: "session-stopping" } });
+    expect(t.terminals.opened).toHaveLength(0);
   });
 });
 
@@ -256,7 +391,7 @@ describe("where the tab opens, and dedupe", () => {
       const t = setup(fixture, () => true);
       const a = await t.open();
       await t.act(a);
-      await t.host.advance(0);
+      await t.host.advance(TICK_MS);
       expect(t.terminals.opened).toHaveLength(1);
       expect(t.terminals.opened[0]?.argv.slice(0, HC_SCRUB.length)).toEqual([...HC_SCRUB]);
       a.sub.unsubscribe();
@@ -267,7 +402,7 @@ describe("where the tab opens, and dedupe", () => {
     const t = setup("attach-running", () => true);
     const a = await t.open();
     const id = await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.terminals.opened).toHaveLength(0);
     expect(t.terminals.selected).toEqual(["t2"]);
     expect(t.entry(a, id).state).toMatchObject({ kind: "done" });
@@ -278,7 +413,7 @@ describe("where the tab opens, and dedupe", () => {
     const t = setup("attach-ended", () => true);
     const a = await t.open();
     await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.terminals.selected).toEqual([]);
     expect(t.terminals.opened).toHaveLength(1);
   });
@@ -287,7 +422,7 @@ describe("where the tab opens, and dedupe", () => {
     const t = setup("attach-remote", () => true);
     const a = await t.open();
     await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.terminals.selected).toEqual([]);
     expect(t.terminals.opened.map((o) => o.space)).toEqual(["s1"]);
   });
@@ -296,7 +431,7 @@ describe("where the tab opens, and dedupe", () => {
     const t = setup("remote-active", () => true);
     const a = await t.open();
     await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.terminals.opened.map((o) => o.space)).toEqual(["s1"]);
   });
 
@@ -304,7 +439,7 @@ describe("where the tab opens, and dedupe", () => {
     const t = setup("remote-only", () => true);
     const a = await t.open();
     const id = await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.terminals.opened).toHaveLength(0);
     expect(t.entry(a, id).state).toMatchObject({ kind: "failed", error: { kind: "attach-not-started", reason: "no-local-space" } });
     expect(t.row(a, id)?.detail).toContain("space.new");
@@ -315,7 +450,7 @@ describe("where the tab opens, and dedupe", () => {
     t.terminals.raw.spaces = [{ id: "s1", active: true, tabs: [] }];
     const a = await t.open();
     const id = await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.terminals.opened).toHaveLength(0);
     expect(t.entry(a, id).state).toMatchObject({ kind: "failed", error: { kind: "host-decode", api: "spaces" } });
   });
@@ -326,7 +461,7 @@ describe("confirmed through terminals()", () => {
     const t = setup("no-attach", () => true);
     const a = await t.open();
     const id = await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     await t.host.advance(EXIT_WATCH_MS - 1000);
     expect(t.entry(a, id).state.kind).toBe("watching");
     await t.host.advance(2000);
@@ -404,7 +539,7 @@ describe("the activity log", () => {
     const t = setup("no-attach", () => up);
     const a = await t.open();
     const id = await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.row(a, id)).toMatchObject({ title: "Open terminal · session sc-20", tone: "pending" });
     up = true;
     await t.host.advance(1000);
@@ -416,7 +551,7 @@ describe("the activity log", () => {
     const t = setup("no-attach", () => false);
     const a = await t.open();
     await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     const model = activityModel(a.sub.activity(), a.sub.snapshot(), t.host.now());
     expect(model.busy.has("session.attach|session:sc-20")).toBe(true);
   });
@@ -426,7 +561,7 @@ describe("the activity log", () => {
     t.terminals.openFails = "no space yet: make one first (space.new)";
     const a = await t.open();
     const id = await t.act(a);
-    await t.host.advance(0);
+    await t.host.advance(TICK_MS);
     expect(t.entry(a, id).state).toMatchObject({ kind: "failed", error: { kind: "host-call", cause: "no space yet: make one first (space.new)" } });
   });
 

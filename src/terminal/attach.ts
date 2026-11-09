@@ -51,6 +51,23 @@ export const CONFIRM_WITHIN_MS = 5000;
 export const EXIT_WATCH_MS = 10_000;
 /** How often the terminal list is read while confirming (a copy's tick). */
 export const CONFIRM_POLL_MS = 250;
+/** Once gc says the session runs, the tab must be opened by a tick of the copy that asked within this long. */
+export const OPEN_WITHIN_MS = 2000;
+
+/** gc lifecycle states of a session that is starting: wait until it settles (gc's internal/session BaseState). */
+const STARTING: ReadonlySet<string> = new Set(["creating", "start-pending"]);
+/** gc lifecycle states of a session that is stopping or gone: no attach (it could start the runtime again). */
+const STOPPING: ReadonlySet<string> = new Set(["draining", "drained", "closing", "closed", "archived"]);
+
+/** Where a session is, for open terminal: ready to attach (running and settled), starting, stopping, or not running. */
+export type Readiness = "ready" | "starting" | "stopping" | "not-running";
+
+/** A session's readiness from gc's `state` and `running`: a running session that is still starting or already stopping is not ready. */
+export function readiness(s: T.SessionResponse): Readiness {
+  if (STOPPING.has(s.state)) return "stopping";
+  if (STARTING.has(s.state)) return "starting";
+  return s.running ? "ready" : "not-running";
+}
 
 /** A wake changes the session list and the agents' roll-up. */
 const LIFECYCLE: readonly Domain[] = ["sessions", "agents"];
@@ -110,7 +127,29 @@ export function openTerminal(binding: TerminalBinding, name: string, deps: OpenD
   const failed = (error: GcError): WatchEnd => ({ kind: "failed", error });
   const exited = notStarted(id, "attach-exited", "attach failed: see the tab for gc's reason (the tab stays open as a shell)");
 
-  /** Steps 2–3: select the tab still running the attach, or open a new one in a local space. */
+  const stoppingError = (s: T.SessionResponse): GcError => ({
+    kind: "attach-not-started", sessionId: id, reason: "session-stopping",
+    detail: `gc reports the session ${stateText(s)}: it is stopping, so no terminal is opened (try again once it is asleep)`,
+  });
+  const stopping = (s: T.SessionResponse): WatchEnd => failed(stoppingError(s));
+
+  const notOpened = (why: string): WatchEnd => ({ kind: "not-sent", reason: `no tab was opened: ${why}` });
+
+  /**
+   * gc says the session runs: the tab is opened by the next tick of the copy
+   * that asked, after the ledger's deadline and ownership checks, never from
+   * the turn a poll's answer happens to arrive in.
+   */
+  const openNow = (): Watch => ({
+    detail: "gc reports the session running: opening its tab",
+    nextAt: clock.now(),
+    deadline: clock.now() + OPEN_WITHIN_MS,
+    expired: notOpened(`the Gas City view that asked did not get to open it within ${OPEN_WITHIN_MS / 1000} s`),
+    abandoned: notOpened("the Gas City view that asked closed first"),
+    step: (_c, _city, live) => Promise.resolve(live() ? openOrSelect() : notOpened("the action had already ended")),
+  });
+
+  /** Steps 2–3: select the tab still running the attach, or open a new one in a local space. Runs only in openNow's step. */
   const openOrSelect = (): Watch | WatchEnd => {
     const scene = host.scene();
     if (!scene.ok) return failed(scene.error);
@@ -158,44 +197,47 @@ export function openTerminal(binding: TerminalBinding, name: string, deps: OpenD
     return now - openedAt >= EXIT_WATCH_MS ? { kind: "done", detail: `opened in a new tab (terminal ${seen})` } : confirm(openedAt, before, seen);
   };
 
-  /** Step 1 after the wake: poll until gc says running, then open. */
-  const waitRunning = (wokeAt: number, polls: number, last: Result<T.SessionResponse, GcError>): Watch => ({
-    detail: `woken: waiting for gc to report session ${id} running`,
+  /**
+   * Step 1 after the wake (or while gc is starting it): poll until gc says
+   * it runs and has settled. A poll only decides; openNow opens.
+   */
+  const waitRunning = (since: number, woken: boolean, polls: number, last: Result<T.SessionResponse, GcError>): Watch => ({
+    detail: `${woken ? "woken" : "starting"}: waiting for gc to report session ${id} running`,
     nextAt: clock.now() + (WAKE_POLL_DELAYS_MS[polls] ?? WAKE_POLL_EVERY_MS),
-    deadline: wokeAt + WAKE_DEADLINE_MS,
+    deadline: since + WAKE_DEADLINE_MS,
     expired: notStarted(id, "not-running-after-wake", last.ok
-      ? `gc did not report the session running within ${WAKE_DEADLINE_MS / 1000} s of the wake; it is ${stateText(last.value)}`
-      : `gc did not report the session running within ${WAKE_DEADLINE_MS / 1000} s of the wake; last read failed: ${errorText(last.error)}`),
-    abandoned: {
-      kind: "not-sent",
-      reason: "no tab was opened: the Gas City view that asked closed before gc reported the session running (gc was asked to wake it)",
-    },
+      ? `gc did not report the session running within ${WAKE_DEADLINE_MS / 1000} s; it is ${stateText(last.value)}${last.value.running ? ", running" : ""}`
+      : `gc did not report the session running within ${WAKE_DEADLINE_MS / 1000} s; last read failed: ${errorText(last.error)}`),
+    abandoned: notOpened(`the Gas City view that asked closed before gc reported the session running${woken ? " (gc was asked to wake it)" : ""}`),
     step: async (c: GcClient, city: string) => {
       const r = await ops.getSession(c, city, id);
-      if (r.ok && r.value.running) return openOrSelect();
-      return waitRunning(wokeAt, polls + 1, r);
+      if (r.ok && readiness(r.value) === "ready") return openNow();
+      if (r.ok && readiness(r.value) === "stopping") return stopping(r.value);
+      return waitRunning(since, woken, polls + 1, r);
     },
   });
-
-  const toSent = (next: Watch | WatchEnd): Result<Sent, GcError> => {
-    if ("step" in next) return ok({ kind: "watch", watch: next });
-    if (next.kind === "failed") return err(next.error);
-    if (next.kind === "done") return ok({ kind: "done", detail: next.detail });
-    // openOrSelect never ends unsent.
-    return err({ kind: "host-call", api: "open terminal", cause: next.reason });
-  };
 
   const send = async (c: GcClient, city: string, key: string): Promise<Result<Sent, GcError>> => {
     const s = await ops.getSession(c, city, id);
     if (!s.ok) return s;
-    if (s.value.running) return toSent(openOrSelect());
+    switch (readiness(s.value)) {
+      case "ready":
+        return ok({ kind: "watch", watch: openNow() });
+      case "stopping":
+        return err(stoppingError(s.value));
+      case "starting":
+        // gc is starting it already: no wake, wait until it has settled.
+        return ok({ kind: "watch", watch: waitRunning(clock.now(), false, 0, s) });
+      case "not-running":
+        break;
+    }
     const woke = await ops.wakeSession(c, city, id, key);
     if (!woke.ok) {
       // An unknown outcome may have woken it: the log says so and offers a same-key retry.
       if (woke.error.kind === "outcome-unknown") return woke;
       return err({ kind: "attach-not-started", sessionId: id, reason: "wake-refused", detail: errorText(woke.error) });
     }
-    return ok({ kind: "watch", watch: waitRunning(clock.now(), 0, s) });
+    return ok({ kind: "watch", watch: waitRunning(clock.now(), true, 0, s) });
   };
 
   const wake = "post-v0-city-by-city-name-session-by-id-wake";

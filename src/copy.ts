@@ -76,6 +76,7 @@ import { diagnosticsModel, type DiagnosticLine } from "./vm/diagnostics.ts";
 import { headerModel, type HeaderModel } from "./vm/header.ts";
 import { probeDocument, type ExecRecord } from "./vm/probe.ts";
 import { cleanLine } from "./vm/sanitize.ts";
+import { errorText } from "./vm/errorText.ts";
 import { openTerminal as openTerminalSpec, type TerminalHost } from "./terminal/attach.ts";
 import { resolveBinding } from "./terminal/binding.ts";
 
@@ -645,6 +646,14 @@ export class CopyController {
     if (!binding.ok) return this.refuse(binding.error);
     const name = `${session.agent_name ?? session.template}/${session.id}`;
     return this.send(openTerminalSpec(binding.value, name, { host: this.deps.host.terminal, clock: this.deps.clock }));
+  }
+
+  /** "Show Gas City tab" in the "needs you" window: selects tab `tab`; a refusal from herdr is shown in the notice. */
+  showTab(tab: string): boolean {
+    const shown = this.deps.host.terminal.selectTab(tab);
+    if (!shown.ok) return this.refuse(`could not show the Gas City tab: ${errorText(shown.error)}`);
+    this.notice = null;
+    return true;
   }
 
   // ---- keys ---------------------------------------------------------------------------

@@ -212,8 +212,7 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
   const copy = state.copy;
   return {
     showTab: (tab, cx) => {
-      const shown = selectTab(tab);
-      if (!shown.ok) logError(`gascity: ${errorText(shown.error)}`);
+      copy.showTab(tab);
       cx.notify();
     },
     showNext: (cx) => {

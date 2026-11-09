@@ -261,7 +261,7 @@ describe("open terminal from a copy", () => {
     await click(a, (c) => {
       expect(c.openTerminal("sc-20")).toBe(true);
     });
-    await host.advance(0);
+    await host.advance(TICK_MS);
     // gc lists sc-20 running: no wake.
     expect(posts("/wake")).toHaveLength(0);
     expect(tabs).toEqual([{ space: "s1", name: "worker-adhoc-88210e2896/sc-20", argv: ATTACH }]);
@@ -299,13 +299,13 @@ describe("open terminal from a copy", () => {
     await click(a, (c) => {
       expect(c.runCommand("attach:scratch:sc-20", ui).result).toBe("done");
     });
-    await host.advance(0);
+    await host.advance(TICK_MS);
     expect(tabs).toHaveLength(1);
     await click(a, (c) => {
       c.selectSession("sc-6");
       expect(c.key("open-terminal", ui)).toBe(true);
     });
-    await host.advance(0);
+    await host.advance(TICK_MS);
     expect(tabs.map((t) => t.argv.at(-1))).toEqual(["sc-20", "sc-6"]);
   });
 });

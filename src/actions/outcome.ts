@@ -414,7 +414,7 @@ export class ActionLedger {
     this.commit();
     let next: Promise<Watch | WatchEnd>;
     try {
-      next = s.watch.step(this.deps.client("mutation", rec.group), this.deps.city);
+      next = s.watch.step(this.deps.client("mutation", rec.group), this.deps.city, () => this.live(rec, token) && rec.state.kind === "watching");
     } catch (cause) {
       next = Promise.reject(cause);
     }

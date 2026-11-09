@@ -300,6 +300,8 @@ describe("Open terminal in the built bundle", () => {
     await openDetail(mod);
     mod.click("gascity-action-terminal");
     await mod.tick();
+    // gc says it runs: the tab opens at this copy's next tick.
+    await mod.tick();
     expect(posts(mod, "/wake")).toEqual([]);
     const tabNew = mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new").map((c) => c.args[1]);
     expect(tabNew).toEqual([{
