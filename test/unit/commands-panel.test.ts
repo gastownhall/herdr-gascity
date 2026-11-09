@@ -548,7 +548,8 @@ describe("one delivery, several shown copies: it runs once, in the copy showing 
     const pinned = await another(mod, { city: "other" });
     await doCommand("kill:scratch:sc-6:confirm", [pinned, mod]);
     expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/kill"]);
-    expect(text(pinned.render(), "gascity-notice")).toBe("gascity.kill:scratch:sc-6:confirm: not run here: it names city scratch; this copy shows other");
+    // Logged app-wide only: a copy showing another city is not cluttered with a notice.
+    expect(text(pinned.render(), "gascity-notice")).toBeUndefined();
     await ticks(mod, 2);
     expect(probeOf(written).commands.map((c) => [c.result, c.detail])).toEqual([
       ["skipped", "it names city scratch; this copy shows other"], ["done", "sent"],
@@ -656,5 +657,109 @@ describe("a stale window flag", () => {
     const first = (mod.shared.get("gascity.window") as { at: number }).at;
     for (let i = 0; i < 30; i++) await win.tick(1000);
     expect((mod.shared.get("gascity.window") as { at: number }).at).toBeGreaterThan(first + 20_000);
+  });
+});
+
+describe("a draft belongs to its session", () => {
+  /** The window copy's send box: each copy makes 7 inputs, the send box first. */
+  const box = (mod: Mod, copyIndex: number) => mod.inputs[copyIndex * 7]!;
+
+  test("a toast for B while a reply to A is typed in the window: the window stays on A, offers B, and Enter sends to A", async () => {
+    const w = world();
+    const mod = await running({ route: w.route, ...HIDDEN });
+    w.state.cityPending = [{ session_id: "sc-6", request_id: "perm-1", kind: "permission" }];
+    await ticks(mod, 40, 1000);
+    const win = await openWindow(mod);
+    for (let i = 0; i < 4; i++) await win.tick();
+    expect(text(win.render(), "gascity-detail-title")).toBe("Detail: frontend/builder / frontend/builder");
+    box(mod, 1).type("yes, run them");
+    w.state.cityPending = [...w.state.cityPending, { session_id: "sc-20", request_id: "q-9", kind: "question" }];
+    for (let i = 0; i < 40; i++) {
+      await mod.tick();
+      await win.tick();
+    }
+    expect(mod.shared.get("gascity.focus")).toMatchObject({ session: "sc-20" });
+    expect(text(win.render(), "gascity-detail-title")).toBe("Detail: frontend/builder / frontend/builder");
+    expect(text(win.render(), "gascity-window-next")).toBe("Session sc-20 in city scratch needs you too. [Show]");
+    box(mod, 1).submit(win.cx);
+    expect(mutations(mod).map((m) => [m.path, m.body])).toEqual([["/v0/city/scratch/session/sc-6/submit", { message: "yes, run them", intent: "default" }]]);
+    // The draft is gone: the window may move on, and does when asked.
+    win.click("gascity-window-next-show");
+    for (let i = 0; i < 3; i++) await win.tick();
+    expect(text(win.render(), "gascity-detail-title")).toBe("Detail: worker-adhoc-88210e2896 / worker-adhoc-88210e2896");
+    expect(findById(win.render(), "gascity-window-next")).toBeUndefined();
+  });
+
+  test("a draft for A never goes to B: after Show, Enter refuses until the box is cleared or A is open again", async () => {
+    const w = world();
+    const mod = await running({ route: w.route, ...HIDDEN });
+    w.state.cityPending = [{ session_id: "sc-6", request_id: "perm-1", kind: "permission" }];
+    await ticks(mod, 40, 1000);
+    const win = await openWindow(mod);
+    for (let i = 0; i < 4; i++) await win.tick();
+    box(mod, 1).type("for A only");
+    w.state.cityPending = [...w.state.cityPending, { session_id: "sc-20", request_id: "q-9", kind: "question" }];
+    for (let i = 0; i < 40; i++) {
+      await mod.tick();
+      await win.tick();
+    }
+    win.click("gascity-window-next-show");
+    for (let i = 0; i < 3; i++) await win.tick();
+    expect(text(win.render(), "gascity-detail-title")).toBe("Detail: worker-adhoc-88210e2896 / worker-adhoc-88210e2896");
+    box(mod, 1).submit(win.cx);
+    win.click("gascity-send-default");
+    expect(mutations(mod)).toEqual([]);
+    expect(text(win.render(), "gascity-notice")).toBe("this text was typed for session sc-6: open that session to send it, or clear the box");
+  });
+
+  test("with an empty send box the window follows the newest target at once", async () => {
+    const w = world();
+    const mod = await running({ route: w.route, ...HIDDEN });
+    w.state.cityPending = [{ session_id: "sc-6", request_id: "perm-1", kind: "permission" }];
+    await ticks(mod, 40, 1000);
+    const win = await openWindow(mod);
+    box(mod, 1).type("draft");
+    box(mod, 1).type("");
+    w.state.cityPending = [...w.state.cityPending, { session_id: "sc-20", request_id: "q-9", kind: "question" }];
+    for (let i = 0; i < 40; i++) {
+      await mod.tick();
+      await win.tick();
+    }
+    expect(text(win.render(), "gascity-detail-title")).toBe("Detail: worker-adhoc-88210e2896 / worker-adhoc-88210e2896");
+    expect(findById(win.render(), "gascity-window-next")).toBeUndefined();
+  });
+
+  test("in the tab: text typed for one session and Enter after opening another sends nothing", async () => {
+    const mod = await running({ route: world().route });
+    await openSession(mod);
+    box(mod, 0).type("fix the job");
+    const other = ids(mod.render()).find((id) => /^gascity-agent-\d+-\d+-session-\d+$/.test(id) && id !== "gascity-agent-0-1-session-0");
+    mod.click(other!);
+    await ticks(mod);
+    box(mod, 0).submit(mod.cx);
+    expect(mutations(mod)).toEqual([]);
+    expect(text(mod.render(), "gascity-notice")).toBe("this text was typed for session sc-6: open that session to send it, or clear the box");
+    await openSession(mod);
+    box(mod, 0).submit(mod.cx);
+    expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/submit"]);
+  });
+
+  test("a draft typed while the open session is unlisted stays bound to it: Send in another session's detail posts nothing", async () => {
+    const w = world();
+    const mod = await running({ route: w.route });
+    await openSession(mod);
+    // gc stops listing sc-6 (it closed, or the list is between pages) while the person types.
+    const list = fixtureBody("get-v0-city-by-city-name-sessions", "ok") as { items: Record<string, unknown>[] };
+    w.state.sessions = { ...list, items: list.items.filter((x) => x["id"] !== "sc-6") };
+    mod.click("gascity-retry");
+    await ticks(mod, 8);
+    box(mod, 0).type("meant for sc-6");
+    const other = ids(mod.render()).find((id) => /^gascity-(agent-\d+-\d+|other)-session-\d+$/.test(id) || /^gascity-other-\d+$/.test(id));
+    mod.click(other!);
+    await ticks(mod);
+    mod.click("gascity-send-default");
+    box(mod, 0).submit(mod.cx);
+    expect(mutations(mod)).toEqual([]);
+    expect(text(mod.render(), "gascity-notice")).toBe("this text was typed for session sc-6: open that session to send it, or clear the box");
   });
 });

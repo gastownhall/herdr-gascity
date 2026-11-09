@@ -3,7 +3,9 @@
 // about — its pending prompt with one answer button per gc option, the send
 // box and its actions (the same detail pane as the tab) — the city's other
 // sessions that need you, "Show Gas City tab" for each tab holding a Gas City
-// pane, and Close. Render only: clicks call the actions.
+// pane, and Close. While a text box holds a draft, a newer toast's session is
+// offered ("needs you too", Show) instead of replacing the one being
+// answered. Render only: clicks call the actions.
 
 import { h_flex, v_flex } from "gpui-base";
 import type { WindowModel } from "../copy.ts";
@@ -18,6 +20,8 @@ export interface WindowActions {
   showTab(tab: string, cx: GpuiContext): void;
   /** Closes this window. */
   closeWindow(cx: GpuiContext): void;
+  /** Shows the session a newer toast named, held back while a draft was typed. */
+  showNext(cx: GpuiContext): void;
 }
 
 /** The window's own rows, above the detail pane. */
@@ -33,5 +37,12 @@ export function renderWindowHead(m: WindowModel, theme: ThemeRead, actions: Wind
     ? muted(label("gascity-window-none", "No session needs you right now."), theme)
     : v_flex().id("gascity-window-pending").gap(2).children(m.pending.map((p, i) =>
       label(`gascity-window-pending-${i}`, `${p.label} (session ${p.session}): ${p.kind}`).on_click((_, cx) => actions.selectSession(p.session, cx))));
-  return v_flex().id("gascity-window").gap(6).child(target).child(bar).child(list);
+  let el = v_flex().id("gascity-window").gap(6).child(target);
+  // A newer toast while a reply is typed: offered, never switched to under the person's typing.
+  if (m.next !== null) {
+    el = el.child(h_flex().id("gascity-window-next").gap(8)
+      .child(label("gascity-window-next-text", `Session ${m.next.session} in city ${m.next.city} needs you too.`))
+      .child(button("gascity-window-next-show", "Show", (cx) => actions.showNext(cx))));
+  }
+  return el.child(bar).child(list);
 }

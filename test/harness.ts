@@ -237,7 +237,7 @@ export interface FakeInputState {
   value(): string;
   set_value(next: string): void;
   on(event: string, handler: (event: unknown, cx: unknown) => void): boolean;
-  /** The person types `text` (replacing the value). */
+  /** The person types `text` (replacing the value); the `change` handlers run, as for a real input. */
   type(text: string): void;
   /** The person presses Enter: the `submit` handlers run with `cx`. */
   submit(cx: unknown): void;
@@ -261,6 +261,7 @@ export function fakeGpui(inputs: FakeInputState[] = []): HostModules {
         },
         type: (text) => {
           value = text;
+          for (const h of handlers.change ?? []) h({}, null);
         },
         submit: (cx) => {
           for (const h of handlers.submit ?? []) h({}, cx);
