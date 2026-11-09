@@ -36,8 +36,10 @@
 // a bead.closed event lists its bead, a later bead.updated or bead.deleted
 // about a listed (or seeded) bead drops it unless it is still closed, and
 // infrastructure beads are only counted. An event whose bead cannot be read
-// is recorded and the bead is fetched by id instead; after a gap every
-// listed bead is fetched again.
+// is recorded and the bead is fetched by id instead; after a gap (or when the
+// endpoint recovers) every listed bead is fetched again, at most
+// BEAD_FETCHES_PER_STEP per step, and the seed once (one request), since a
+// seeded bead may have been reopened, or a dropped one closed again, unseen.
 //
 // An open detail (watchPeek) also gets, on demand: the session's wake
 // reasons (gc probes the runtime for each session it lists with them, so they
@@ -847,6 +849,7 @@ export class CityStore implements EndpointListener {
     this.progress(step);
     if (this.settle(r, "closed-seed") && r.ok) {
       this.seed = { value: r.value, fetchedAt: this.deps.clock.now(), error: null, held: false, due: false };
+      this.closed.reaffirm(r.value.items.filter((b) => b.status === "closed").map((b) => b.id));
       this.syncLookups();
     } else if (!r.ok && !isCancelled(r.error)) {
       this.seed.error = r.error;
@@ -888,9 +891,10 @@ export class CityStore implements EndpointListener {
     this.closedQueue = [...this.closedQueue.filter((c) => c.id !== id), { id, seq }];
   }
 
-  /** Events may have been missed: fetch every listed bead again. */
+  /** Events may have been missed: fetch every listed bead again, and the seed once. */
   private recheckClosed(): void {
     for (const c of this.closed.recent()) this.queueClosed(c.bead.id, null);
+    if (!this.seed.held) this.seed.due = true;
   }
 
   private async fetchClosed(step: Step): Promise<void> {

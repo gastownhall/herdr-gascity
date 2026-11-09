@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:72ae8cac1da89b1ee670d9c305aeb93d44350e91d2f894d7db73ab9f0d908ccd over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:2110186d46dec17d3bd5ef68d67465e74daae50623f9294541585688378d4cac over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -4077,6 +4077,10 @@ var ClosedList = class {
   dropped(id) {
     return this.droppedIds.has(id);
   }
+  /** A freshly fetched seed lists these beads as closed now: gc's newest word, so they are no longer dropped. */
+  reaffirm(ids) {
+    for (const id of ids) this.droppedIds.delete(id);
+  }
   /** Is the bead on the list? */
   has(id) {
     return this.list.some((c) => c.bead.id === id);
@@ -4717,6 +4721,7 @@ var CityStore = class {
     this.progress(step2);
     if (this.settle(r, "closed-seed") && r.ok) {
       this.seed = { value: r.value, fetchedAt: this.deps.clock.now(), error: null, held: false, due: false };
+      this.closed.reaffirm(r.value.items.filter((b) => b.status === "closed").map((b) => b.id));
       this.syncLookups();
     } else if (!r.ok && !isCancelled(r.error)) {
       this.seed.error = r.error;
@@ -4754,9 +4759,10 @@ var CityStore = class {
     if (cur && (seq === null || cur.seq !== null && cur.seq >= seq)) return;
     this.closedQueue = [...this.closedQueue.filter((c) => c.id !== id), { id, seq }];
   }
-  /** Events may have been missed: fetch every listed bead again. */
+  /** Events may have been missed: fetch every listed bead again, and the seed once. */
   recheckClosed() {
     for (const c of this.closed.recent()) this.queueClosed(c.bead.id, null);
+    if (!this.seed.held) this.seed.due = true;
   }
   async fetchClosed(step2) {
     if (this.closedQueue.length === 0) return;

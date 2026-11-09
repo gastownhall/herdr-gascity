@@ -8,7 +8,8 @@
 //   - a bead's later state (a bead.updated event's bead, or a refetch) drops
 //     it once it is no longer closed, wherever the board would show it;
 //   - a deleted bead is dropped;
-//   - a dropped bead is also dropped from the one-time seed (`dropped`);
+//   - a dropped bead is also dropped from the seed (`dropped`), until a seed
+//     fetched later lists it closed again (`reaffirm`);
 //   - infrastructure beads (ops.ts) take no slot and are only counted.
 
 import { INFRASTRUCTURE_BEAD_TYPES } from "../gc/ops.ts";
@@ -45,6 +46,11 @@ export class ClosedList {
   /** gc said this bead is not closed (any more) or gone: the seed must not list it either. */
   dropped(id: string): boolean {
     return this.droppedIds.has(id);
+  }
+
+  /** A freshly fetched seed lists these beads as closed now: gc's newest word, so they are no longer dropped. */
+  reaffirm(ids: readonly string[]): void {
+    for (const id of ids) this.droppedIds.delete(id);
   }
 
   /** Is the bead on the list? */
