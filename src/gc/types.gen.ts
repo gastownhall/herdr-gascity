@@ -394,3 +394,8 @@ export interface RequestFailedPayload {
   error_message: string;
   session_id?: string | undefined;
 }
+
+/** The fields of BeadEventPayload this mod uses, decoded from gc's BeadEventPayload. */
+export interface BeadEventPayload {
+  bead: Bead;
+}

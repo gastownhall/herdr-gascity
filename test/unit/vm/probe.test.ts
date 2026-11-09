@@ -75,6 +75,24 @@ describe("probeDocument", () => {
     });
   });
 
+  test("the closed list's incomplete flag is the model's own", () => {
+    const m = initialMachine({ pinned: null, lastSelection: null });
+    const board = boardModel({ snapshot: snapshot({ incomplete: true }), now: NOW, selected: null });
+    const doc = probeDocument({
+      modVersion: "0.0.0", herdrVersion: null, machine: m, header: headerModel(m), onScreen: false, keyboard: false, agents: null,
+      board: { ...board, closed: { ...board.closed, banners: [] } }, beadDetail: { kind: "none" }, detail: { kind: "none" },
+      diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
+    });
+    expect(doc.board?.closed.incomplete).toBe(true);
+    const clean = boardModel({ snapshot: snapshot({}), now: NOW, selected: null });
+    const other = probeDocument({
+      modVersion: "0.0.0", herdrVersion: null, machine: m, header: headerModel(m), onScreen: false, keyboard: false, agents: null,
+      board: { ...clean, closed: { ...clean.closed, banners: ["some other notice"] } }, beadDetail: { kind: "none" }, detail: { kind: "none" },
+      diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
+    });
+    expect(other.board?.closed.incomplete).toBe(false);
+  });
+
   test("before discovery: no city, no sessions", () => {
     const m = initialMachine({ pinned: null, lastSelection: null });
     const doc = probeDocument({

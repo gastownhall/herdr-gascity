@@ -57,8 +57,9 @@ async function settle(): Promise<void> {
 /**
  * The sync engine on an injected clock, serving the recorded fixtures: two
  * copies of one city, a driver hand-off, events that invalidate (a bead
- * closes: it leaves Ready and heads Recently closed), a watched bead, and a
- * gc outage with backoff. Reports what it requested and what it holds.
+ * closes: it leaves Ready and heads Recently closed; one closes and is
+ * reopened; an infrastructure bead closes), a watched bead, and a gc outage
+ * with backoff. Reports what it requested and what it holds.
  */
 async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   let now = 1_000_000;
@@ -76,7 +77,8 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
     await settle();
   };
   const body = (op: string, name: string) => fixtures.find((f) => f.op === op && f.name === name)?.body;
-  const events: { seq: number; type: string; subject: string }[] = [{ seq: 1, type: "order.fired", subject: "gate-sweep" }];
+  const events: { seq: number; type: string; subject: string; payload?: unknown }[] = [{ seq: 1, type: "order.fired", subject: "gate-sweep" }];
+  const carried = (id: string, status: string, issueType = "task") => ({ bead: { id, title: id, status, issue_type: issueType, labels: null, created_at: "t" } });
   const closedIds = () => new Set(events.filter((e) => e.type === "bead.closed").map((e) => e.subject));
   const paths: string[] = [];
   let down = false;
@@ -87,7 +89,7 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
     let reply: unknown = { items: [], total: 0 };
     if (path.includes("/events")) {
       const limit = Number(/limit=(\d+)/.exec(path)?.[1] ?? "50");
-      const items = [...events].reverse().slice(0, limit).map((e) => ({ ...e, ts: "t", actor: "a", payload: {} }));
+      const items = [...events].reverse().slice(0, limit).map((e) => ({ ...e, ts: "t", actor: "a", payload: e.payload ?? {} }));
       reply = { items, total: events.at(-1)?.seq ?? 0 };
     } else if (path.includes("/sessions")) reply = body("get-v0-city-by-city-name-sessions", "ok");
     else if (path.includes("/rigs")) reply = body("get-v0-city-by-city-name-rigs", "ok");
@@ -119,7 +121,13 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   await advance(2500);
   ticking.delete(a.value);
   a.value.unsubscribe();
-  events.push({ seq: 4, type: "bead.updated", subject: "fe-1" });
+  // a close carrying its bead, then its reopen; an infrastructure close
+  events.push(
+    { seq: 4, type: "bead.updated", subject: "fe-1" },
+    { seq: 5, type: "bead.closed", subject: "fe-9", payload: carried("fe-9", "closed") },
+    { seq: 6, type: "bead.closed", subject: "s-1", payload: carried("s-1", "closed", "session") },
+    { seq: 7, type: "bead.updated", subject: "fe-9", payload: carried("fe-9", "blocked") },
+  );
   await advance(2500);
   down = true;
   await advance(20_000);

@@ -72,6 +72,7 @@ export function snapshot(parts: {
   recent?: { seq: number; bead: T.Bead }[];
   seed?: Slot<WorkList>;
   incomplete?: boolean;
+  hiddenClosed?: number;
   events?: Partial<CitySnapshot["events"]>;
   onScreen?: boolean;
   errors?: CitySnapshot["errors"];
@@ -90,7 +91,7 @@ export function snapshot(parts: {
     pending: parts.pending ?? slot(list([])),
     ready: parts.ready ?? slot({ items: [], unreadable: [] }),
     inProgress: parts.inProgress ?? slot({ items: [], unreadable: [] }),
-    closed: { seed: parts.seed ?? slot({ items: [], unreadable: [] }), recent: parts.recent ?? [], incomplete: parts.incomplete ?? false },
+    closed: { seed: parts.seed ?? slot({ items: [], unreadable: [] }), recent: parts.recent ?? [], incomplete: parts.incomplete ?? false, hidden: parts.hiddenClosed ?? 0 },
     peeks: parts.peeks ?? new Map(),
     details: parts.details ?? new Map(),
     beads: parts.beads ?? new Map(),

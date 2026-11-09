@@ -303,14 +303,21 @@ it adds no polling of its own.
 - **Recently closed** lists the closes the store saw in `bead.closed` events,
   newest close first (the event's seq: gc has no close time), with gc's
   `close_reason`. Below an "earlier (by creation time)" divider follows the
-  one-time seed (`status=closed&sort=newest&limit=20`). A bead is listed
-  once, at its latest close; one that is back in Ready or In progress was
-  reopened and is not listed as closed. At most 20 in all; when closes came
-  faster than they could be fetched the list says it may be incomplete.
+  one-time seed (`status=closed&sort=newest&limit=20`). gc's bead events
+  carry the whole bead, so the list follows them: a close lists its bead
+  (fetched by id only when the event's bead cannot be read, and listed only
+  if gc says it is closed), and a later `bead.updated` or `bead.deleted`
+  about a listed or seeded bead drops it unless it is still closed, whether
+  or not the reopened bead shows on a Ready page. After a gap in the events
+  every listed bead is fetched again. A bead is listed once, at its latest
+  close; one back in Ready or In progress is never listed as closed. At most
+  20 in all; when closes came faster than they could be fetched the list
+  says it may be incomplete.
 - **Infrastructure beads** (`session`, `message`, `molecule`, `gate`;
   `INFRASTRUCTURE_BEAD_TYPES` in `src/gc/ops.ts`) are hidden. gc filters the
-  columns (`exclude_type`) but not the closes learned from events, so the
-  board filters every column too; the chip says what is hidden and how many.
+  columns (`exclude_type`); the store keeps infrastructure closes out of the
+  closed list (no fetch, no slot) and counts them; the chip says what is
+  hidden and how many.
 - **Bead detail.** Clicking a card opens its facts at once; the store then
   fetches the bead by id for its description (the columns carry none), and
   again on an event about it. Two copies showing the same bead fetch it once.

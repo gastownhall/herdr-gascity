@@ -205,6 +205,7 @@ export interface FakeEvent {
   seq: number;
   type: string;
   subject?: string;
+  payload?: unknown;
 }
 
 /**
@@ -215,6 +216,8 @@ export interface FakeEvent {
 export class FakeGc {
   readonly seen: SeenRequest[] = [];
   events: FakeEvent[] = [];
+  /** A bead's status as GET bead/{id} answers it, by id (set by emit; tests may set it). */
+  readonly beadStatus = new Map<string, string>();
   /** Total = LatestSeq; by default the newest event's seq. */
   total: number | null = null;
   inFlight = 0;
@@ -264,11 +267,18 @@ export class FakeGc {
     h.reject(new Error(message));
   }
 
-  /** Appends events with the next seqs. */
-  emit(...events: { type: string; subject?: string }[]): void {
+  /**
+   * Appends events with the next seqs. Without a payload an event carries {}.
+   * A bead's status by id follows its events: closed after bead.closed, else
+   * the status of a payload's bead.
+   */
+  emit(...events: { type: string; subject?: string; payload?: unknown }[]): void {
     for (const e of events) {
       const seq = (this.events.at(-1)?.seq ?? this.total ?? 0) + 1;
       this.events.push({ seq, ...e });
+      const bead = (e.payload as { bead?: { id?: string; status?: string } } | undefined)?.bead;
+      if (e.subject !== undefined && e.type === "bead.closed") this.beadStatus.set(e.subject, "closed");
+      if (bead?.id !== undefined && bead.status !== undefined) this.beadStatus.set(bead.id, bead.status);
     }
     this.total = null;
   }
@@ -293,7 +303,7 @@ export class FakeGc {
     if (p.endsWith("/events")) {
       const limit = Number(req.query.get("limit") ?? "50");
       const items = [...this.events].sort((a, b) => b.seq - a.seq).slice(0, limit).map((e) => ({
-        seq: e.seq, type: e.type, ts: "2026-11-09T00:00:00Z", actor: "test", ...(e.subject ? { subject: e.subject } : {}), payload: {},
+        seq: e.seq, type: e.type, ts: "2026-11-09T00:00:00Z", actor: "test", ...(e.subject ? { subject: e.subject } : {}), payload: e.payload ?? {},
       }));
       return { status: 200, body: { items, total: this.latest() } };
     }
@@ -313,7 +323,8 @@ export class FakeGc {
     const bead = /\/bead\/([^/]+)$/.exec(p);
     if (bead) {
       const body = fixtureBody("get-v0-city-by-city-name-bead-by-id", "ok") as Record<string, unknown>;
-      return { status: 200, body: { ...body, id: decodeURIComponent(bead[1] ?? "") } };
+      const id = decodeURIComponent(bead[1] ?? "");
+      return { status: 200, body: { ...body, id, status: this.beadStatus.get(id) ?? body["status"] } };
     }
     const session = /\/session\/([^/]+)$/.exec(p);
     if (session) {

@@ -11,7 +11,13 @@ import { SyncRegistry, TICK_MS, type Subscription } from "../../../src/sync/regi
 import {
   ERROR_RING, MAX_CLOSED_RECENT, MAX_SESSION_ROWS, SESSION_PAGE, STEP_STALL_MS, domainFreshness, type EventBatch,
 } from "../../../src/sync/store.ts";
+import { boardModel } from "../../../src/vm/board.ts";
 import { FakeGc, FakeHost, fixtureBody, flush, type Owner } from "./fakes.ts";
+
+/** A bead event's payload as gc sends it: the whole bead. */
+function beadPayload(id: string, status: string, extra: Record<string, unknown> = {}) {
+  return { bead: { id, title: `bead ${id}`, status, issue_type: "task", labels: [], created_at: "2026-11-09T00:00:00Z", ...extra } };
+}
 
 const API = "http://127.0.0.1:8372";
 const CITY = "scratch";
@@ -421,7 +427,11 @@ describe("event watcher → targeted refetches", () => {
     await open();
     await host.advance(1000);
     const start = gc.seen.length;
-    gc.emit({ type: "bead.updated", subject: "sc-74" }, { type: "bead.updated", subject: "zz-1" }, { type: "bead.deleted", subject: "fe-1" });
+    gc.emit(
+      { type: "bead.updated", subject: "sc-74", payload: beadPayload("sc-74", "open") },
+      { type: "bead.updated", subject: "zz-1", payload: beadPayload("zz-1", "open") },
+      { type: "bead.deleted", subject: "fe-1", payload: beadPayload("fe-1", "open") },
+    );
     await host.advance(1500);
     expect(gc.paths(start).slice(1).sort()).toEqual([
       `/v0/city/scratch/work/ready?${WORK}&limit=50`,
@@ -491,6 +501,110 @@ describe("event watcher → targeted refetches", () => {
     const recent = a.sub.snapshot().closed.recent;
     expect(recent.length).toBe(MAX_CLOSED_RECENT);
     expect(recent[0]?.bead.id).toBe("r2-9");
+  });
+
+  test("a bead.closed event carrying the bead lists it without a fetch", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    const start = gc.seen.length;
+    gc.emit({ type: "bead.closed", subject: "fe-1", payload: beadPayload("fe-1", "closed", { close_reason: "done" }) });
+    await host.advance(1500);
+    expect(gc.count("/bead/fe-1", start)).toBe(0);
+    expect(a.sub.snapshot().closed.recent.map((c) => [c.bead.id, c.bead.close_reason])).toEqual([["fe-1", "done"]]);
+  });
+
+  test("a reopened bead leaves the list even when it is blocked and so on no Ready page", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => (req.path.endsWith("/work/ready") && !req.query.has("status") ? { status: 200, body: { items: [] } } : undefined);
+    const a = await open();
+    await host.advance(1000);
+    gc.emit({ type: "bead.closed", subject: "fe-1", payload: beadPayload("fe-1", "closed") });
+    await host.advance(1500);
+    expect(a.sub.snapshot().closed.recent.length).toBe(1);
+    gc.emit({ type: "bead.updated", subject: "fe-1", payload: beadPayload("fe-1", "blocked") });
+    await host.advance(1500);
+    expect(a.sub.snapshot().closed.recent).toEqual([]);
+  });
+
+  test("a bead reopened beyond the first Ready page leaves the list (the board cannot see it in a column)", async () => {
+    const { host, gc, open } = setup();
+    const page = Array.from({ length: 50 }, (_, i) => ({ id: `r-${i}`, title: "r", status: "open", issue_type: "task", labels: [], created_at: "t" }));
+    gc.override = (req) => (req.path.endsWith("/work/ready") && !req.query.has("status") ? { status: 200, body: { items: page } } : undefined);
+    const a = await open();
+    await host.advance(1000);
+    gc.emit({ type: "bead.closed", subject: "fe-1", payload: beadPayload("fe-1", "closed") }, { type: "bead.updated", subject: "fe-1", payload: beadPayload("fe-1", "open") });
+    await host.advance(1500);
+    const s = a.sub.snapshot();
+    expect(s.closed.recent).toEqual([]);
+    expect(boardModel({ snapshot: s, now: host.now(), selected: null }).closed.recent).toEqual([]);
+  });
+
+  test("a bead reopened between its close event and the fetch by id is not listed", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    gc.emit({ type: "bead.closed", subject: "fe-1" }); // no readable payload: fetched by id
+    gc.beadStatus.set("fe-1", "open");
+    await host.advance(1500);
+    expect(gc.count("/bead/fe-1")).toBe(1);
+    expect(a.sub.snapshot().closed.recent).toEqual([]);
+  });
+
+  test("an update about a listed bead without a readable payload refetches it by id, and drops it unless still closed", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    gc.emit({ type: "bead.closed", subject: "fe-1", payload: beadPayload("fe-1", "closed") }, { type: "bead.closed", subject: "fe-2", payload: beadPayload("fe-2", "closed") });
+    await host.advance(1500);
+    const start = gc.seen.length;
+    gc.beadStatus.set("fe-1", "in_progress");
+    gc.emit({ type: "bead.dead_assignee_reopened", subject: "fe-1" }, { type: "bead.updated", subject: "fe-2" }, { type: "bead.updated", subject: "not-listed" });
+    await host.advance(1500);
+    expect(gc.count("/bead/fe-1", start)).toBe(1);
+    expect(gc.count("/bead/fe-2", start)).toBe(1);
+    expect(gc.count("/bead/not-listed", start)).toBe(0);
+    expect(a.sub.snapshot().closed.recent.map((c) => c.bead.id)).toEqual(["fe-2"]);
+  });
+
+  test("a deleted or reopened bead leaves the seed too", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    expect(a.sub.snapshot().closed.seed.value?.items.map((b) => b.id)).toContain("sc-73");
+    gc.emit({ type: "bead.deleted", subject: "sc-73", payload: beadPayload("sc-73", "closed") }, { type: "bead.updated", subject: "sc-72", payload: beadPayload("sc-72", "open") });
+    await host.advance(1500);
+    const seed = a.sub.snapshot().closed.seed.value?.items.map((b) => b.id) ?? [];
+    expect(seed).not.toContain("sc-73");
+    expect(seed).not.toContain("sc-72");
+    expect(seed).toContain("sc-71");
+  });
+
+  test("infrastructure closes are neither fetched nor listed, take no slot, and are counted", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    const start = gc.seen.length;
+    gc.emit(...Array.from({ length: 25 }, (_, i) => ({ type: "bead.closed", subject: `s-${i}`, payload: beadPayload(`s-${i}`, "closed", { issue_type: i % 2 ? "session" : "molecule" }) })));
+    gc.emit({ type: "bead.closed", subject: "fe-1", payload: beadPayload("fe-1", "closed") });
+    await host.advance(1500);
+    expect(gc.count("", start) - 3).toBe(0); // only the event poll and the two column refetches
+    const closed = a.sub.snapshot().closed;
+    expect(closed.recent.map((c) => c.bead.id)).toEqual(["fe-1"]);
+    expect(closed.hidden).toBe(MAX_CLOSED_RECENT);
+    expect(closed.incomplete).toBe(false);
+  });
+
+  test("a bead event whose payload cannot be read is recorded, and the close is fetched by id", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    gc.emit({ type: "bead.closed", subject: "fe-1", payload: { bead: { id: "fe-1" } } });
+    await host.advance(1500);
+    expect(gc.count("/bead/fe-1")).toBe(1);
+    const s = a.sub.snapshot();
+    expect(s.closed.recent.map((c) => c.bead.id)).toEqual(["fe-1"]);
+    expect(s.errors.some((e) => e.source === "events" && e.error.kind === "decode")).toBe(true);
   });
 
   test("a gap (more new events than one page) resyncs every domain", async () => {

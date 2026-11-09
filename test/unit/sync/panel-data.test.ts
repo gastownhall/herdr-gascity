@@ -167,7 +167,8 @@ describe("a selected bead", () => {
     expect(a.sub.snapshot().beads.get("sc-74")?.value?.description).toBe("recorded for the herdr-gascity contract fixtures");
     await host.advance(10_000);
     expect(gc.count("/bead/sc-74", start)).toBe(1);
-    gc.emit({ type: "bead.updated", subject: "sc-74" });
+    // the bead's event carries it (the closed seed lists it, so without one the closed list would refetch it too)
+    gc.emit({ type: "bead.updated", subject: "sc-74", payload: { bead: { id: "sc-74", title: "t", status: "open", issue_type: "task", labels: [], created_at: "t" } } });
     await host.advance(3000);
     expect(gc.count("/bead/sc-74", start)).toBe(2);
   });

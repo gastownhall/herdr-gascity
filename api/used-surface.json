@@ -1,5 +1,5 @@
 {
-  "$comment": "The part of gc's API this mod uses. scripts/pin-gc-spec.ts prunes the pinned spec to these operations; scripts/gen-gc.ts generates types and zod schemas for exactly these models and fields. A model reached from an operation must be listed here; a listed field must exist in the pin. Only object schemas are listed; scalar schemas (enums) are inlined. Response models are decoded at run time; request models are TypeScript types only. payloadModels are decoded at run time from an untyped field (RequestFailedPayload is the payload of a request.failed event inside RequestOutcome.event).",
+  "$comment": "The part of gc's API this mod uses. scripts/pin-gc-spec.ts prunes the pinned spec to these operations; scripts/gen-gc.ts generates types and zod schemas for exactly these models and fields. A model reached from an operation must be listed here; a listed field must exist in the pin. Only object schemas are listed; scalar schemas (enums) are inlined. Response models are decoded at run time; request models are TypeScript types only. payloadModels are decoded at run time from an untyped field (RequestFailedPayload is the payload of a request.failed event inside RequestOutcome.event; BeadEventPayload is the payload of bead.created/updated/closed/deleted events).",
   "operations": {
     "get-health": "liveness, version and build id for compatibility checks",
     "get-v0-cities": "city list with running/status",
@@ -68,6 +68,7 @@
 
     "RequestOutcome": { "fields": ["request_id", "operation", "state", "event"] },
     "RequestFailedPayload": { "fields": ["request_id", "operation", "error_code", "error_message", "session_id"] },
+    "BeadEventPayload": { "fields": ["bead"] },
     "AsyncAcceptedBody": { "fields": ["request_id", "status", "event_cursor", "idempotency_key", "replayed"] },
     "SessionCommandStatusBody": { "fields": ["status", "idempotency_key", "replayed"] },
     "OKResponseBody": { "fields": ["status"] },
@@ -85,5 +86,5 @@
     "BeadCreateInputBody": { "fields": ["title", "description", "priority", "labels", "type", "rig", "assignee"] },
     "BeadCloseBody": { "fields": ["reason"] }
   },
-  "payloadModels": ["RequestFailedPayload"]
+  "payloadModels": ["RequestFailedPayload", "BeadEventPayload"]
 }

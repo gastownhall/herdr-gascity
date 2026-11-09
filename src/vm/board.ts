@@ -8,8 +8,8 @@
 //     is back in Ready or In progress (reopened) is not listed as closed. At
 //     most MAX_CLOSED_RECENT in all;
 //   - infrastructure beads (ops.ts INFRASTRUCTURE_BEAD_TYPES) are hidden in
-//     every column and counted: gc filters the columns, but not the closes
-//     the store learns from events;
+//     every column and counted (the store already keeps them out of the
+//     closes it learns from events, and counts them);
 //   - each column says how old its data is, keeps stale data with the error
 //     above it, and lists entries gc sent that cannot be read;
 //   - the selected bead's detail: the card's facts at once, the description
@@ -79,12 +79,14 @@ export interface ClosedColumn extends ColumnBase {
   /** The seed, by creation time, below `divider`. */
   earlier: ClosedCard[];
   divider: string;
+  /** Some closes were not fetched: the list may be missing some. */
+  incomplete: boolean;
 }
 
 export interface BoardModel {
   /** The type-filter chip: which bead types are hidden. */
   filter: string;
-  /** Infrastructure beads hidden from what gc sent. */
+  /** Infrastructure beads hidden: in what gc's lists sent, and among the closes the store saw. */
   hidden: number;
   ready: WorkColumn;
   inProgress: WorkColumn;
@@ -142,7 +144,7 @@ function closedFreshness(s: CitySnapshot, now: number): Freshness {
 export function boardModel(input: BoardInput): BoardModel {
   const { snapshot: s, now, selected } = input;
   const drift = new Set<string>();
-  let hidden = 0;
+  let hidden = s.closed.hidden;
 
   const card = (b: BeadLike): BeadCard => {
     const state = beadState(b.status, b.is_blocked);
@@ -215,6 +217,7 @@ export function boardModel(input: BoardInput): BoardModel {
     recent,
     earlier,
     divider: EARLIER_DIVIDER,
+    incomplete: s.closed.incomplete,
   };
 
   return {

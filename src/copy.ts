@@ -86,6 +86,8 @@ export class CopyController {
   private cities: CitiesSubscription | null = null;
   private citiesRev = -1;
   private city: Subscription | null = null;
+  /** The city the last subscription was to: a bead selected there means nothing in another city. */
+  private lastCity: string | null = null;
   private peek: { id: string; release: () => void } | null = null;
   private beadWatch: { id: string; release: () => void } | null = null;
   private signature = "";
@@ -294,6 +296,9 @@ export class CopyController {
       }
       this.city = made.value;
       this.applied = new WeakSet();
+      const id = `${key.apiUrl}\u0000${key.city}`;
+      if (this.lastCity !== id) this.selectedBead = null;
+      this.lastCity = id;
     }
     this.city?.tick();
   }

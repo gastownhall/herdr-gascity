@@ -91,6 +91,10 @@ describe("infrastructure beads", () => {
     expect(ids(m.closed.earlier)).toEqual(["c"]);
     expect(m.hidden).toBe(4);
   });
+
+  test("infrastructure closes the store counted (and never listed) add to the hidden count", () => {
+    expect(model({ hiddenClosed: 7 }).hidden).toBe(7);
+  });
 });
 
 describe("recently closed", () => {
@@ -143,8 +147,8 @@ describe("recently closed", () => {
   });
 
   test("closes that could not all be fetched mark the list as possibly incomplete", () => {
-    expect(model({ incomplete: true }).closed.banners).toEqual(["may be incomplete: some closes were not fetched"]);
-    expect(model({}).closed.banners).toEqual([]);
+    expect(model({ incomplete: true }).closed).toMatchObject({ incomplete: true, banners: ["may be incomplete: some closes were not fetched"] });
+    expect(model({}).closed).toMatchObject({ incomplete: false, banners: [] });
   });
 
   test("its age runs from the last event poll (closes arrive by event); a failed seed shows its error above what is known", () => {

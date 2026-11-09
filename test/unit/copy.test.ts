@@ -190,9 +190,27 @@ describe("a copy", () => {
     a.copy.selectBead(null);
     expect(a.copy.view(host.now()).beadDetail).toEqual({ kind: "none" });
     const seen = gc.seen.length;
-    gc.emit({ type: "bead.updated", subject: "sc-74" });
+    gc.emit({ type: "bead.updated", subject: "sc-74", payload: { bead: { id: "sc-74", title: "t", status: "open", issue_type: "task", labels: [], created_at: "t" } } });
     await host.advance(3000);
     expect(gc.count("/bead/sc-74", seen)).toBe(0);
+  });
+
+  test("switching city clears the selected bead: it is not watched in the new city", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => (req.path === "/v0/cities"
+      ? { status: 200, body: { items: [{ name: "scratch", path: "/s", running: true }, { name: "other", path: "/o", running: true }], total: 2 } }
+      : undefined);
+    const a = await open({ pinned: undefined });
+    a.copy.selectCity("scratch");
+    await host.advance(3000);
+    a.copy.selectBead("sc-74");
+    await host.advance(1000);
+    expect(gc.count("/v0/city/scratch/bead/sc-74")).toBe(1);
+    a.copy.selectCity("other");
+    await host.advance(3000);
+    expect(a.copy.view(host.now()).header.city).toBe("other");
+    expect(a.copy.view(host.now()).beadDetail).toEqual({ kind: "none" });
+    expect(gc.count("/v0/city/other/bead/sc-74")).toBe(0);
   });
 
   test("a city call answering 'not running' moves the copy to city stopped and ends its subscription", async () => {

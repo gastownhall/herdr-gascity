@@ -134,7 +134,7 @@ function probeBoard(b: BoardModel | null): ProbeBody["board"] {
     ready: { count: b.ready.count, cards: b.ready.cards.map(card) },
     in_progress: { count: b.inProgress.count, cards: b.inProgress.cards.map(card) },
     closed: {
-      incomplete: b.closed.banners.length > 0,
+      incomplete: b.closed.incomplete,
       recent: b.closed.recent.map((c) => ({ id: c.id, title: c.title, seq: c.seq, close_reason: c.closeReason, assignee: c.assignee })),
       earlier: b.closed.earlier.map(closed),
     },

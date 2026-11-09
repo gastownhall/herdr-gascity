@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:19c09e59859aa9d0729f01276da476d5d4c5dc4cbd5a69c4b43bfc8be791ce96 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:cea6c948ab58e9505872cb94234edbe2400ef02ef6440c9adb201040952a29a0 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2013,6 +2013,9 @@ var RequestFailedPayloadSchema = object({
   error_message: string2(),
   session_id: optional(string2())
 });
+var BeadEventPayloadSchema = object({
+  bead: BeadSchema
+});
 
 // src/gc/errors.ts
 var CITY_NOT_RUNNING_PREFIX = "not_found: city not found or not running: ";
@@ -2903,8 +2906,7 @@ var SESSION_REFRESH = /* @__PURE__ */ new Set(["request.failed", "worker.operati
 var BOARD_CHANGES = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted", "bead.dead_assignee_reopened"]);
 var PENDING = /* @__PURE__ */ new Set(["session.pending", "session.pending_cleared"]);
 function invalidationFor(events, known) {
-  const inv = { domains: /* @__PURE__ */ new Set(), closed: [], cities: false };
-  const closed2 = /* @__PURE__ */ new Map();
+  const inv = { domains: /* @__PURE__ */ new Set(), cities: false };
   for (const e of events) {
     const t = e.type;
     const subject = e.subject;
@@ -2919,14 +2921,12 @@ function invalidationFor(events, known) {
         inv.domains.add("ready");
         inv.domains.add("inProgress");
       }
-      if (t === "bead.closed" && subject !== void 0) closed2.set(subject, Math.max(closed2.get(subject) ?? -Infinity, e.seq));
     } else if (t.startsWith("city.")) {
       inv.cities = true;
       inv.domains.add("rigs");
       inv.domains.add("agents");
     }
   }
-  inv.closed = [...closed2].map(([id, seq]) => ({ id, seq })).sort((a, b) => a.seq - b.seq);
   return inv;
 }
 
@@ -2938,6 +2938,14 @@ function mayBeOnScreen(input) {
   const focus = input.focus;
   if (focus === null) return false;
   return input.panes.some((p) => p.mod === MOD_NAME && p.tab === focus.tab);
+}
+
+// src/gc/events.ts
+var BEAD_PAYLOAD_EVENTS = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted"]);
+function eventBead(e) {
+  if (!BEAD_PAYLOAD_EVENTS.has(e.type)) return ok(null);
+  const r = decodeValue(BeadEventPayloadSchema, e.payload, "get-v0-city-by-city-name-events", `event ${e.seq} ${e.type} payload`);
+  return r.ok ? ok(r.value.bead) : r;
 }
 
 // src/gc/ops.ts
@@ -3148,6 +3156,64 @@ var FetchBudget = class {
   }
 };
 
+// src/sync/closedList.ts
+var INFRASTRUCTURE = new Set(INFRASTRUCTURE_BEAD_TYPES);
+var CLOSED = "closed";
+var ClosedList = class {
+  constructor(limit) {
+    this.limit = limit;
+  }
+  limit;
+  list = [];
+  droppedIds = /* @__PURE__ */ new Set();
+  /** Distinct infrastructure beads among the newest closes, oldest first. */
+  infrastructure = [];
+  /** Newest close first. */
+  recent() {
+    return this.list;
+  }
+  /** Infrastructure beads among the newest closes (at most `limit`): hidden, not listed. */
+  hidden() {
+    return this.infrastructure.length;
+  }
+  /** gc said this bead is not closed (any more) or gone: the seed must not list it either. */
+  dropped(id) {
+    return this.droppedIds.has(id);
+  }
+  /** Is the bead on the list? */
+  has(id) {
+    return this.list.some((c) => c.bead.id === id);
+  }
+  /** gc reported a close at `seq`, with the bead as gc has it now. */
+  closed(seq, bead) {
+    if (INFRASTRUCTURE.has(bead.issue_type)) {
+      this.infrastructure = [...this.infrastructure.filter((id) => id !== bead.id), bead.id].slice(-this.limit);
+      return;
+    }
+    if (bead.status !== CLOSED) {
+      this.remove(bead.id);
+      return;
+    }
+    const cur = this.list.find((c) => c.bead.id === bead.id);
+    if (cur && cur.seq > seq) return;
+    this.droppedIds.delete(bead.id);
+    this.list = [...this.list.filter((c) => c.bead.id !== bead.id), { seq, bead }].sort((a, b) => b.seq - a.seq).slice(0, this.limit);
+  }
+  /** The bead as gc has it now (an update): dropped unless still closed; a listed one is updated in place. */
+  current(bead) {
+    if (bead.status !== CLOSED) {
+      this.remove(bead.id);
+      return;
+    }
+    this.list = this.list.map((c) => c.bead.id === bead.id ? { seq: c.seq, bead } : c);
+  }
+  /** The bead was deleted, or gc no longer has it. */
+  remove(id) {
+    this.list = this.list.filter((c) => c.bead.id !== id);
+    this.droppedIds.add(id);
+  }
+};
+
 // src/sync/scheduler.ts
 var TASKS = ["events", "sessions", "peek", "sweep"];
 var CADENCE = {
@@ -3272,13 +3338,14 @@ var CityStore = class {
     inProgress: freshSlot()
   };
   due = /* @__PURE__ */ new Map();
+  /** Beads to fetch by id for the closed list: a close (`seq`) whose event carried no readable bead, or a recheck (`seq` null). */
   closedQueue = [];
   peeks = /* @__PURE__ */ new Map();
   lookups = /* @__PURE__ */ new Map();
   /** Watched beads (open bead details) and how many watches each has. */
   beadWatches = /* @__PURE__ */ new Map();
   seed = { ...freshSlot(), due: true };
-  recent = [];
+  closed = new ClosedList(MAX_CLOSED_RECENT);
   incomplete = false;
   events = {
     cursor: null,
@@ -3416,6 +3483,7 @@ var CityStore = class {
       const now = this.deps.clock.now();
       for (const d of ALL_DOMAINS) this.mark(d, now, "snapshot");
       this.incomplete = true;
+      this.recheckClosed();
     }
     this.commit();
   }
@@ -3630,6 +3698,7 @@ var CityStore = class {
     if (reading.resync) {
       this.events.resyncs++;
       this.incomplete = true;
+      this.recheckClosed();
       for (const d of ALL_DOMAINS) this.mark(d, at2, "events");
     }
     const inv = invalidationFor(reading.newer, this.known());
@@ -3639,7 +3708,7 @@ var CityStore = class {
       if (looked) looked.due = true;
     }
     if (reading.resync) for (const b of this.lookups.values()) b.due = true;
-    if (inv.closed.length > 0) this.closedQueue = [...this.closedQueue, ...inv.closed];
+    this.beadEvents(reading.newer);
     if (reading.newer.length > 0 || reading.resync) {
       const batch = { key: this.key, events: reading.newer, resync: reading.resync, citiesChanged: inv.cities };
       try {
@@ -3745,14 +3814,47 @@ var CityStore = class {
     }
     this.commit();
   }
+  /** Follows the closed list through bead events, oldest first. */
+  beadEvents(events) {
+    for (const e of events) {
+      if (!e.type.startsWith("bead.") || e.subject === void 0) continue;
+      const decoded = eventBead(e);
+      if (!decoded.ok) this.record("events", decoded.error);
+      const bead = decoded.ok ? decoded.value : null;
+      if (e.type === "bead.closed") {
+        if (bead) this.closed.closed(e.seq, bead);
+        else this.queueClosed(e.subject, e.seq);
+      } else if (this.closed.has(e.subject) || this.seeded(e.subject)) {
+        if (e.type === "bead.deleted") this.closed.remove(e.subject);
+        else if (bead) this.closed.current(bead);
+        else this.queueClosed(e.subject, null);
+      }
+    }
+  }
+  /** The seed shows this bead (and gc has not said since that it is no longer closed). */
+  seeded(id) {
+    return !this.closed.dropped(id) && (this.seed.value?.items.some((b) => b.id === id) ?? false);
+  }
+  /** Queues a fetch by id: a close at `seq`, or (null) a recheck of a listed bead. A close supersedes a recheck. */
+  queueClosed(id, seq) {
+    const cur = this.closedQueue.find((c) => c.id === id);
+    if (cur && (seq === null || cur.seq !== null && cur.seq >= seq)) return;
+    this.closedQueue = [...this.closedQueue.filter((c) => c.id !== id), { id, seq }];
+  }
+  /** Events may have been missed: fetch every listed bead again. */
+  recheckClosed() {
+    for (const c of this.closed.recent()) this.queueClosed(c.bead.id, null);
+  }
   async fetchClosed(step2) {
     if (this.closedQueue.length === 0) return;
-    const newestFirst = [...this.closedQueue].sort((a, b) => b.seq - a.seq);
-    if (newestFirst.length > BEAD_FETCHES_PER_STEP) {
+    const rechecks = this.closedQueue.filter((c) => c.seq === null);
+    let closes = this.closedQueue.filter((c) => c.seq !== null).sort((a, b) => (b.seq ?? 0) - (a.seq ?? 0));
+    if (closes.length > BEAD_FETCHES_PER_STEP) {
       this.incomplete = true;
-      this.closedQueue = newestFirst.slice(0, BEAD_FETCHES_PER_STEP);
+      closes = closes.slice(0, BEAD_FETCHES_PER_STEP);
     }
-    for (const ref of newestFirst.slice(0, BEAD_FETCHES_PER_STEP)) {
+    this.closedQueue = [...rechecks, ...closes];
+    for (const ref of this.closedQueue.slice(0, BEAD_FETCHES_PER_STEP)) {
       if (!this.gateOpen(step2)) return;
       const r = await getBead(this.deps.endpoint.client("snapshot", step2), this.key.city, ref.id);
       if (!this.current(step2)) return;
@@ -3764,10 +3866,11 @@ var CityStore = class {
       }
       this.closedQueue = this.closedQueue.filter((c) => c !== ref);
       if (this.settle(r, `closed:${ref.id}`) && r.ok) {
-        const kept = this.recent.filter((c) => c.bead.id !== ref.id || c.seq > ref.seq);
-        if (!kept.some((c) => c.bead.id === ref.id)) kept.push({ seq: ref.seq, bead: r.value });
-        this.recent = kept.sort((a, b) => b.seq - a.seq).slice(0, MAX_CLOSED_RECENT);
+        if (ref.seq === null) this.closed.current(r.value);
+        else this.closed.closed(ref.seq, r.value);
         this.syncLookups();
+      } else if (!r.ok && r.error.kind === "http" && r.error.status === 404) {
+        this.closed.remove(ref.id);
       } else {
         this.incomplete = true;
       }
@@ -3886,7 +3989,7 @@ var CityStore = class {
     for (const list of [this.slots.ready.value, this.slots.inProgress.value, this.seed.value]) {
       for (const b of list?.items ?? []) onBoard2.add(b.id);
     }
-    for (const c of this.recent) onBoard2.add(c.bead.id);
+    for (const c of this.closed.recent()) onBoard2.add(c.bead.id);
     const wanted = new Set(this.beadWatches.keys());
     for (const x of [...this.slots.sessions.value?.items ?? [], ...this.slots.agents.value?.items ?? []]) {
       if (x.active_bead !== void 0 && x.active_bead !== "" && !onBoard2.has(x.active_bead)) wanted.add(x.active_bead);
@@ -3898,6 +4001,12 @@ var CityStore = class {
   slotOf(s, dirty) {
     if (s.value === null && s.fetchedAt === null && s.error === null && dirty && !s.held) return EMPTY_SLOT;
     return { value: s.value, fetchedAt: s.fetchedAt, error: s.error, dirty, held: s.held };
+  }
+  /** The seed without the beads gc has since said are no longer closed or gone. */
+  seedSlot() {
+    const v = this.seed.value;
+    if (v === null || !v.items.some((b) => this.closed.dropped(b.id))) return this.slotOf(this.seed, this.seed.due);
+    return this.slotOf({ ...this.seed, value: { ...v, items: v.items.filter((b) => !this.closed.dropped(b.id)) } }, this.seed.due);
   }
   build(rev) {
     const dirty = (d) => this.due.has(d);
@@ -3913,7 +4022,7 @@ var CityStore = class {
       pending: this.slotOf(this.slots.pending, dirty("pending")),
       ready: this.slotOf(this.slots.ready, dirty("ready")),
       inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
-      closed: { seed: this.slotOf(this.seed, this.seed.due), recent: this.recent, incomplete: this.incomplete },
+      closed: { seed: this.seedSlot(), recent: this.closed.recent(), incomplete: this.incomplete, hidden: this.closed.hidden() },
       peeks: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
       beads: new Map([...this.lookups].map(([id, b]) => [id, this.slotOf(b, b.due)])),
@@ -4247,7 +4356,7 @@ function agentsModel(input) {
 
 // src/vm/board.ts
 var EARLIER_DIVIDER = "earlier (by creation time)";
-var INFRASTRUCTURE = new Set(INFRASTRUCTURE_BEAD_TYPES);
+var INFRASTRUCTURE2 = new Set(INFRASTRUCTURE_BEAD_TYPES);
 var STATES = { open: "open", in_progress: "in progress", blocked: "blocked", closed: "closed" };
 function beadState(status2, isBlocked) {
   if (isBlocked === true) return { text: "blocked", unrecognized: null };
@@ -4263,7 +4372,7 @@ function priorityText(p) {
   return p === void 0 ? null : `P${p}`;
 }
 function isInfrastructure(b) {
-  return INFRASTRUCTURE.has(b.issue_type);
+  return INFRASTRUCTURE2.has(b.issue_type);
 }
 function unreadableRows2(list) {
   return list.map((u) => `unreadable bead ${u.id === null ? `(entry ${u.index})` : cleanLine(u.id)}: ${errorText(u.error)}`);
@@ -4274,7 +4383,7 @@ function closedFreshness(s, now) {
 function boardModel(input) {
   const { snapshot: s, now, selected } = input;
   const drift3 = /* @__PURE__ */ new Set();
-  let hidden = 0;
+  let hidden = s.closed.hidden;
   const card3 = (b) => {
     const state = beadState(b.status, b.is_blocked);
     if (state.unrecognized !== null) drift3.add(state.unrecognized);
@@ -4334,7 +4443,8 @@ function boardModel(input) {
     banners: s.closed.incomplete ? ["may be incomplete: some closes were not fetched"] : [],
     recent,
     earlier,
-    divider: EARLIER_DIVIDER
+    divider: EARLIER_DIVIDER,
+    incomplete: s.closed.incomplete
   };
   return {
     filter: `hiding infrastructure beads (${INFRASTRUCTURE_BEAD_TYPES.join(", ")})`,
@@ -4658,7 +4768,7 @@ function probeBoard(b) {
     ready: { count: b.ready.count, cards: b.ready.cards.map(card) },
     in_progress: { count: b.inProgress.count, cards: b.inProgress.cards.map(card) },
     closed: {
-      incomplete: b.closed.banners.length > 0,
+      incomplete: b.closed.incomplete,
       recent: b.closed.recent.map((c) => ({ id: c.id, title: c.title, seq: c.seq, close_reason: c.closeReason, assignee: c.assignee })),
       earlier: b.closed.earlier.map(closed)
     },
@@ -4723,6 +4833,8 @@ var CopyController = class {
   cities = null;
   citiesRev = -1;
   city = null;
+  /** The city the last subscription was to: a bead selected there means nothing in another city. */
+  lastCity = null;
   peek = null;
   beadWatch = null;
   signature = "";
@@ -4909,6 +5021,9 @@ var CopyController = class {
       }
       this.city = made.value;
       this.applied = /* @__PURE__ */ new WeakSet();
+      const id = `${key.apiUrl}\0${key.city}`;
+      if (this.lastCity !== id) this.selectedBead = null;
+      this.lastCity = id;
     }
     this.city?.tick();
   }
