@@ -1,9 +1,9 @@
 // A scratch gc city for the integration test and the nightly canary, fully
 // isolated from the machine it runs on:
 //
-//   - its own HOME, GC_HOME and XDG directories under one root directory, and
-//     TMUX_TMPDIR there too, so its tmux socket (the city's own `tmux -L`
-//     name) can never be the default tmux server or anyone else's;
+//   - its own HOME, GC_HOME, XDG directories and TMPDIR under one root
+//     directory, and TMUX_TMPDIR there too, so its tmux socket (the city's own
+//     `tmux -L` name) can never be the default tmux server or anyone else's;
 //   - a free loopback port for the supervisor API;
 //   - no inherited TMUX, HC_* or GC_* variables (a gc variable from the
 //     caller's shell could point at a live city);
@@ -32,8 +32,12 @@ export type SupervisorMode =
   | { kind: "loopback" }
   /** loopback, every mutation needs a signed write grant (a hardened city) */
   | { kind: "write-grants"; verifyKey: string }
-  /** bound to every interface: gc serves the API read-only */
-  | { kind: "any-interface" };
+  /**
+   * gc serves the API read-only, still on loopback only: gc calls a bind
+   * read-only unless it is literally 127.0.0.1, localhost or ::1, while Go
+   * listens for the IPv4-mapped "::ffff:127.0.0.1" on 127.0.0.1 alone.
+   */
+  | { kind: "read-only" };
 
 export interface ScratchCityOptions {
   /** The gc program (an absolute path). */
@@ -50,7 +54,7 @@ export interface ScratchCityOptions {
   log?: (line: string) => void;
 }
 
-const VARIABLE_DROPPED = /^(TMUX|TMUX_PANE|HC_.*|GC_.*|XDG_.*|HERDR_.*)$/;
+const VARIABLE_DROPPED = /^(TMUX|TMUX_PANE|TMPDIR|HC_.*|GC_.*|XDG_.*|HERDR_.*)$/;
 
 /** The isolated environment every process of the scratch city gets. */
 export function scratchEnv(o: { root: string; runId: string; gcBin: string; path?: string[] }, base: Record<string, string | undefined> = process.env): Record<string, string> {
@@ -66,6 +70,7 @@ export function scratchEnv(o: { root: string; runId: string; gcBin: string; path
     XDG_CACHE_HOME: join(home, ".cache"),
     XDG_RUNTIME_DIR: join(o.root, "run"),
     TMUX_TMPDIR: join(o.root, "tmux"),
+    TMPDIR: join(o.root, "tmp"),
     TERM: "xterm-256color",
     PATH: [dirname(o.gcBin), ...(o.path ?? []), base.PATH ?? "/usr/bin:/bin"].join(":"),
     [RUN_MARKER]: o.runId,
@@ -105,8 +110,8 @@ export function supervisorToml(port: number, mode: SupervisorMode): string {
     case "write-grants":
       lines.push('bind = "127.0.0.1"', "write_auth_required = true", `write_auth_verify_key = ${JSON.stringify(mode.verifyKey)}`);
       break;
-    case "any-interface":
-      lines.push('bind = "0.0.0.0"');
+    case "read-only":
+      lines.push('bind = "::ffff:127.0.0.1"');
       break;
   }
   return `${lines.join("\n")}\n`;
@@ -147,7 +152,7 @@ export class ScratchCity {
     for (const d of [city.env.GC_HOME!, city.env.XDG_CONFIG_HOME!, city.env.XDG_STATE_HOME!, city.env.XDG_DATA_HOME!, city.env.XDG_CACHE_HOME!, city.logDir]) {
       mkdirSync(d, { recursive: true });
     }
-    for (const d of [city.env.XDG_RUNTIME_DIR!, city.env.TMUX_TMPDIR!]) mkdirSync(d, { recursive: true, mode: 0o700 });
+    for (const d of [city.env.XDG_RUNTIME_DIR!, city.env.TMUX_TMPDIR!, city.env.TMPDIR!]) mkdirSync(d, { recursive: true, mode: 0o700 });
     return city;
   }
 

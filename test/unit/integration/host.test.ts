@@ -3,10 +3,11 @@
 // fetch, and the exec allowlist.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execAllowed, FetchMeter, herdrFetch, HERDR_FETCH_MAX_BYTES } from "../../integration/herdr.ts";
-import { programOf, wrapperArgv } from "../../integration/terminals.ts";
+import { execAllowed, FetchMeter, herdrFetch, HERDR_FETCH_MAX_BYTES, redirectRefusal } from "../../integration/herdr.ts";
+import { programOf, PtyTerminals, wrapperArgv } from "../../integration/terminals.ts";
 
 const FIXTURES = join(import.meta.dir, "..", "..", "fixtures", "terminals");
 
@@ -52,6 +53,10 @@ describe("herdr's constrained fetch", () => {
         await new Promise((r) => setTimeout(r, 1000));
         return new Response("late");
       }
+      if (u.pathname === "/to-echo") return new Response(null, { status: 307, headers: { location: "/echo" } });
+      if (u.pathname === "/see-other") return new Response(null, { status: 303, headers: { location: "/echo" } });
+      if (u.pathname === "/elsewhere") return new Response(null, { status: 302, headers: { location: `http://localhost:${u.port}/echo` } });
+      if (u.pathname === "/loop") return new Response(null, { status: 302, headers: { location: "/loop" } });
       if (u.pathname === "/big") return new Response("x".repeat(HERDR_FETCH_MAX_BYTES + 1));
       if (u.pathname === "/echo") return Response.json({ method: req.method, gc: req.headers.get("x-gc-request"), body: await req.text() }, { headers: { "x-gc-index": "7" } });
       return new Response("not found", { status: 404 });
@@ -95,8 +100,42 @@ describe("herdr's constrained fetch", () => {
     expect(meter.inFlight).toBe(0);
   });
 
+  test("follows redirects as herdr does: same origin, 303 to GET, at most 10", async () => {
+    const f = herdrFetch(new FetchMeter());
+    const kept = await f(`${base}/to-echo`, { method: "POST", headers: { "X-GC-Request": "t" }, body: "b" });
+    expect(await kept.json()).toEqual({ method: "POST", gc: "t", body: "b" });
+    expect(kept.url).toBe(`${base}/echo`);
+    const got = await f(`${base}/see-other`, { method: "POST", body: "b" });
+    expect(await got.json()).toEqual({ method: "GET", gc: null, body: "" });
+    await expect(f(`${base}/loop`)).rejects.toThrow("redirect limit");
+  });
+
+  test("refuses a cross-origin redirect that would replay a method or headers", async () => {
+    const f = herdrFetch(new FetchMeter());
+    await expect(f(`${base}/elsewhere`, { method: "PUT", body: "b" })).rejects.toThrow("would replay a PUT request");
+    await expect(f(`${base}/elsewhere`, { headers: { "X-GC-Request": "t" } })).rejects.toThrow("caller-supplied request headers would be replayed");
+    expect(await (await f(`${base}/elsewhere`)).json()).toEqual({ method: "GET", gc: null, body: "" });
+    expect(redirectRefusal("https://a/x", "http://a/y", "GET", {})).toContain("HTTPS downgrade");
+    expect(redirectRefusal("http://a/x", "http://b/y", "GET", { Authorization: "x" })).toContain("carries Authorization");
+  });
+
   test("a refused connection rejects with reqwest's shape", async () => {
     const meter = new FetchMeter();
     await expect(herdrFetch(meter)("http://127.0.0.1:9/x")).rejects.toThrow("fetching http://127.0.0.1:9/x failed: error sending request for url");
+  });
+});
+
+describe("PTY terminals", () => {
+  test("a terminal whose wrapper has ended is reported finished, as herdr does", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "hg-pty-"));
+    const terms = new PtyTerminals({ env: { PATH: process.env.PATH ?? "/usr/bin:/bin" }, shell: "/bin/sh", cwd: dir, logDir: dir, runId: "unit" });
+    // `exit` as the program: the wrapper's shell runs it and ends before it would exec an interactive shell.
+    const t = terms.launch(["exit", "0"], { tab: "t2", space: "s1" });
+    await t.proc.exited;
+    const r = terms.record(t);
+    expect(r.state).toBe("finished");
+    expect(r.labels).toEqual({ "herdr.space": "s1", "herdr.tab": "t2" });
+    expect(t.scope).toMatch(/^m7-unit-[0-9a-f]{16}$/);
+    await terms.killAll();
   });
 });

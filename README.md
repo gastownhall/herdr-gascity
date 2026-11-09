@@ -686,14 +686,20 @@ GC_BIN=/abs/path/to/gc bun run test:integration
   only guard, which is the case the audit is for. The nightly canary covers
   the latest gc release.
 - **The city.** `canary/city.ts` makes everything under one temporary
-  directory: its own HOME, GC_HOME, XDG directories and `TMUX_TMPDIR`, a free
+  directory: its own HOME, GC_HOME, XDG directories, `TMPDIR` and `TMUX_TMPDIR`, a free
   loopback port, the file bead store, and the city's own tmux socket (`tmux
   -L <city>-<run id>`), never the default tmux server. TMUX, HC_* and GC_*
   variables of the caller are dropped. `gc supervisor run` is the test's own
   child, never under a herdr terminal. Every process it starts carries
   `HERDR_GASCITY_RUN=<run id>`; teardown stops the supervisor, kills the
   city's tmux server by its socket, then signals only processes carrying
-  that marker, and the last test checks none is left.
+  that marker, and the last test checks none is left. If the harness itself
+  was killed before its teardown, this stops what a run left behind (the run
+  id is in the run directory's `logs/report.json`):
+
+  ```sh
+  grep -lz '^HERDR_GASCITY_RUN=<run id>$' /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 | xargs -r kill
+  ```
 - **The agent.** `canary/pack/` has one agent whose sessions run
   `canary-agent.sh`: it prints `CANARY READY <alias>`, and on the line
   `close <bead> [<nonce>]` (typed by gc's submit) closes the bead through
@@ -712,14 +718,22 @@ GC_BIN=/abs/path/to/gc bun run test:integration
   store for both copies; a session started through the mod, running within
   90 s; a bead created through the mod and `submit close <bead>` sent to the
   session, the bead in the closed ring within 60 s; changes shown within 3 s
-  of gc's event; then the session suspended through gc and Open terminal:
-  the mod must wake it through gc's API and see it running before `tab.new`.
+  of gc's event (the median of six samples within 3 s, none over 4 s: the
+  on-screen poll cadence allows about 2.8 s at worst); then the session
+  suspended through gc and Open terminal: the mod must wake it through gc's
+  API and see it running before `tab.new`.
 - **The `HC_SCOPE` audit.** With the attach tab's token known, no process
   outside that terminal's process tree may carry it (`/proc/*/environ`): not
   the city's tmux server, the agent's pane, the supervisor. It runs for the
-  woken session and for the race path (the recorded attach argv run right
-  after the session was suspended again). Then the terminal's tree is killed
-  and gc must still report the session running.
+  woken session; then the terminal's tree is killed and gc must still report
+  the session running. Then the race path: the recorded attach argv run right
+  after the session was suspended again, once with the city's tmux server
+  running and once with it killed. At the pinned gc the attach goes into
+  gc's start path itself (the test checks its output says so; without the
+  server it starts a fresh one) and gives up within milliseconds, so the
+  audit samples `/proc` every 100 ms the whole time. When the pin moves past
+  gastownhall/gascity#9011 (attach lets the controller wake the session),
+  the race path flips to asserting that the attach started nothing.
 - **The checks are shown to bite.** The audit flags a daemon started from a
   terminal without the `env -u` prefix (and passes with it), and a copy of
   the bundle patched to skip the wake fails the wake-before-attach check.
@@ -728,8 +742,9 @@ GC_BIN=/abs/path/to/gc bun run test:integration
   outcome, the board refreshed before a retry is offered, never retried);
   the supervisor dying mid-run (the reconnecting banner, at most one request
   in flight while it is down, then back); a city that requires signed write
-  grants and an API bound to every interface (reads work; a change fails
-  with gc's reason). Across all of it, never more than 2 requests in flight.
+  grants and a read-only bind (`::ffff:127.0.0.1`: gc serves it read-only
+  while it still listens on loopback only) — reads work; a change fails with
+  gc's reason. Across all of it, never more than 2 requests in flight.
 - **Artifacts.** `logs/` under the run's directory: `report.json` (timings,
   audits, checks), the probe files, every request and host call, each
   terminal's output, the supervisor's log.

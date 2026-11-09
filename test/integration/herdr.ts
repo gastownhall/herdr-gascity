@@ -4,8 +4,9 @@
 //   - `fetch` is real but constrained like herdr's (gpui-kit shell
 //     standard/fetch.rs): options {method, headers, body} only, the headers
 //     herdr refuses are refused, a fixed 30 s timeout, an 8 MiB cap on the
-//     request and the response, the whole body read before it resolves, and a
-//     response with status/ok/url/text()/json() and no headers. Every request
+//     request and the response, the whole body read before it resolves,
+//     redirects followed only as herdr allows them, and a response with
+//     status/ok/url/text()/json() and no headers. Every request
 //     is metered: how many were in flight at once, app-wide;
 //   - `exec` is real but allowlisted: `<gc> supervisor status --json` only;
 //     anything else is a recorded violation and is not run;
@@ -33,6 +34,28 @@ import type { PtyTerminals, Terminal } from "./terminals.ts";
 export const HERDR_FETCH_TIMEOUT_MS = 30_000;
 export const HERDR_FETCH_MAX_BYTES = 8 * 1024 * 1024;
 const PROHIBITED_HEADERS = new Set(["host", "content-length", "connection", "expect", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
+
+/** herdr follows at most this many redirects, of these statuses (fetch.rs). */
+const MAX_REDIRECTS = 10;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+function origin(u: string): string {
+  return new URL(u).origin;
+}
+
+/**
+ * Why herdr refuses to follow a redirect from `current` to `next` (fetch.rs
+ * authorize_redirect), or null: an HTTPS downgrade, a cross-origin redirect
+ * that would replay a non-GET request, or any request headers the caller set.
+ */
+export function redirectRefusal(current: string, next: string, method: string, headers: Readonly<Record<string, string>>): string | null {
+  if (current.startsWith("https:") && !next.startsWith("https:")) return `redirect from ${current} to ${next} refused because it is an HTTPS downgrade`;
+  const same = origin(current) === origin(next);
+  if (method !== "GET" && !same) return `cross-origin redirect from ${current} to ${next} refused because it would replay a ${method} request`;
+  if (Object.keys(headers).some((k) => k.toLowerCase() === "authorization") && !same) return `cross-origin redirect from ${current} to ${next} refused because the request carries Authorization`;
+  if (Object.keys(headers).length > 0 && !same) return `cross-origin redirect from ${current} to ${next} refused because caller-supplied request headers would be replayed`;
+  return null;
+}
 
 /** One request herdr's fetch ran. */
 export interface FetchRecord {
@@ -87,26 +110,50 @@ export function herdrFetch(meter: FetchMeter, timeoutMs = HERDR_FETCH_TIMEOUT_MS
     meter.max = Math.max(meter.max, meter.inFlight);
     meter.log.push(record);
     try {
-      const init: RequestInit = { method, headers, signal: AbortSignal.timeout(timeoutMs), redirect: "follow" };
-      if (body !== undefined) init.body = body;
-      let response: Response;
-      try {
-        response = await fetch(url, init);
-      } catch (cause) {
-        const why = cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError") ? "operation timed out" : cause instanceof Error ? cause.message : String(cause);
-        throw new Error(`fetching ${url} failed: error sending request for url (${url}): ${why}`);
+      const signal = AbortSignal.timeout(timeoutMs);
+      let current = url;
+      let m = method;
+      let h: Record<string, string> = { ...headers };
+      let b = body;
+      for (let hop = 0; ; hop++) {
+        if (hop > MAX_REDIRECTS) throw new Error(`fetch exceeded the ${MAX_REDIRECTS} redirect limit`);
+        const init: RequestInit = { method: m, headers: h, signal, redirect: "manual" };
+        if (b !== undefined) init.body = b;
+        let response: Response;
+        try {
+          response = await fetch(current, init);
+        } catch (cause) {
+          const why = cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError") ? "operation timed out" : cause instanceof Error ? cause.message : String(cause);
+          throw new Error(`fetching ${current} failed: error sending request for url (${current}): ${why}`);
+        }
+        if (REDIRECT_STATUSES.has(response.status)) {
+          const location = response.headers.get("location");
+          if (location === null) throw new Error(`redirect from ${current} has no Location header`);
+          const next = new URL(location, current).toString();
+          // herdr's rewrite_redirect_request, then authorize_redirect (fetch.rs).
+          if (((response.status === 301 || response.status === 302) && m === "POST") || (response.status === 303 && m !== "HEAD")) {
+            m = "GET";
+            b = undefined;
+            h = Object.fromEntries(Object.entries(h).filter(([k]) => !["content-length", "content-type"].includes(k.toLowerCase())));
+          }
+          const refused = redirectRefusal(current, next, m, h);
+          if (refused !== null) throw new Error(refused);
+          await response.body?.cancel();
+          current = next;
+          continue;
+        }
+        let bytes: ArrayBuffer;
+        try {
+          bytes = await response.arrayBuffer();
+        } catch (cause) {
+          const why = cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError") ? "operation timed out" : String(cause);
+          throw new Error(`reading response from ${current} failed: ${why}`);
+        }
+        if (bytes.byteLength > HERDR_FETCH_MAX_BYTES) throw new Error(`response body from ${current} exceeded the ${HERDR_FETCH_MAX_BYTES} byte limit`);
+        const text = new TextDecoder().decode(bytes);
+        record.status = response.status;
+        return { status: response.status, ok: response.status >= 200 && response.status < 300, url: current, text: () => Promise.resolve(text), json: () => Promise.resolve(JSON.parse(text)) };
       }
-      let bytes: ArrayBuffer;
-      try {
-        bytes = await response.arrayBuffer();
-      } catch (cause) {
-        const why = cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError") ? "operation timed out" : String(cause);
-        throw new Error(`reading response from ${response.url} failed: ${why}`);
-      }
-      if (bytes.byteLength > HERDR_FETCH_MAX_BYTES) throw new Error(`response body from ${response.url} exceeded the ${HERDR_FETCH_MAX_BYTES} byte limit`);
-      const text = new TextDecoder().decode(bytes);
-      record.status = response.status;
-      return { status: response.status, ok: response.status >= 200 && response.status < 300, url: response.url, text: () => Promise.resolve(text), json: () => Promise.resolve(JSON.parse(text)) };
     } catch (e) {
       record.error = e instanceof Error ? e.message : String(e);
       throw e;

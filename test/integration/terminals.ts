@@ -150,9 +150,9 @@ export class PtyTerminals {
     return this.list.find((t) => t.address === address);
   }
 
-  /** herdr's `terminals()` record for each terminal still listed (the live ones). */
+  /** herdr's `terminals()` record for each terminal, live or finished. */
   records(): Record<string, unknown>[] {
-    return this.list.filter((t) => alive(t.pid)).map((t) => this.record(t));
+    return this.list.map((t) => this.record(t));
   }
 
   /** One record, as herdr-app reports it. */
@@ -172,7 +172,8 @@ export class PtyTerminals {
       argv: t.argv,
       labels: { "herdr.space": t.space, "herdr.tab": t.tab },
       cwd: this.o.cwd,
-      state: alive(t.pid) ? "live" : "exited",
+      // herdr-app reports a terminal whose program ended as "finished" (src/hc.rs).
+      state: t.proc.exitCode === null && t.proc.signalCode === null && alive(t.pid) ? "live" : "finished",
       created_ms: t.createdMs,
       status: null,
       report: null,

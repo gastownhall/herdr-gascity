@@ -7,7 +7,7 @@ import { CITY_TEMPLATE, cityToml, RUN_MARKER, scratchEnv, supervisorToml } from 
 describe("scratchEnv", () => {
   const env = scratchEnv({ root: "/r", runId: "abc", gcBin: "/opt/gc/bin/gc", path: ["/x"] }, {
     PATH: "/usr/bin", TMUX: "/tmp/tmux-1/default,1,0", TMUX_PANE: "%1", HC_SCOPE: "s", GC_CITY: "/live", GC_HOME: "/home/me/.gc",
-    XDG_RUNTIME_DIR: "/run/user/1", HERDR_APP_HOME: "/h", LANG: "C.UTF-8",
+    XDG_RUNTIME_DIR: "/run/user/1", TMPDIR: "/tmp/me", HERDR_APP_HOME: "/h", LANG: "C.UTF-8",
   });
 
   test("drops the caller's tmux, herdr, gc and XDG variables", () => {
@@ -24,6 +24,7 @@ describe("scratchEnv", () => {
     expect(env.GC_HOME).toBe("/r/home/.gc");
     expect(env.XDG_RUNTIME_DIR).toBe("/r/run");
     expect(env.TMUX_TMPDIR).toBe("/r/tmux");
+    expect(env.TMPDIR).toBe("/r/tmp");
     expect(env.PATH).toBe("/opt/gc/bin:/x:/usr/bin");
     expect(env[RUN_MARKER]).toBe("abc");
   });
@@ -43,6 +44,6 @@ describe("config files", () => {
   test("supervisor.toml per mode", () => {
     expect(supervisorToml(1, { kind: "loopback" })).toBe('[supervisor]\nport = 1\nbind = "127.0.0.1"\n');
     expect(supervisorToml(1, { kind: "write-grants", verifyKey: "k:AA==" })).toContain('write_auth_required = true\nwrite_auth_verify_key = "k:AA=="');
-    expect(supervisorToml(1, { kind: "any-interface" })).toContain('bind = "0.0.0.0"');
+    expect(supervisorToml(1, { kind: "read-only" })).toContain('bind = "::ffff:127.0.0.1"');
   });
 });
