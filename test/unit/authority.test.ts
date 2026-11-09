@@ -5,8 +5,9 @@ import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  EXEC_PROGRAMS, RUN_COMMANDS, TERMINAL_DENY, defaultTargets, lintSource, lintTree, type AllowEntry, type RuleId,
+  ALLOWLIST, EXEC_PROGRAMS, RUN_COMMANDS, TERMINAL_DENY, defaultTargets, lintSource, lintTree, type AllowEntry, type RuleId,
 } from "../../scripts/authority.ts";
+import { GC_STATUS_ARGS } from "../../src/discovery/gcStatus.ts";
 
 const ROOT = join(import.meta.dir, "../..");
 const FIXTURES = join(ROOT, "test/fixtures/authority");
@@ -199,6 +200,31 @@ describe("rules", () => {
     expect(rules("src/gc/zod.ts", 'import { z } from "zod/mini";\nexport { z };')).toEqual(["zod-jitless"]);
     expect(rules("src/gc/zod.ts", 'import { z } from "zod/mini";\nz.config({ jitless: false });\nexport { z };'))
       .toEqual(["zod-jitless"]);
+  });
+});
+
+describe("the one allowlisted exec: gcBin supervisor status --json", () => {
+  const GC_STATUS_CALL = 'herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS })';
+
+  test("the allowlist is exactly that call, in the source and in the bundle, each with a reason", () => {
+    expect(ALLOWLIST.map(({ file, rule, text }) => ({ file, rule, text }))).toEqual([
+      { file: "src/host.ts", rule: "exec-program", text: GC_STATUS_CALL },
+      { file: "gascity/main.js", rule: "exec-program", text: GC_STATUS_CALL },
+    ]);
+    for (const e of ALLOWLIST) expect(e.reason.length).toBeGreaterThan(40);
+    expect(GC_STATUS_CALL).toContain(JSON.stringify(GC_STATUS_ARGS).replaceAll(",", ", "));
+  });
+
+  test("any other argv, program or options is still a hit (fixture exec-gc-status.ts)", async () => {
+    const violations = lintSource("src/host.ts", await fixture("exec-gc-status.ts"), ALLOWLIST);
+    expect(violations.map((v) => [v.rule, v.line])).toEqual([
+      ["exec-program", 6], ["exec-program", 7], ["exec-program", 8], ["exec-program", 9],
+    ]);
+  });
+
+  test("the entry is for src/host.ts only: the same call elsewhere is a hit", () => {
+    const text = `import * as herdr from "herdr";\n${GC_STATUS_CALL};`;
+    expect(lintSource("src/vm/x.ts", text, ALLOWLIST).map((v) => v.rule)).toEqual(["host-import", "exec-program"]);
   });
 });
 

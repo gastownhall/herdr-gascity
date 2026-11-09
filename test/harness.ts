@@ -133,7 +133,7 @@ export function moduleBody(source: string): string {
  * lacks throws before any module code runs, as herdr's module linker refuses
  * to load such a mod.
  */
-export function evaluateModule(source: string, modules: HostModules): any {
+export function evaluateModule(source: string, modules: HostModules, globals: Record<string, unknown> = {}): any {
   const host = (specifier: string, names: readonly string[]) => {
     const mod = modules[specifier];
     if (!mod) throw new Error(`harness: no fake for host module "${specifier}"`);
@@ -142,12 +142,41 @@ export function evaluateModule(source: string, modules: HostModules): any {
     }
     return mod;
   };
-  return new Function("__host", moduleBody(source))(host);
+  // Script globals (fetch, localStorage) are parameters, so the module sees
+  // the fakes and never bun's own globals.
+  const names = Object.keys(globals);
+  return new Function("__host", ...names, moduleBody(source))(host, ...names.map((n) => globals[n]));
 }
 
-/** The context `init`, `close` and tasks get (gpui-kit `AsyncContext`); counts notifies. */
+/**
+ * The context `init`, `close`, click handlers and tasks get (gpui-kit
+ * `AsyncContext`): counts notifies, runs `spawn`ed tasks at once and keeps
+ * their promises for `settle()`, and records `sleep`s, which never resolve
+ * (no fake timer passes on its own).
+ */
 export function asyncContext() {
-  const cx = { kind: "async" as const, notifies: 0, notify() { cx.notifies++; } };
+  const tasks: Promise<unknown>[] = [];
+  const cx = {
+    kind: "async" as const,
+    notifies: 0,
+    sleeps: [] as number[],
+    notify() { cx.notifies++; },
+    spawn(body: (cx: unknown) => unknown) {
+      tasks.push(Promise.resolve().then(() => body(cx)));
+      return { id: tasks.length };
+    },
+    sleep(ms?: number): Promise<void> {
+      cx.sleeps.push(ms ?? 0);
+      return new Promise(() => {});
+    },
+    /** Waits until every spawned task (including ones spawned meanwhile) has finished; rethrows a task's rejection. */
+    async settle(): Promise<void> {
+      for (let seen = -1; seen !== tasks.length;) {
+        seen = tasks.length;
+        await Promise.all(tasks);
+      }
+    },
+  };
   return cx;
 }
 
@@ -173,12 +202,34 @@ export const FAKE_THEME: Readonly<Record<string, string>> = Object.freeze({
   accent: "#3080ff", border: "#303030", surface: "#181818", blocked: "#ff5050",
 });
 
-/** Options for the fake host: the copy's props (null = unpinned), the theme, exports to drop. */
+/** herdr's exec result. */
+export interface FakeExecResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** The home directory of the fake host. */
+export const FAKE_HOME = "/home/person";
+
+/**
+ * Options for the fake host: the copy's props (absent = unpinned, so props()
+ * is null), the theme, exports to drop, shared values, files readTextFile
+ * sees, what exec answers.
+ */
 export interface FakeHostOptions {
-  props?: Record<string, unknown>;
+  props?: unknown;
   theme?: Record<string, string>;
   omit?: string[];
+  shared?: Record<string, unknown>;
+  files?: Record<string, string>;
+  /** readTextFile rejects with this message. */
+  readTextFileRejects?: string;
+  exec?: (command: string, args: string[], options: unknown) => Promise<FakeExecResult>;
 }
+
+/** By default gc runs and, like today's gc, reports no api_url. */
+const DEFAULT_EXEC = () => Promise.resolve({ code: 0, stdout: '{"running":true}', stderr: "" });
 
 /** A fake `herdr` module whose every call is recorded. */
 export function fakeHerdr(options: FakeHostOptions = {}) {
@@ -186,7 +237,15 @@ export function fakeHerdr(options: FakeHostOptions = {}) {
   const all: Record<string, (...args: unknown[]) => unknown> = {
     theme: () => ({ ...(options.theme ?? FAKE_THEME) }),
     // herdr returns the props a copy was opened with, and null for an unpinned copy.
-    props: () => (options.props ? structuredClone(options.props) : null),
+    props: () => (options.props === undefined ? null : structuredClone(options.props)),
+    shared: (key) => (options.shared && Object.hasOwn(options.shared, key as string) ? structuredClone(options.shared[key as string]) : null),
+    home: () => FAKE_HOME,
+    readTextFile: (path) => {
+      if (options.readTextFileRejects !== undefined) return Promise.reject(new Error(options.readTextFileRejects));
+      const files = options.files ?? {};
+      return Promise.resolve(Object.hasOwn(files, path as string) ? files[path as string] : null);
+    },
+    exec: (command, args, opts) => (options.exec ?? DEFAULT_EXEC)(command as string, args as string[], opts),
   };
   const module: Record<string, unknown> = {};
   for (const [name, fn] of Object.entries(all)) {
@@ -198,22 +257,74 @@ export function fakeHerdr(options: FakeHostOptions = {}) {
 
 export const BUNDLE_PATH = new URL("../gascity/main.js", import.meta.url);
 
+/** A scripted answer of the fake fetch. */
+export type FakeReply = { status: number; body: unknown } | { rejects: string } | "hang";
+
+/** Options for the script globals: fetch replies by URL, the copy's localStorage, globals to drop. */
+export interface FakeGlobalsOptions {
+  /** Reply for each exact URL; any other URL is refused, as by a closed port. */
+  replies?: Record<string, FakeReply>;
+  storage?: Record<string, string>;
+  /** localStorage.setItem throws this message. */
+  storageThrows?: string;
+  omitGlobals?: string[];
+}
+
+/** herdr's script globals the mod uses: a fetch that plays scripted replies, and a localStorage. */
+export function fakeGlobals(options: FakeGlobalsOptions = {}) {
+  const fetched: { url: string; init: unknown }[] = [];
+  const storage = new Map(Object.entries(options.storage ?? {}));
+  const all: Record<string, unknown> = {
+    fetch: (url: string, init: unknown) => {
+      fetched.push({ url, init });
+      const reply = options.replies?.[url] ?? { rejects: "error sending request: Connection refused (os error 111)" };
+      if (reply === "hang") return new Promise(() => {});
+      if ("rejects" in reply) return Promise.reject(new Error(reply.rejects));
+      const body = typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body);
+      return Promise.resolve({ status: reply.status, ok: reply.status >= 200 && reply.status < 300, url, text: () => Promise.resolve(body) });
+    },
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        if (options.storageThrows !== undefined) throw new Error(options.storageThrows);
+        storage.set(key, String(value));
+      },
+      removeItem: (key: string) => { storage.delete(key); },
+    },
+  };
+  const globals: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(all)) globals[name] = options.omitGlobals?.includes(name) ? undefined : value;
+  return { globals, fetched, storage };
+}
+
 /**
  * Loads the committed bundle (or `source`) with fake host modules and
  * constructs one copy, called the way herdr calls a root view: `init(undefined,
  * asyncCx)` (props come from `props()`), then `render(renderCx)`.
  */
-export async function loadMod(options: FakeHostOptions & { source?: string } = {}) {
+export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { source?: string } = {}) {
   const source = options.source ?? await readFile(BUNDLE_PATH, "utf8");
   const herdr = fakeHerdr(options);
-  const Mod = evaluateModule(source, { ...fakeGpui(), herdr: herdr.module });
+  const host = fakeGlobals(options);
+  const Mod = evaluateModule(source, { ...fakeGpui(), herdr: herdr.module }, host.globals);
   const view = new Mod();
   const cx = asyncContext();
+  const render = (): RecordedNode => nodeOf(view.render(renderContext()));
   return {
     view,
     cx,
     herdrCalls: herdr.calls,
+    fetched: host.fetched,
+    storage: host.storage,
     init: () => view.init?.(undefined, cx),
-    render: (): RecordedNode => nodeOf(view.render(renderContext())),
+    render,
+    /** Waits for every task the copy spawned. */
+    settle: () => cx.settle(),
+    /** Clicks the element with this id in a fresh render, with the async context as the handler's cx. */
+    click: (id: string) => {
+      const node = findById(render(), id);
+      if (!node?.handlers.on_click) throw new Error(`harness: no clickable element "${id}"`);
+      node.handlers.on_click({}, cx);
+    },
   };
 }

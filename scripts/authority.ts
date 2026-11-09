@@ -13,7 +13,8 @@
 // - only src/host.ts imports `herdr`, and only as `import * as herdr`;
 // - the namespace is used only as `herdr.<export>`;
 // - `herdr.run` and `herdr.exec` are called directly with a string literal
-//   first argument from RUN_COMMANDS / EXEC_PROGRAMS;
+//   first argument from RUN_COMMANDS / EXEC_PROGRAMS (the one exception is
+//   in ALLOWLIST, matched by exact text);
 // - modules other than gpui-kit, gpui-base, herdr, zod and relative paths are
 //   not imported (the host's `process` module and global can spawn programs).
 // String literals are also checked for hc/tmux/bd anywhere in a shell command
@@ -67,8 +68,21 @@ export interface AllowEntry {
   reason: string;
 }
 
+/**
+ * The one exec of a program not in EXEC_PROGRAMS: discovery asks gc for its
+ * API URL with `<gcBin> supervisor status --json`. gcBin is a setting (desktop
+ * apps often lack the shell PATH that holds gc), so it cannot be a literal.
+ * The exact text pins the arguments and the timeout; src/host.ts refuses a
+ * gcBin that does not name gc before spawning (settings.ts gcBinIssue).
+ */
+const GC_STATUS_CALL = 'herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS })';
+const GC_STATUS_REASON = "endpoint discovery runs `<gcBin> supervisor status --json` (fixed argv; gcBin is a setting checked to name gc)";
+
 /** The allowlist for this repo. */
-export const ALLOWLIST: readonly AllowEntry[] = [];
+export const ALLOWLIST: readonly AllowEntry[] = [
+  { file: "src/host.ts", rule: "exec-program", text: GC_STATUS_CALL, reason: GC_STATUS_REASON },
+  { file: "gascity/main.js", rule: "exec-program", text: GC_STATUS_CALL, reason: GC_STATUS_REASON },
+];
 
 /** The only module that may import herdr. */
 export const HOST_MODULE = "src/host.ts";

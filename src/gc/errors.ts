@@ -62,6 +62,10 @@ export type GcError =
   | { kind: "host-incompatible"; missing: string[] }
   /** herdr host data that does not match host.schemas.ts. */
   | { kind: "host-decode"; api: string; path: string; issues: string[] }
+  /** A herdr host call that threw or rejected (a file read, localStorage). */
+  | { kind: "host-call"; api: string; cause: string }
+  /** gc's supervisor.toml says something about [supervisor] bind/port that the strict reader cannot read for sure. */
+  | { kind: "supervisor-config"; path: string; line: number; issue: string }
   /** Open terminal did not start an attach. */
   | {
     kind: "attach-not-started";
