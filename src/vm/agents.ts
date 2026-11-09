@@ -45,6 +45,9 @@ export interface SessionRow {
 
 export interface AgentRow {
   name: string;
+  /** gc's qualified agent name as sent: what actions address. */
+  ref: string;
+  suspended: boolean;
   label: string;
   /** "pool 0–4" for a pool agent. */
   pool: string | null;
@@ -56,6 +59,8 @@ export interface AgentRow {
 export interface GroupModel {
   /** "rig:<name>" or "city"; the collapse key. */
   key: string;
+  /** gc's rig name as sent, for a rig gc lists (its actions); null for the city group and unlisted rigs. */
+  rig: string | null;
   title: string;
   /** "N agents · M running" from gc's rig record; null when gc did not list the rig. */
   counts: string | null;
@@ -188,6 +193,8 @@ export function agentsModel(input: AgentsInput): AgentsModel {
     if (rows.length === 0 && own.unrecognized !== null) drift.add(own.unrecognized);
     return {
       name: cleanLine(a.name),
+      ref: a.name,
+      suspended: a.suspended,
       label: cleanLine(nonEmpty(a.display_name) ?? a.name),
       pool: poolText(a),
       status: mostUrgent(rows.map((r) => r.status)) ?? own,
@@ -207,6 +214,7 @@ export function agentsModel(input: AgentsInput): AgentsModel {
   };
   for (const r of rigs) {
     group(rigKey(r.name), () => ({
+      rig: r.name,
       title: `rig: ${cleanLine(r.name)}`,
       counts: `${r.agent_count} agents · ${r.running_count} running`,
       suspended: r.suspended,
@@ -214,10 +222,10 @@ export function agentsModel(input: AgentsInput): AgentsModel {
     }));
   }
   const unlisted = [...new Set(agents.map((a) => a.rig).filter((r): r is string => r !== undefined && r !== "" && !groups.has(rigKey(r))))].sort();
-  for (const r of unlisted) group(rigKey(r), () => ({ title: `rig: ${cleanLine(r)}`, counts: null, suspended: false, listed: false }));
+  for (const r of unlisted) group(rigKey(r), () => ({ rig: null, title: `rig: ${cleanLine(r)}`, counts: null, suspended: false, listed: false }));
   for (const a of agents) {
     const key = a.rig !== undefined && a.rig !== "" ? rigKey(a.rig) : CITY_GROUP;
-    const g = group(key, () => ({ title: "city", counts: null, suspended: false, listed: true }));
+    const g = group(key, () => ({ rig: null, title: "city", counts: null, suspended: false, listed: true }));
     if (!g.collapsed) g.agents.push(agentRow(a));
   }
 

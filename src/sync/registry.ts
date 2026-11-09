@@ -25,6 +25,8 @@
 // The visibility rule (visibility.ts) is per app: `setOnScreen` applies to
 // every store at their next tick.
 
+import type { ActionSpec, ActivitySnapshot } from "../actions/activity.ts";
+import { ActionLedger, newIdempotencyKey } from "../actions/outcome.ts";
 import type { GcClient, HostFetch } from "../gc/client.ts";
 import type { GcError } from "../gc/errors.ts";
 import { err, ok, type Result } from "../result.ts";
@@ -47,6 +49,8 @@ export interface SyncDeps {
   random?: () => number;
   /** Every failure a store records, for the app log; the store also keeps them in its snapshot. */
   onError?: (key: CityKey, entry: ErrorEntry) => void;
+  /** A fresh Idempotency-Key per action; default a random UUID. */
+  newKey?: () => string;
 }
 
 /** One copy's subscription to one city store. */
@@ -75,6 +79,19 @@ export interface Subscription {
    * at mutation priority (ahead of every queued read). It never retries.
    */
   client(): GcClient;
+  /**
+   * Sends a person's action now, in this copy's turn (call it from a click,
+   * key or command of this copy), and follows its outcome from this copy's
+   * ticks. Returns the action's id in the city's activity log. If this copy
+   * closes before the outcome is known, the action becomes unknown.
+   */
+  act(spec: ActionSpec): number;
+  /** The person retries an action (see outcome.ts retryGate); in this copy's turn. */
+  retryAction(id: number): Result<number, string>;
+  /** Refetches what an action changed ("refresh before retry"). */
+  refreshAction(id: number): void;
+  /** The city's activity log, shared by every copy of the city. */
+  activity(): ActivitySnapshot;
   /** Ends the subscription (the copy's close). Starts no work. Idempotent. */
   unsubscribe(): void;
 }
@@ -113,7 +130,7 @@ export class SyncRegistry {
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly endpoints = new Map<string, Endpoint>();
-  private readonly stores = new Map<string, { store: CityStore; subs: number }>();
+  private readonly stores = new Map<string, { store: CityStore; ledger: ActionLedger; subs: number }>();
   private readonly pollers = new Map<string, { poller: CitiesPoller; subs: number }>();
   private readonly listeners = new Set<(batch: EventBatch) => void>();
   private onScreen = false;
@@ -141,11 +158,21 @@ export class SyncRegistry {
         },
         onError: (k, e) => this.deps.onError?.(k, e),
       });
-      entry = { store, subs: 0 };
+      const ep = endpoint.value;
+      const ledger = new ActionLedger({
+        city: key.city,
+        clock: this.clock,
+        client: (priority, group) => ep.client(priority, group),
+        dropQueued: (group) => ep.dropQueued(group),
+        refresh: (domains) => store.refresh(domains),
+        refreshDetail: (sessionId) => store.refreshDetail(sessionId),
+        newKey: this.deps.newKey ?? (() => newIdempotencyKey()),
+      });
+      entry = { store, ledger, subs: 0 };
       this.stores.set(id, entry);
     }
     entry.subs++;
-    return ok(this.subscription(id, entry.store, endpoint.value));
+    return ok(this.subscription(id, entry.store, entry.ledger, endpoint.value));
   }
 
   /** Subscribes a copy to a loopback gc API's shared city list; `not-loopback` otherwise. */
@@ -242,7 +269,7 @@ export class SyncRegistry {
     this.endpoints.delete(endpoint.baseUrl);
   }
 
-  private subscription(id: string, store: CityStore, endpoint: Endpoint): Subscription {
+  private subscription(id: string, store: CityStore, ledger: ActionLedger, endpoint: Endpoint): Subscription {
     const owner = {};
     const watches = new Set<() => void>();
     let active = true;
@@ -251,10 +278,12 @@ export class SyncRegistry {
       active = false;
       for (const release of [...watches]) release();
       watches.clear();
+      ledger.ownerGone(owner);
       store.abandonStartedBy(owner);
       const entry = this.stores.get(id);
       if (entry && --entry.subs <= 0) {
         this.stores.delete(id);
+        ledger.dispose();
         store.dispose();
         this.releaseEndpoint(endpoint, store);
       }
@@ -275,6 +304,7 @@ export class SyncRegistry {
         if (active) {
           this.budget.reclaim();
           store.tick(owner);
+          ledger.tick(owner);
         }
         return store.snapshot().rev;
       },
@@ -290,6 +320,12 @@ export class SyncRegistry {
         if (active) store.refresh(domains);
       },
       client: () => endpoint.client("mutation"),
+      act: (spec) => (active ? ledger.start(owner, spec) : -1),
+      retryAction: (actionId) => (active ? ledger.retry(owner, actionId, store.snapshot()) : err("this view has closed")),
+      refreshAction: (actionId) => {
+        if (active) ledger.refreshFor(actionId);
+      },
+      activity: () => ledger.snapshot(),
       unsubscribe,
     };
   }

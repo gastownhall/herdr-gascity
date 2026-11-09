@@ -31,6 +31,12 @@ describe("the join", () => {
     ])),
   };
 
+  test("actions address gc's own names: a listed rig's name, an agent's qualified name and its suspension", () => {
+    const m = model({ ...parts, agents: slot(list([agent("frontend/builder", { rig: "frontend", suspended: true }), agent("ops/watch", { rig: "ops" }), agent("planner")])) });
+    expect(m.groups.map((g) => [g.key, g.rig])).toEqual([["rig:frontend", "frontend"], ["rig:docs", "docs"], ["rig:ops", null], ["city", null]]);
+    expect(m.groups.flatMap((g) => g.agents.map((a) => [a.ref, a.suspended]))).toEqual([["frontend/builder", true], ["ops/watch", false], ["planner", false]]);
+  });
+
   test("rigs in gc's order with their counts, then rigs only agents name, then the city's own agents", () => {
     const m = model(parts);
     expect(m.groups.map((g) => [g.key, g.title, g.counts, g.listed, g.suspended])).toEqual([

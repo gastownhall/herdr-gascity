@@ -2,7 +2,8 @@
 // herdr-app runs mods in QuickJS (a quickjs-jit fork), not in
 // bun's JavaScriptCore. This test bundles test/engine/entry.ts with the mod's
 // own esbuild options and:
-//   1. lints that bundle with the authority lint and an empty allowlist:
+//   1. lints that bundle with the authority lint and no allowlist entry but
+//      the bundle's one constructor-read (zod's plain-object check):
 //      zod/mini's object schema has no JIT path, and with only the used
 //      builders re-exported esbuild drops zod's guarded `Function` sites
 //      (util.allowsEval, Doc.compile, compileFn) altogether;
@@ -69,6 +70,9 @@ interface SyncSummary {
   };
   beadDetail: { kind: string; id?: string; closeReason?: string | null; description?: string | null };
   sanitized: string[];
+  actions: { kind: string; state: string; attempt: number }[];
+  activity: [string, string, string][];
+  keyShapes: boolean[];
 }
 
 const probe = await bundleProbe();
@@ -193,6 +197,13 @@ describe("the bundled gc client with zod, and the sync engine", () => {
     expect(sync.board.closed.earlier.map((c) => c.id)).not.toContain("sc-60");
     expect(sync.board.hidden).toBe(2); // the session bead in the seed, and the session close
     expect(sync.beadDetail).toMatchObject({ kind: "bead", id: "sc-74", closeReason: "closed in the scenario", description: "recorded for the herdr-gascity contract fixtures" });
+    // actions: a 202 followed to "delivered"; one whose copy went is unknown, not pending
+    expect(sync.actions).toEqual([
+      { kind: "session.submit", state: "done", attempt: 1 },
+      { kind: "session.wake", state: "unknown", attempt: 1 },
+    ]);
+    expect(sync.activity[1]).toEqual(["Send · session sc-20", "done", "delivered"]);
+    expect(sync.keyShapes).toEqual([true, true]);
     expect(sync.sanitized).toEqual([
       "abcde f",
       "line\nnext",

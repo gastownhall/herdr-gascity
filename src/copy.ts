@@ -15,7 +15,16 @@
 //     started is abandoned to the next tick of a surviving copy.
 // Rendering reads `view`, which builds the view-models from the machine and
 // the shared snapshots; it never fetches.
+//
+// Actions (buttons; keys and commands call the same methods) run in this
+// copy's own turn: a click hands its spec to the city's shared ledger
+// (actions/outcome.ts), which sends it now and follows its outcome from this
+// copy's ticks. A destructive action asks first (the dialog), and an action
+// already under way is not sent twice. Nothing is ever retried without the
+// person asking.
 
+import type { ActionSpec } from "./actions/activity.ts";
+import { sessionKill, sessionMessage, sessionNew, sessionRespond, sessionSubmit } from "./actions/session.ts";
 import type { CityScopedError } from "./discovery/city.ts";
 import { selectedCity } from "./discovery/city.ts";
 import type { DiscoveryController, DiscoveryTask } from "./discovery/controller.ts";
@@ -28,12 +37,14 @@ import type { CitiesSubscription, Subscription, SyncRegistry } from "./sync/regi
 import { ALL_DOMAINS } from "./sync/invalidate.ts";
 import { mayBeOnScreen, type VisibilityInput } from "./sync/visibility.ts";
 import { MOD_VERSION } from "./version.ts";
+import { activityModel, isBusy, type ActivityModel } from "./vm/activity.ts";
 import { agentsModel, type AgentsModel } from "./vm/agents.ts";
 import { beadDetailModel, boardModel, type BeadDetailModel, type BoardModel } from "./vm/board.ts";
 import { detailModel, type DetailModel } from "./vm/detail.ts";
 import { diagnosticsModel, type DiagnosticLine } from "./vm/diagnostics.ts";
 import { headerModel, type HeaderModel } from "./vm/header.ts";
 import { probeDocument, type ExecRecord } from "./vm/probe.ts";
+import { cleanLine } from "./vm/sanitize.ts";
 
 /** What a copy reads from herdr, besides discovery's host (host.ts). */
 export interface CopyHost {
@@ -51,6 +62,15 @@ export interface CopyDeps {
   probe: ProbeWriter;
 }
 
+/** A question the copy asks before acting, or the new-session form. */
+export type DialogModel =
+  /** One button per choice (kill offers a plain and a forced kill), each with what gc will do. */
+  | { kind: "confirm"; question: string; choices: { label: string; detail: string }[] }
+  | { kind: "new-session"; agent: string };
+
+/** How a message is sent: as input (gc's submit, plain or interrupting the turn) or as a queued message. */
+export type InputMode = "default" | "interrupt_now" | "message";
+
 /** Everything render draws for one copy. */
 export interface CopyView {
   header: HeaderModel;
@@ -60,6 +80,11 @@ export interface CopyView {
   board: BoardModel | null;
   beadDetail: BeadDetailModel;
   detail: DetailModel;
+  /** The city's activity log; null until a running city is subscribed. */
+  activity: ActivityModel | null;
+  dialog: DialogModel | null;
+  /** Why the last action was not sent, if it was not. */
+  notice: string | null;
   diagnostics: DiagnosticLine[];
   diagnosticsOpen: boolean;
   refreshCount: number;
@@ -92,6 +117,9 @@ export class CopyController {
   private beadWatch: { id: string; release: () => void } | null = null;
   private signature = "";
   private closed = false;
+  private confirming: { specs: ActionSpec[]; retryOf: number | null } | null = null;
+  private creating: { agent: string } | null = null;
+  private notice: string | null = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   private applied = new WeakSet<object>();
 
@@ -139,7 +167,8 @@ export class CopyController {
     if (this.deps.host.probeEnabled()) this.writeProbe(clock.now());
 
     const signature = [
-      this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.onScreen, this.selected, this.selectedBead,
+      this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.city?.activity().rev ?? -1, this.onScreen, this.selected,
+      this.selectedBead,
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -174,6 +203,9 @@ export class CopyController {
       board,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
       detail: s ? detailModel({ snapshot: s, now, selected: this.selected }) : { kind: "none" },
+      activity: this.city ? activityModel(this.city.activity(), s, now) : null,
+      dialog: this.dialog(),
+      notice: this.notice,
       diagnostics: diagnosticsModel({
         entries: [
           ...(s?.errors ?? []),
@@ -232,6 +264,135 @@ export class CopyController {
 
   toggleDiagnostics(): void {
     this.diagnosticsOpen = !this.diagnosticsOpen;
+  }
+
+  /**
+   * The person asks for an action. A destructive one asks first; one already
+   * under way is not sent again; otherwise it is sent now, in this copy's turn.
+   */
+  request(spec: ActionSpec): void {
+    if (spec.confirm !== null) {
+      this.creating = null;
+      this.confirming = { specs: [spec], retryOf: null };
+      return;
+    }
+    this.send(spec);
+  }
+
+  /** Kill asks first, offering a plain and a forced kill. */
+  requestKill(sessionId: string): void {
+    this.creating = null;
+    this.confirming = { specs: [sessionKill(sessionId, false), sessionKill(sessionId, true)], retryOf: null };
+  }
+
+  /** The person confirmed the dialog with its `choice`-th action. */
+  confirm(choice: number): void {
+    const c = this.confirming;
+    const spec = c?.specs[choice];
+    this.confirming = null;
+    if (!c || !spec) return;
+    if (c.retryOf !== null) this.retryNow(c.retryOf);
+    else this.send(spec);
+  }
+
+  /** Closes the dialog without acting. */
+  cancelDialog(): void {
+    this.confirming = null;
+    this.creating = null;
+  }
+
+  /** Retries an action from the activity log (a destructive one asks again). */
+  retryAction(id: number): void {
+    const entry = this.city?.activity().entries.find((e) => e.id === id);
+    if (!entry) return;
+    if (entry.spec.confirm !== null) {
+      this.creating = null;
+      this.confirming = { specs: [entry.spec], retryOf: id };
+      return;
+    }
+    this.retryNow(id);
+  }
+
+  /** Refetches what an action changed, so its state can be checked before a retry. */
+  refreshAction(id: number): void {
+    this.city?.refreshAction(id);
+  }
+
+  /** Sends text to the open session; returns whether it was sent (the caller then clears its input). */
+  sendInput(text: string, mode: InputMode): boolean {
+    const id = this.selectedRef();
+    if (id === null) return this.refuse("open a session first");
+    if (text.trim() === "") return this.refuse("type a message first");
+    const spec = mode === "message" ? sessionMessage(id, text) : sessionSubmit(id, text, mode);
+    return this.send(spec);
+  }
+
+  /** Answers the open session's pending prompt with gc's `index`-th option. */
+  answer(index: number): void {
+    const s = this.city?.snapshot();
+    const id = this.selectedRef();
+    const d = s && id !== null ? s.details.get(id)?.pending.value?.pending : undefined;
+    const option = d?.options[index];
+    if (!d || id === null || option === undefined) {
+      this.refuse("that prompt is no longer pending");
+      return;
+    }
+    this.send(sessionRespond(id, d.request_id, option));
+  }
+
+  /** Opens the new-session form for an agent (gc's qualified name). */
+  openNewSession(agent: string): void {
+    this.confirming = null;
+    this.creating = { agent };
+  }
+
+  /** Starts a session of the form's agent; `alias` may be empty. Returns whether it was sent. */
+  createSession(alias: string): boolean {
+    const c = this.creating;
+    if (!c) return false;
+    this.creating = null;
+    return this.send(sessionNew(c.agent, alias.trim() === "" ? null : alias.trim()));
+  }
+
+  // ---- actions ----------------------------------------------------------------------
+
+  private send(spec: ActionSpec): boolean {
+    if (!this.city) return this.refuse("no running city to act on");
+    const activity = this.city ? activityModel(this.city.activity(), null, this.deps.clock.now()) : null;
+    if (isBusy(activity, spec)) return this.refuse(`${spec.verb} is already under way`);
+    this.notice = null;
+    this.city.act(spec);
+    return true;
+  }
+
+  private retryNow(id: number): void {
+    if (!this.city) {
+      this.refuse("no running city to act on");
+      return;
+    }
+    const r = this.city.retryAction(id);
+    this.notice = r.ok ? null : `not retried: ${r.error}`;
+  }
+
+  private refuse(why: string): false {
+    this.notice = why;
+    return false;
+  }
+
+  /** The open session's id as gc sent it, if gc still lists it. */
+  private selectedRef(): string | null {
+    const id = this.selected;
+    if (id === null) return null;
+    return this.city?.snapshot().sessions.value?.items.some((x) => x.id === id) ? id : null;
+  }
+
+  private dialog(): DialogModel | null {
+    if (this.creating) return { kind: "new-session", agent: cleanLine(this.creating.agent) };
+    const c = this.confirming;
+    const first = c?.specs[0];
+    if (!c || !first?.confirm) return null;
+    const choices = c.specs.map((x) => ({ label: cleanLine(x.verb), detail: cleanLine(x.confirm?.detail ?? "") }));
+    return { kind: "confirm", question: cleanLine(c.retryOf === null ? first.confirm.question : `Retry: ${first.confirm.question}`), choices };
   }
 
   // ---- subscriptions --------------------------------------------------------------
@@ -339,6 +500,7 @@ export class CopyController {
       board: v.board,
       beadDetail: v.beadDetail,
       detail: v.detail,
+      activity: v.activity,
       diagnostics: v.diagnostics,
       execLog: this.deps.host.execLog(),
       refreshCount: this.refreshCount,

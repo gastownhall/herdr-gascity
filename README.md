@@ -3,11 +3,14 @@
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
 **Status: scaffold, gc client, discovery, sync engine, agents panel, work
-board.** The mod finds the gc API, lists the cities, and shows the copy's
-city: its connection state, its rigs, agents and sessions with live status,
-pending prompts and active beads, a detail pane for one session, and the work
-board (ready, in progress, recently closed) with a detail pane for one bead.
-It only reads; actions (answer, send, wake, open a terminal, sling, close)
+board, session actions.** The mod finds the gc API, lists the cities, and
+shows the copy's city: its connection state, its rigs, agents and sessions
+with live status, pending prompts and active beads, a detail pane for one
+session, and the work board (ready, in progress, recently closed) with a
+detail pane for one bead. It acts on sessions, agents and rigs through gc's
+API (start, wake, suspend, stop the turn, close, kill, pin, send input,
+answer a prompt, suspend and resume agents and rigs) and shows every
+action's outcome. Opening a terminal and work actions (sling, close a bead)
 come next.
 
 ## Layout
@@ -18,6 +21,7 @@ come next.
 | `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
 | `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `board.ts` (the work board and bead detail), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
+| `src/actions/` | The person's actions: `session.ts`, `agent.ts`, `rig.ts` (one gc API call each), `activity.ts` (what an action is and the states it goes through), `outcome.ts` (the ledger that sends them and follows their outcomes). |
 | `src/sync/` | The sync engine: one shared store per gc city per app, its poll loop, the event watcher, the fetch budget, backoff, visibility and staleness (see below). |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
@@ -295,7 +299,8 @@ it unsubscribes and starts nothing; the other copies keep updating.
   (`gascity-herdr-probe/3`): connection, discovery, city, visibility,
   sessions with their status, the board (each column's cards, the closes
   seen in events with their seq and `close_reason`, the seed, the filter and
-  the columns' errors), the selected bead, the session detail, exec log,
+  the columns' errors), the selected bead, the session detail, actions with their state and
+  request id, exec log,
   errors and the budget high-water mark. It serializes the same view-models the panel draws. Writes
   are herdr's compare-and-swap, at most one in flight, on change or every
   5 s.
@@ -335,6 +340,47 @@ it adds no polling of its own.
   old its data is (event-driven columns are confirmed by each good event
   poll), keeps stale cards greyed with the error above them, and lists
   entries gc sent that cannot be read; every bead string is plain text.
+
+## Actions
+
+Every action is one gc API call; the mod never runs `hc`, `tmux` or `bd`
+and never ends or types into a terminal itself.
+
+- **Where.** The detail pane: Wake, Suspend, Stop turn, Pin, Unpin, Close…,
+  Kill… (with Force kill), a send box (Send, Interrupt and send when gc says
+  the session supports it, Send as message), and one answer button per option
+  gc lists for a pending prompt (gc's own words, sent back exactly as gc
+  listed them). Each agent row: New session… (an optional alias) and Suspend
+  agent… / Resume agent (rig-scoped agents use gc's own route). Each rig gc
+  lists: Suspend rig… / Resume rig. Actions marked `…` ask first: close,
+  kill, agent suspend and rig suspend say what gc will do and send nothing
+  until confirmed.
+- **Headers.** Every mutation carries `X-GC-Request`. `Idempotency-Key` (a
+  fresh UUID per action) goes only on the operations gc declares it on:
+  session create, submit, messages, respond, wake, suspend, stop, close and
+  kill. gc declares none on pin/unpin and agent/rig actions.
+- **Outcomes.** Each action shows in the activity log as pending, then done,
+  failed or outcome unknown, with gc's answer or reason and its request id.
+  A 202 (session create, submit, messages) is followed through gc's request
+  outcome endpoint (`after_seq` = the 202's `event_cursor`) at 0.5 s, 1 s,
+  2 s, then every 2 s; with no outcome after 120 s it is unknown. Submit and
+  message outcomes say whether gc delivered or queued the input; a created
+  session is named.
+- **Never retried automatically.** A mutation whose connection was lost,
+  whose 2xx answer could not be read, or that was redirected is outcome
+  unknown, not failed: the mod refetches what it changes and offers Retry only
+  once that refetch has arrived, so the person sees the current state first.
+  A retry after an unknown outcome reuses the action's Idempotency-Key, so gc
+  deduplicates it where gc declares the header; elsewhere the button says it
+  may happen twice. A retry after gc refused uses a new key. A destructive
+  action asks again on retry. An action already under way is not sent twice.
+- **herdr ownership.** An action is sent in the turn of the copy whose
+  button was clicked, and its outcome is polled from that copy's own timer.
+  If that copy closes first, the action becomes outcome unknown at once in
+  every other copy of the city (the activity log is the city's): a request
+  still queued in the fetch budget is dropped and never sent, a late answer is
+  ignored, and nothing is resent. Every step has a deadline, so an action
+  never hangs as pending.
 
 ## Develop
 

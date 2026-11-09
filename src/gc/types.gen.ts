@@ -399,3 +399,24 @@ export interface RequestFailedPayload {
 export interface BeadEventPayload {
   bead: Bead;
 }
+
+/** The fields of SessionCreateSucceededPayload this mod uses, decoded from gc's SessionCreateSucceededPayload. */
+export interface SessionCreateSucceededPayload {
+  request_id: string;
+  session: SessionResponse;
+}
+
+/** The fields of SessionSubmitSucceededPayload this mod uses, decoded from gc's SessionSubmitSucceededPayload. */
+export interface SessionSubmitSucceededPayload {
+  request_id: string;
+  session_id: string;
+  queued: boolean;
+  intent: string;
+}
+
+/** The fields of SessionMessageSucceededPayload this mod uses, decoded from gc's SessionMessageSucceededPayload. */
+export interface SessionMessageSucceededPayload {
+  request_id: string;
+  session_id: string;
+  queued: boolean;
+}

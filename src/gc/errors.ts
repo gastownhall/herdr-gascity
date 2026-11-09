@@ -24,6 +24,8 @@ export type OutcomeUnknownCause =
   /** herdr's fetch followed a redirect away from the gc API's loopback origin. */
   | "redirected"
   | "outcome-poll-expired"
+  /** Asking gc for the outcome failed in a way that will not pass (e.g. gc no longer knows the request). */
+  | "outcome-poll-failed"
   | "reported-by-gc"
   /** gc reported an outcome state this pin does not know. */
   | "unrecognized-state"

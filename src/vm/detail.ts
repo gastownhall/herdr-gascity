@@ -2,8 +2,9 @@
 // says about the session, its output (peek, refreshed while the pane is open
 // and on screen) as plain text, its wake reasons (fetched when the pane opens
 // and on refresh: they cost gc a runtime probe), and its pending prompt with
-// the options gc lists, in gc's order. Actions come in a later change; the
-// option list is shown as gc sends it, nothing is hard-coded.
+// the options gc lists, in gc's order: they are the answer buttons, nothing is
+// hard-coded. The raw ids and options the actions send are kept beside the
+// cleaned text the pane shows.
 
 import type * as T from "../gc/types.gen.ts";
 import { CADENCE } from "../sync/scheduler.ts";
@@ -21,7 +22,16 @@ export type PendingView =
   /** gc's provider for this session has no pending interactions. */
   | { kind: "unsupported" }
   | { kind: "none" }
-  | { kind: "prompt"; requestId: string; promptKind: string; prompt: string | null; options: string[] };
+  | {
+    kind: "prompt";
+    requestId: string;
+    promptKind: string;
+    prompt: string | null;
+    /** gc's options, cleaned for display, in gc's order. */
+    options: string[];
+    /** The request id and options exactly as gc sent them: what an answer sends back. */
+    answer: { requestId: string; options: string[] };
+  };
 
 export type DetailModel =
   | { kind: "none" }
@@ -29,6 +39,8 @@ export type DetailModel =
   | {
     kind: "session";
     id: string;
+    /** gc's session id as sent: what actions address. */
+    ref: string;
     title: string;
     status: Status;
     /** [label, value] pairs. */
@@ -36,6 +48,8 @@ export type DetailModel =
     output: { text: string | null; region: RegionModel };
     wakeReasons: string;
     pending: PendingView;
+    /** gc says the session's provider can interrupt the running turn with new input. */
+    canInterrupt: boolean;
   };
 
 export interface DetailInput {
@@ -83,6 +97,7 @@ function pendingView(s: Slot<T.SessionPendingResponse> | undefined): PendingView
     promptKind: cleanLine(p.kind),
     prompt: p.prompt === undefined ? null : cleanText(p.prompt),
     options: p.options.map(cleanLine),
+    answer: { requestId: p.request_id, options: [...p.options] },
   };
 }
 
@@ -103,11 +118,13 @@ export function detailModel(input: DetailInput): DetailModel {
   return {
     kind: "session",
     id: cleanLine(x.id),
+    ref: x.id,
     title: cleanLine(`${x.agent_name ?? x.template} / ${label}`),
     status: sessionStatus(x, p ? { kind: p.kind, requestId: p.request_id } : null),
     facts: facts(x),
     output: { text: output === null ? null : output === "" ? "(no output)" : output, region: regionModel([["output", peekFreshness]]) },
     wakeReasons: wakeText(detail?.wakeReasons),
     pending: pendingView(detail?.pending),
+    canInterrupt: x.submission_capabilities?.supports_interrupt_now === true,
   };
 }

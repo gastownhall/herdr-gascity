@@ -207,11 +207,50 @@ export function renderContext() {
   };
 }
 
-/** The fake gpui-kit and gpui-base modules: a View base class and recording builders. */
-export function fakeGpui(): HostModules {
+/** A fake gpui-base InputState: its value, its event handlers, and a way for a test to type and press Enter. */
+export interface FakeInputState {
+  placeholder: string | undefined;
+  value(): string;
+  set_value(next: string): void;
+  on(event: string, handler: (event: unknown, cx: unknown) => void): boolean;
+  /** The person types `text` (replacing the value). */
+  type(text: string): void;
+  /** The person presses Enter: the `submit` handlers run with `cx`. */
+  submit(cx: unknown): void;
+}
+
+/** The fake gpui-kit and gpui-base modules: a View base class, recording builders, and text inputs. `inputs` lists every InputState created. */
+export function fakeGpui(inputs: FakeInputState[] = []): HostModules {
+  const InputState = {
+    new: (options?: { placeholder?: string; value?: string }): FakeInputState => {
+      let value = options?.value ?? "";
+      const handlers: Record<string, ((event: unknown, cx: unknown) => void)[]> = {};
+      const state: FakeInputState = {
+        placeholder: options?.placeholder,
+        value: () => value,
+        set_value: (next) => {
+          value = next;
+        },
+        on: (event, handler) => {
+          (handlers[event] ??= []).push(handler);
+          return true;
+        },
+        type: (text) => {
+          value = text;
+        },
+        submit: (cx) => {
+          for (const h of handlers.submit ?? []) h({}, cx);
+        },
+      };
+      inputs.push(state);
+      return state;
+    },
+  };
+  /** Input.new records its state as an `input` call on the element. */
+  const Input = { new: (state: FakeInputState) => element().input(state) };
   return {
     "gpui-kit": { View: class {}, div: element },
-    "gpui-base": { v_flex: element, h_flex: element },
+    "gpui-base": { v_flex: element, h_flex: element, Input, InputState },
   };
 }
 
@@ -299,8 +338,8 @@ export type FakeReply = { status: number; body: unknown } | { rejects: string } 
 export interface FakeGlobalsOptions {
   /** Reply for each exact URL; any other URL is refused, as by a closed port. */
   replies?: Record<string, FakeReply>;
-  /** Consulted when no exact URL matches. */
-  route?: (url: string) => FakeReply | undefined;
+  /** Consulted when no exact URL matches; `init` is the request herdr's fetch got (method, headers, body). */
+  route?: (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => FakeReply | undefined;
   storage?: Record<string, string>;
   /** localStorage.setItem throws this message. */
   storageThrows?: string;
@@ -325,7 +364,7 @@ export function fakeGlobals(options: FakeGlobalsOptions = {}) {
   const all: Record<string, unknown> = {
     fetch: (url: string, init: unknown) => {
       fetched.push({ url, init });
-      const reply = options.replies?.[url] ?? options.route?.(url) ?? { rejects: "error sending request: Connection refused (os error 111)" };
+      const reply = options.replies?.[url] ?? options.route?.(url, init as { method: string; headers: Record<string, string>; body?: string }) ?? { rejects: "error sending request: Connection refused (os error 111)" };
       if (reply === "hang") return new Promise(() => {});
       if ("rejects" in reply) return Promise.reject(new Error(reply.rejects));
       const body = typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body);
@@ -355,7 +394,8 @@ export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { 
   const source = options.source ?? await readFile(BUNDLE_PATH, "utf8");
   const herdr = fakeHerdr(options);
   const host = fakeGlobals(options);
-  const Mod = evaluateModule(source, { ...fakeGpui(), herdr: herdr.module }, host.globals);
+  const inputs: FakeInputState[] = [];
+  const Mod = evaluateModule(source, { ...fakeGpui(inputs), herdr: herdr.module }, host.globals);
   /** One copy of the mod: herdr shares module code by every copy; each has its own instance and tasks. */
   const copy = () => {
     const view = new Mod();
@@ -395,5 +435,8 @@ export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { 
     herdrCalls: herdr.calls,
     fetched: host.fetched,
     storage: host.storage,
+    /** Every InputState the copies created, in creation order. */
+    inputs,
+    clock: host.clock,
   };
 }

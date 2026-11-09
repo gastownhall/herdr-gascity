@@ -1,6 +1,8 @@
 // The probe document is a serialization of the view-models render draws.
 
 import { describe, expect, test } from "bun:test";
+import { sessionSubmit, sessionWake } from "../../../src/actions/session.ts";
+import { activityModel } from "../../../src/vm/activity.ts";
 import { initialMachine, step } from "../../../src/discovery/city.ts";
 import { ok } from "../../../src/result.ts";
 import { agentsModel } from "../../../src/vm/agents.ts";
@@ -33,6 +35,13 @@ describe("probeDocument", () => {
       board: boardModel({ snapshot: snap, now: NOW, selected: "fe-2" }),
       beadDetail: beadDetailModel({ snapshot: snap, now: NOW, selected: "fe-2" }),
       detail: detailModel({ snapshot: snap, now: NOW, selected: "s-1" }),
+      activity: activityModel({
+        rev: 2,
+        entries: [
+          { id: 1, spec: sessionWake("s-1"), key: "k1", attempt: 1, startedAt: NOW - 9000, state: { kind: "done", at: NOW - 8000, detail: "gc: ok", requestId: null } },
+          { id: 2, spec: sessionSubmit("s-1", "close fe-1 n1", "default"), key: "k2", attempt: 1, startedAt: NOW - 3000, state: { kind: "done", at: NOW - 1000, detail: "delivered", requestId: "req-9" } },
+        ],
+      }, snap, NOW),
       diagnostics: [{ at: "2026-11-09T12:00:00Z", source: "events", text: "x" }],
       execLog: [{ at: 1, kind: "exec", argv: ["gc", "supervisor", "status", "--json"] }],
       refreshCount: 2, fetchInFlightMax: 2,
@@ -67,7 +76,10 @@ describe("probeDocument", () => {
       },
       bead_detail: { id: "fe-2", title: "done thing", state: "closed", close_reason: "canary n1", description: "the canary's bead" },
       detail: { session: "s-1", status: "working", output: "CANARY READY canary-1", wake_reasons: "loading", pending: { kind: "loading" } },
-      actions: [],
+      actions: [
+        { id: 2, action: "session.submit", title: "Send · session s-1", state: "done", detail: "delivered", request_id: "req-9", attempt: 1 },
+        { id: 1, action: "session.wake", title: "Wake · session s-1", state: "done", detail: "gc: ok", request_id: null, attempt: 1 },
+      ],
       exec_log: [{ at: 1, kind: "exec", argv: ["gc", "supervisor", "status", "--json"] }],
       errors: [{ at: "2026-11-09T12:00:00Z", source: "events", text: "x" }],
       refresh_count: 2,
@@ -80,14 +92,14 @@ describe("probeDocument", () => {
     const board = boardModel({ snapshot: snapshot({ incomplete: true }), now: NOW, selected: null });
     const doc = probeDocument({
       modVersion: "0.0.0", herdrVersion: null, machine: m, header: headerModel(m), onScreen: false, keyboard: false, agents: null,
-      board: { ...board, closed: { ...board.closed, banners: [] } }, beadDetail: { kind: "none" }, detail: { kind: "none" },
+      board: { ...board, closed: { ...board.closed, banners: [] } }, beadDetail: { kind: "none" }, detail: { kind: "none" }, activity: null,
       diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
     });
     expect(doc.board?.closed.incomplete).toBe(true);
     const clean = boardModel({ snapshot: snapshot({}), now: NOW, selected: null });
     const other = probeDocument({
       modVersion: "0.0.0", herdrVersion: null, machine: m, header: headerModel(m), onScreen: false, keyboard: false, agents: null,
-      board: { ...clean, closed: { ...clean.closed, banners: ["some other notice"] } }, beadDetail: { kind: "none" }, detail: { kind: "none" },
+      board: { ...clean, closed: { ...clean.closed, banners: ["some other notice"] } }, beadDetail: { kind: "none" }, detail: { kind: "none" }, activity: null,
       diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
     });
     expect(other.board?.closed.incomplete).toBe(false);
@@ -97,8 +109,8 @@ describe("probeDocument", () => {
     const m = initialMachine({ pinned: null, lastSelection: null });
     const doc = probeDocument({
       modVersion: "0.0.0", herdrVersion: null, machine: m, header: headerModel(m), onScreen: false, keyboard: false, agents: null,
-      board: null, beadDetail: { kind: "none" }, detail: { kind: "none" }, diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
+      board: null, beadDetail: { kind: "none" }, detail: { kind: "none" }, activity: null, diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0,
     });
-    expect(doc).toMatchObject({ connection: { text: "looking for gc", tone: "busy" }, discovery: null, city: null, city_phase: "discovering", sessions: [], board: null, bead_detail: null, detail: null });
+    expect(doc).toMatchObject({ connection: { text: "looking for gc", tone: "busy" }, discovery: null, city: null, city_phase: "discovering", sessions: [], board: null, bead_detail: null, detail: null, actions: [] });
   });
 });
