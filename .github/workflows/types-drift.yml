@@ -112,6 +112,9 @@ jobs:
         if: steps.generate.outcome == 'success'
         with:
           bun-version-file: .bun-version
+          # The binary is never cached: a cache saved by a workflow that runs
+          # downloaded code could be restored by the release build.
+          no-cache: true
 
       - name: Install dependencies (frozen lockfile)
         if: steps.generate.outcome == 'success'

@@ -6,7 +6,10 @@ name: Release
 #
 # Dispatched by hand, or pushed with a change to the packaging, it is a dry
 # run: the same checks and the same package, uploaded as a workflow artifact.
-# Nothing is published, and the job holds no write permission.
+# Nothing is published, and the job holds no write permission. On a tag, the
+# attest job (the only one that may mint an OIDC token) records build
+# provenance for the tarball and install.sh before the publish job (the only
+# one that may write contents) releases them; `gh attestation verify` checks it.
 
 on:
   push:
@@ -40,10 +43,15 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          # All history: a tag's commit must be on main.
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
+          # The binary is never cached: a cache saved by a workflow that runs
+          # downloaded code could be restored by the release build.
+          no-cache: true
 
       - name: Install dependencies (frozen lockfile)
         run: bun install --frozen-lockfile
@@ -53,6 +61,16 @@ jobs:
 
       - name: Shellcheck the installer
         run: shellcheck install.sh test/install/stub/herdr-app test/install/stub/curl
+
+      - name: The tag's commit is on main
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag $TAG points at $GITHUB_SHA, which is not on main; release only merged commits"
+            exit 1
+          fi
 
       - name: The tag names package.json's version
         if: github.ref_type == 'tag'
@@ -110,9 +128,31 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  attest:
+    name: Attest build provenance
+    needs: package
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gascity-mod-${{ needs.package.outputs.version }}
+          path: release
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release/dist/gascity-mod-${{ needs.package.outputs.version }}.tar.gz
+            release/dist/install.sh
+
   publish:
     name: Publish the release
-    needs: package
+    needs: [package, attest]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
