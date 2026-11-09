@@ -1,0 +1,23 @@
+{
+  // The mod source. It runs in herdr-app's QuickJS engine, not in bun or a
+  // browser: no DOM or Node/bun types, so a timer, `process` or a WHATWG
+  // global the host does not provide fails to type-check here.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": false
+  },
+  "include": ["src/**/*.ts", "types/**/*.d.ts"]
+}

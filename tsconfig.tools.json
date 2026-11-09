@@ -1,0 +1,20 @@
+{
+  // Build script, lint, bundle check and tests: these run under bun.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["bun"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["build.ts", "scripts/**/*.ts", "test/**/*.ts", "types/**/*.d.ts"],
+  "exclude": ["test/fixtures/**"]
+}
