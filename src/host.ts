@@ -8,7 +8,7 @@ import { err, ok, type Result } from "./result.ts";
 import type { HostFetch } from "./gc/client.ts";
 import type { GcError } from "./gc/errors.ts";
 import { GC_STATUS_ARGS } from "./discovery/gcStatus.ts";
-import { SETTINGS_KEY, gcBinIssue } from "./discovery/settings.ts";
+import { SETTINGS_KEY, gcBinIssue, patchSettings } from "./discovery/settings.ts";
 import { decodeFocused, decodePanes, decodeScene, layoutModNames, type HostDecodeError, type HostScene } from "./host.schemas.ts";
 import { openUrlIssue, probeDir, probePathIssue } from "./hostGuards.ts";
 import { FOCUS_KEY, nextFocus } from "./notify/focus.ts";
@@ -66,6 +66,18 @@ export function readProps(): unknown {
 /** The raw machine-wide settings (decoded by discovery/settings.ts). */
 export function readSharedSettings(): unknown {
   return herdr.shared(SETTINGS_KEY);
+}
+
+/**
+ * Stores the gc program in the machine-wide settings, keeping their other
+ * keys (the set-gc-bin command). A gcBin that is not gc, or a stored value
+ * this build cannot read, is refused and nothing is written.
+ */
+export function storeGcBin(gcBin: string): Result<void, GcError> {
+  const next = patchSettings(herdr.shared(SETTINGS_KEY), { gcBin });
+  if (!next.ok) return next;
+  herdr.setShared(SETTINGS_KEY, next.value);
+  return ok(undefined);
 }
 
 /** herdr's fetch, in the shape the gc client takes. */

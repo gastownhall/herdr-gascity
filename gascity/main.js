@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:f502ee1821505d1076d9db83f23d1e55dcd25144ee27678048849f7c67daf0cd over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:28bcb6bcf024ef508db26a3c51e21047d40e2066af9e682d772d20b26b9558bb over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2621,6 +2621,23 @@ function decodeSettings(raw) {
   }
   return ok({ apiUrl: apiUrl ?? null, gcBin: gcBin ?? DEFAULT_GC_BIN });
 }
+function patchSettings(raw, patch) {
+  if (raw !== void 0 && raw !== null && !isRecord(raw)) {
+    return err(invalid("", `cannot change a stored value that is not an object: ${JSON.stringify(raw)}`));
+  }
+  const next = { ...raw ?? {} };
+  if (patch.apiUrl === null) delete next["apiUrl"];
+  else if (patch.apiUrl !== void 0) {
+    if (!isLoopbackApiUrl(patch.apiUrl)) return err({ kind: "not-loopback", url: patch.apiUrl });
+    next["apiUrl"] = patch.apiUrl;
+  }
+  if (patch.gcBin !== void 0) {
+    const issue2 = gcBinIssue(patch.gcBin);
+    if (issue2) return err(invalid("gcBin", issue2));
+    next["gcBin"] = patch.gcBin;
+  }
+  return ok(next);
+}
 
 // src/host.schemas.ts
 var TerminalSchema = object({
@@ -2974,6 +2991,12 @@ function readProps() {
 }
 function readSharedSettings() {
   return herdr.shared(SETTINGS_KEY);
+}
+function storeGcBin(gcBin) {
+  const next = patchSettings(herdr.shared(SETTINGS_KEY), { gcBin });
+  if (!next.ok) return next;
+  herdr.setShared(SETTINGS_KEY, next.value);
+  return ok(void 0);
 }
 var hostFetch = (url, init) => fetch(url, init);
 var LAST_CITY_KEY = "city";
@@ -3550,6 +3573,12 @@ var GRAMMAR = {
     build: (a) => ({ verb: "probe", on: at2(a, 0) === "on" })
   },
   cancel: { mutating: false, args: [], summary: "close the open question or form without acting (Cancel)", build: () => ({ verb: "cancel" }) },
+  "set-gc-bin": {
+    mutating: false,
+    args: [id("gc-bin")],
+    summary: "store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it)",
+    build: (a) => ({ verb: "set-gc-bin", gcBin: at2(a, 0) })
+  },
   "session-new": {
     mutating: true,
     args: [id("agent")],
@@ -3722,6 +3751,8 @@ function parseCommand(raw) {
     if (arg?.kind === "id" && value.trim() === "") return err(`${verb}: <${arg.name}> is empty`);
   }
   if (verb === "probe" && args[0] !== "on" && args[0] !== "off") return err(`probe: expected "on" or "off", got "${shownCommand(args[0] ?? "")}"`);
+  const gcBinRefused = verb === "set-gc-bin" ? gcBinIssue(args[0] ?? "") : null;
+  if (gcBinRefused !== null) return err(`set-gc-bin: ${gcBinRefused}`);
   return ok({ command: spec2.build(args, confirm), nonce });
 }
 function placeholders(verb) {
@@ -6957,7 +6988,9 @@ var CopyController = class {
     const session = this.city?.snapshot().sessions.value?.items.find((x) => x.id === id2);
     if (state.phase !== "city-running" || !this.city || this.city.key.city !== state.city.name) return this.refuse("no running city to act on");
     if (!session) return this.refuse(`session ${cleanLine(id2)} is not listed by gc`);
-    const binding = resolveBinding({ session, cityPath: state.city.path, gcBin: state.endpoint.gcBin, gcVersion: state.endpoint.version });
+    const settings = decodeSettings(this.deps.host.settings());
+    if (!settings.ok) return this.refuse(errorText(settings.error));
+    const binding = resolveBinding({ session, cityPath: state.city.path, gcBin: settings.value.gcBin, gcVersion: state.endpoint.version });
     if (!binding.ok) return this.refuse(binding.error);
     const name = `${session.agent_name ?? session.template}/${session.id}`;
     return this.send(openTerminal(binding.value, name, { host: this.deps.host.terminal, clock: this.deps.clock }));
@@ -7083,6 +7116,15 @@ var CopyController = class {
       case "cancel":
         this.cancelDialog();
         return "cancelled";
+      case "set-gc-bin": {
+        const stored = this.deps.host.setGcBin(c.gcBin);
+        if (!stored.ok) {
+          this.refuse(errorText(stored.error));
+          return "";
+        }
+        ui.retry();
+        return `gcBin ${c.gcBin}`;
+      }
       case "session-new":
         if (!this.checkAgent(c.agent)) return "";
         this.openNewSession(c.agent);
@@ -9079,6 +9121,8 @@ function setUp() {
       visibility: () => visibility().get(systemClock.now()),
       probeEnabled: readProbeEnabled,
       setProbe: setProbeEnabled,
+      settings: readSharedSettings,
+      setGcBin: storeGcBin,
       herdrVersion: readHerdrVersion,
       execLog: readExecLog,
       keyboard: () => focus.handle?.is_focused() ?? false,

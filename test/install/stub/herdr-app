@@ -1,0 +1,67 @@
+#!/bin/sh
+# A stand-in for herdr-app in install.sh's tests. It records every call and
+# answers from scripted replies under $STUB_DIR:
+#
+#   argv.log                 one line per call, arguments separated by \037
+#   check.log                per `check <dir>`: the files in <dir>, then what
+#                            mods/gascity/main.js held at that moment
+#   replies/<key>.<n>        the reply to the n-th call of <key> (1-based)
+#   replies/<key>            the reply to any other call of <key>
+#   replies/<key>.okafter    seconds after the first call of <key> before
+#                            replies/<key>.ok is given (replies/<key> before)
+#   replies/<key>.when       another key: once that key has been called,
+#                            replies/<key>.then is given
+#
+# <key> is the subcommand (`check`, `status`, `ls`), or for `do` the command
+# up to its first ":" (`tab.new`, `gascity.set-gc-bin`). A reply file's first
+# line is the exit code, optionally followed by " stderr" to print the rest
+# on stderr instead of stdout. With no reply: check succeeds, every other
+# call fails as herdr-app does with no window open.
+set -eu
+dir=${STUB_DIR:?}
+{
+  first=1
+  for arg in "$@"; do
+    if [ "$first" = 1 ]; then first=0; else printf '\037'; fi
+    printf '%s' "$arg"
+  done
+  printf '\n'
+} >>"$dir/argv.log"
+
+if [ "${1:-}" = "do" ]; then key=${2%%:*}; else key=${1:-}; fi
+mkdir -p "$dir/count"
+n=$(( $(cat "$dir/count/$key" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"$dir/count/$key"
+
+if [ "${1:-}" = check ]; then
+  {
+    echo "check $2"
+    (cd "$2" && ls -A)
+    printf 'installed main.js: %s\n' "$(cat "${HERDR_APP_HOME:?}/mods/gascity/main.js" 2>/dev/null || echo none)"
+  } >>"$dir/check.log"
+fi
+
+reply=""
+if [ -f "$dir/replies/$key.okafter" ]; then
+  [ -f "$dir/first.$key" ] || date +%s >"$dir/first.$key"
+  if [ $(( $(date +%s) - $(cat "$dir/first.$key") )) -ge "$(cat "$dir/replies/$key.okafter")" ]; then
+    reply=$dir/replies/$key.ok
+  fi
+fi
+if [ -z "$reply" ] && [ -f "$dir/replies/$key.when" ] && [ -f "$dir/count/$(cat "$dir/replies/$key.when")" ]; then
+  reply=$dir/replies/$key.then
+fi
+[ -n "$reply" ] || { [ -f "$dir/replies/$key.$n" ] && reply=$dir/replies/$key.$n; } || true
+[ -n "$reply" ] || { [ -f "$dir/replies/$key" ] && reply=$dir/replies/$key; } || true
+if [ -z "$reply" ]; then
+  [ "$key" = check ] && exit 0
+  echo "herdr-app: no Herdr window at $HERDR_APP_HOME/herdr-app.sock: Connection refused (os error 111)" >&2
+  exit 2
+fi
+code=$(sed -n '1{s/ .*//;p;}' "$reply")
+if sed -n '1p' "$reply" | grep -q ' stderr$'; then
+  sed '1d' "$reply" >&2
+else
+  sed '1d' "$reply"
+fi
+exit "$code"

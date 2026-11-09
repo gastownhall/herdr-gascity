@@ -1,0 +1,13 @@
+{
+  "schema": "herdr-gascity-compat/1",
+  "herdrApp": {
+    "minimum": "0.1.14",
+    "tested": ["0.1.14"]
+  },
+  "gc": {
+    "repo": "gastownhall/gascity",
+    "minimumCommit": "9ba215cb592bcccaa73f28d8aff1bd2317008638",
+    "minimumCommitDate": "2026-11-09T04:54:29+00:00",
+    "minimumRelease": null
+  }
+}

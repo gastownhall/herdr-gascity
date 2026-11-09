@@ -58,6 +58,8 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean; herdrVersi
     herdrVersion: opts.herdrVersion ?? (() => ok("0.1.14")),
     execLog: () => [],
     setProbe: () => {},
+    settings: () => null,
+    setGcBin: () => ok(undefined),
     keyboard: () => false,
     focusTarget: () => null,
     terminal: { scene: () => ok({ spaces: [], panes: [], terminals: [] }), openTab: () => ok(null), selectTab: () => ok(null) },
