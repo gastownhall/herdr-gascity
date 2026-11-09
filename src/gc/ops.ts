@@ -14,6 +14,15 @@ import type * as T from "./types.gen.ts";
 
 type Query<Op extends keyof OperationTypes> = OperationTypes[Op]["query"];
 
+/**
+ * Bead types the work board hides by default: gc infrastructure, not work.
+ * From gc at the pin: `session` and `message` (internal/config/workquery.go,
+ * mail and session beads are never claimed as work) and `molecule` and
+ * `gate` (internal/beads/beads.go readyExcludeTypes: workflow containers and
+ * async wait conditions). gc has no server-side "work items only" filter.
+ */
+export const INFRASTRUCTURE_BEAD_TYPES: readonly string[] = ["session", "message", "molecule", "gate"];
+
 // ---- reads ------------------------------------------------------------------
 
 /** GET /health: liveness, version and build id. */

@@ -175,6 +175,15 @@ describe("transport failures (herdr fetch rejections)", () => {
     expect(r).toEqual({ ok: false, error: { kind: "timeout", url: "http://127.0.0.1:8372/health", ms: HERDR_FETCH_TIMEOUT_MS } });
   });
 
+  test("time a request spent queued in the fetch budget does not count: the rejection's hostElapsedMs wins", async () => {
+    const refused = Object.assign(new Error("error sending request: connection refused"), { hostElapsedMs: 100 });
+    const r = await health({ rejects: refused, afterMs: HERDR_FETCH_TIMEOUT_MS + 5_000 });
+    expect(r).toEqual({ ok: false, error: { kind: "unreachable", url: "http://127.0.0.1:8372/health", cause: "error sending request: connection refused" } });
+    const slow = Object.assign(new Error("error sending request"), { hostElapsedMs: HERDR_FETCH_TIMEOUT_MS });
+    const t = await health({ rejects: slow, afterMs: 5 });
+    expect(t.ok ? null : t.error.kind).toBe("timeout");
+  });
+
   test("a rejection whose message says it timed out -> timeout, however fast", async () => {
     const r = await health({ rejects: new Error("reading response from http://127.0.0.1:8372/health failed: operation timed out") });
     expect(r.ok ? null : r.error.kind).toBe("timeout");
