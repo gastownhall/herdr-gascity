@@ -166,6 +166,7 @@ export class SyncRegistry {
         dropQueued: (group) => ep.dropQueued(group),
         refresh: (domains) => store.refresh(domains),
         refreshDetail: (sessionId) => store.refreshDetail(sessionId),
+        refreshBead: (beadId) => store.refreshBead(beadId),
         newKey: this.deps.newKey ?? (() => newIdempotencyKey()),
       });
       entry = { store, ledger, subs: 0 };

@@ -456,6 +456,15 @@ export class CityStore implements EndpointListener {
     this.commit();
   }
 
+  /** Refetches a bead fetched by id (a watched or active bead) at the next tick; a bead the store does not fetch by id is left alone. */
+  refreshBead(beadId: string): void {
+    const b = this.lookups.get(beadId);
+    if (!b) return;
+    b.held = false;
+    b.due = true;
+    this.commit();
+  }
+
   /** Ends the store: a running step's late results are dropped. */
   dispose(): void {
     this.abandon();

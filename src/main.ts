@@ -75,10 +75,40 @@ function setUp(): Copy {
   return { kind: "ready", copy };
 }
 
-/** The copy's text inputs; Enter in the send box sends, Enter in the alias starts the session. */
+/** The new-bead form's fields as typed. */
+function beadForm(inputs: PanelInputs) {
+  return {
+    title: inputs.beadTitle.value(),
+    description: inputs.beadDescription.value(),
+    priority: inputs.beadPriority.value(),
+    labels: inputs.beadLabels.value(),
+  };
+}
+
+/** Creates the bead from the form; once sent, the form's fields are cleared. */
+function createBead(copy: CopyController, inputs: PanelInputs): void {
+  if (!copy.createBead(beadForm(inputs))) return;
+  for (const i of [inputs.beadTitle, inputs.beadDescription, inputs.beadPriority, inputs.beadLabels]) i.set_value("");
+}
+
+/** Closes the form's bead with the typed reason; once sent, the reason is cleared. */
+function closeBead(copy: CopyController, inputs: PanelInputs): void {
+  if (copy.closeBead(inputs.closeReason.value())) inputs.closeReason.set_value("");
+}
+
+/**
+ * The copy's text inputs; Enter in the send box sends, Enter in the alias
+ * starts the session, Enter in the new bead's title creates it, Enter in the
+ * close reason closes the bead.
+ */
 function inputsFor(copy: CopyController): PanelInputs {
   const message = InputState.new({ placeholder: "Message to the session" });
   const alias = InputState.new({ placeholder: "alias (optional)" });
+  const beadTitle = InputState.new({ placeholder: "title (required)" });
+  const beadDescription = InputState.new({ placeholder: "description (optional)" });
+  const beadPriority = InputState.new({ placeholder: "priority, e.g. 2 (optional)" });
+  const beadLabels = InputState.new({ placeholder: "labels, comma-separated (optional)" });
+  const closeReason = InputState.new({ placeholder: "close reason (optional)" });
   message.on("submit", (_, cx) => {
     if (copy.sendInput(message.value(), "default")) message.set_value("");
     cx.notify();
@@ -87,7 +117,16 @@ function inputsFor(copy: CopyController): PanelInputs {
     if (copy.createSession(alias.value())) alias.set_value("");
     cx.notify();
   });
-  return { message, alias };
+  const inputs: PanelInputs = { message, alias, beadTitle, beadDescription, beadPriority, beadLabels, closeReason };
+  beadTitle.on("submit", (_, cx) => {
+    createBead(copy, inputs);
+    cx.notify();
+  });
+  closeReason.on("submit", (_, cx) => {
+    closeBead(copy, inputs);
+    cx.notify();
+  });
+  return inputs;
 }
 
 function actionsFor(copy: CopyController, inputs: PanelInputs | null): PanelActions {
@@ -142,6 +181,34 @@ function actionsFor(copy: CopyController, inputs: PanelInputs | null): PanelActi
     },
     createSession: (cx) => {
       if (inputs !== null && copy.createSession(inputs.alias.value())) inputs.alias.set_value("");
+      cx.notify();
+    },
+    openNewBead: (cx) => {
+      copy.openNewBead();
+      cx.notify();
+    },
+    chooseSlingTarget: (index, cx) => {
+      copy.chooseSlingTarget(index);
+      cx.notify();
+    },
+    createBead: (cx) => {
+      if (inputs !== null) createBead(copy, inputs);
+      cx.notify();
+    },
+    requestSling: (cx) => {
+      copy.requestSling();
+      cx.notify();
+    },
+    requestCloseBead: (cx) => {
+      copy.requestCloseBead();
+      cx.notify();
+    },
+    closeBead: (cx) => {
+      if (inputs !== null) closeBead(copy, inputs);
+      cx.notify();
+    },
+    reopenBead: (cx) => {
+      copy.reopenBead();
       cx.notify();
     },
     confirm: (choice, cx) => {

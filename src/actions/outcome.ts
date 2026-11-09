@@ -30,6 +30,14 @@
 // retry reuses the action's Idempotency-Key, so gc can deduplicate it where it
 // declares the header (gc keeps keys in memory for 30 minutes; a gc restart
 // forgets them); where it does not, the retry is a new request.
+//
+// An action may carry a follow-up (activity.ts FollowUp: create a bead, then
+// sling it). The follow-up is started once, as its own action, from the turn
+// in which the first action is learned to be done — a turn of the copy that
+// owns the first action, so the follow-up's request belongs to a live copy
+// and is subject to the same ownership rules. A first action that ends any
+// other way leaves its follow-up unsent; it is sent when a retry of the first
+// is done. Retrying the follow-up never repeats the first.
 
 import { outcomeFailure, type GcError } from "../gc/errors.ts";
 import type { GcClient } from "../gc/client.ts";
@@ -47,7 +55,7 @@ import type { Clock } from "../sync/clock.ts";
 import type { Domain } from "../sync/invalidate.ts";
 import type { CitySnapshot } from "../sync/store.ts";
 import {
-  isPending, type ActionEntry, type ActionSpec, type ActionState, type ActivitySnapshot, type OutcomeUnknown, type Sent,
+  isPending, type ActionEntry, type ActionSpec, type ActionState, type ActivitySnapshot, type FollowUpState, type OutcomeUnknown, type Sent,
 } from "./activity.ts";
 
 /** Delays before the first outcome polls, each measured from the previous answer… */
@@ -78,6 +86,8 @@ export interface LedgerDeps {
   refresh(domains: readonly Domain[]): void;
   /** Refetches a watched session's detail at the next tick. */
   refreshDetail(sessionId: string): void;
+  /** Refetches a bead the store fetches by id (a watched or active bead) at the next tick. */
+  refreshBead(beadId: string): void;
   /** A fresh Idempotency-Key. */
   newKey(): string;
 }
@@ -91,6 +101,8 @@ interface ActionRecord {
   state: ActionState;
   /** An attempt ended unknown: it may have landed, so every retry keeps the key (ActionEntry.keyPinned). */
   keyPinned: boolean;
+  /** The follow-up's state (ActionEntry.followUp). */
+  followUp: FollowUpState | null;
   /** The copy whose turn sent the current attempt; null once it closed while the outcome is being polled (any copy's tick polls it). */
   owner: object | null;
   /** The current attempt's requests, for dropping them from the queue. */
@@ -184,6 +196,7 @@ export class ActionLedger {
     const rec: ActionRecord = {
       id: ++this.seq, spec, key: this.deps.newKey(), attempt: 1, startedAt: now,
       state: { kind: "sending", since: now }, owner, group: {}, token: 0, keyPinned: false,
+      followUp: spec.then ? { kind: "waiting" } : null,
     };
     this.records.push(rec);
     this.trim();
@@ -315,6 +328,7 @@ export class ActionLedger {
     const sent = r.value;
     if (sent.kind === "done") {
       this.resolve(rec, { kind: "done", at: now, detail: sent.detail, requestId: null });
+      this.startFollowUp(rec, sent.created);
       return;
     }
     rec.state = {
@@ -359,6 +373,7 @@ export class ActionLedger {
       this.resolve(rec, { kind: "unknown", at: now, error: unknown(s.requestId, rec.spec.operationId, "unreadable-response", [describe(failure)]) });
     } else if (outcome.state === "succeeded") {
       this.resolve(rec, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId });
+      this.startFollowUp(rec, undefined);
     } else {
       rec.state = { ...next, lastError: null };
       this.commit();
@@ -375,9 +390,31 @@ export class ActionLedger {
     this.commit();
   }
 
+  /**
+   * The first action is done: sends its follow-up now, in this turn (the
+   * owner's), for the id gc gave what it created. Once only.
+   */
+  private startFollowUp(rec: ActionRecord, created: string | undefined): void {
+    const then = rec.spec.then;
+    if (!then || rec.followUp?.kind !== "waiting") return;
+    const owner = rec.owner;
+    if (created === undefined || owner === null) {
+      rec.followUp = {
+        kind: "not-sent",
+        reason: created === undefined ? "gc's answer did not name what it created" : "no Gas City view was left to send it",
+      };
+      this.commit();
+      return;
+    }
+    rec.followUp = { kind: "started", id: this.start(owner, then.spec(created)) };
+    this.commit();
+  }
+
   private refreshAfter(rec: ActionRecord): void {
     this.deps.refresh(rec.spec.refresh);
-    if (rec.spec.target.kind === "session") this.deps.refreshDetail(rec.spec.target.id);
+    const t = rec.spec.target;
+    if (t.kind === "session") this.deps.refreshDetail(t.id);
+    if (t.kind === "bead") this.deps.refreshBead(t.id);
   }
 
   /** Drops the oldest finished actions beyond ACTIVITY_LIMIT. */
@@ -394,7 +431,9 @@ export class ActionLedger {
   }
 
   private entry(rec: ActionRecord): ActionEntry {
-    return { id: rec.id, spec: rec.spec, key: rec.key, attempt: rec.attempt, startedAt: rec.startedAt, state: rec.state, keyPinned: rec.keyPinned };
+    return { id: rec.id, spec: rec.spec, key: rec.key, attempt: rec.attempt, startedAt: rec.startedAt, state: rec.state, keyPinned: rec.keyPinned,
+      followUp: rec.spec.then && rec.followUp ? { verb: rec.spec.then.verb, state: rec.followUp } : null,
+    };
   }
 
   private commit(): void {

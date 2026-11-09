@@ -75,6 +75,7 @@ interface SyncSummary {
   keyShapes: boolean[];
   retryOk: boolean;
   sameKeyRetry: boolean;
+  workPosts: { path: string; body: unknown; key: string }[];
 }
 
 const probe = await bundleProbe();
@@ -204,9 +205,18 @@ describe("the bundled gc client with zod, and the sync engine", () => {
       { kind: "session.submit", state: "done", attempt: 1 },
       { kind: "session.respond", state: "done", attempt: 1 },
       { kind: "session.stop", state: "done", attempt: 2 },
+      { kind: "bead.create", state: "done", attempt: 1 },
+      { kind: "bead.sling", state: "done", attempt: 1 },
       { kind: "session.wake", state: "unknown", attempt: 1 },
     ]);
-    expect(sync.activity[3]).toEqual(["Send · session sc-20", "done", "delivered"]);
+    expect(sync.activity[5]).toEqual(["Send · session sc-20", "done", "delivered"]);
+    // a work action: a new bead (with its Idempotency-Key), then the sling of the created bead (none: gc declares none)
+    expect(sync.workPosts).toEqual([
+      { path: "/v0/city/scratch/beads", body: { title: "recorder bead mw8vmef1", priority: 2 }, key: "uuid" },
+      { path: "/v0/city/scratch/sling", body: { target: "worker", bead: "sc-74" }, key: "none" },
+    ]);
+    expect(sync.activity[1]).toEqual(["Sling to worker · bead sc-74", "done", "gc: slung bead sc-74 to worker; convoy sc-75"]);
+    expect(sync.activity[2]?.[2]).toMatch(/^gc: created bead sc-74; then Sling to worker: sent \(action \d+\)$/);
     expect(sync.retryOk).toBe(true);
     expect(sync.sameKeyRetry).toBe(true);
     expect(sync.keyShapes).toEqual([true, true, true, true, true]);

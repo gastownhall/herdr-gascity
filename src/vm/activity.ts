@@ -84,7 +84,42 @@ function retryLabel(e: ActionEntry): string {
   return e.spec.idempotent ? SAME_KEY_RETRY : MAY_REPEAT_RETRY;
 }
 
+/**
+ * Where a follow-up is, as the first action's row says it. Only a new bead
+ * has a follow-up (its sling), so the wording names the bead.
+ */
+function followUpText(e: ActionEntry): string | null {
+  const f = e.followUp;
+  if (f === null) return null;
+  let where: string;
+  if (f.state.kind === "started") where = `sent (action ${f.state.id})`;
+  else if (f.state.kind === "not-sent") where = `not sent, ${f.state.reason}`;
+  else {
+    switch (e.state.kind) {
+      case "sending":
+      case "polling":
+      case "done":
+        where = "sent once the bead is created";
+        break;
+      case "unknown":
+        where = "not sent, the bead may not exist; a retry of the create sends it once gc confirms the bead";
+        break;
+      case "failed":
+      case "not-sent":
+        where = "not sent, the bead was not created";
+        break;
+    }
+  }
+  return cleanLine(`then ${f.verb}: ${where}`);
+}
+
 function row(e: ActionEntry, city: CitySnapshot | null, now: number): ActivityRow {
+  const r = stateRow(e, city, now);
+  const then = followUpText(e);
+  return then === null ? r : { ...r, detail: `${r.detail.replace(/\.$/, "")}; ${then}` };
+}
+
+function stateRow(e: ActionEntry, city: CitySnapshot | null, now: number): ActivityRow {
   const s = e.state;
   const base = {
     id: e.id,

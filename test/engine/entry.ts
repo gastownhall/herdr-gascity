@@ -12,6 +12,7 @@ import type { RequestOutcome } from "../../src/gc/types.gen.ts";
 import { jitlessEnabled } from "../../src/gc/zod.ts";
 import { decodeTerminals } from "../../src/host.schemas.ts";
 import { sessionRespond, sessionStop, sessionSubmit, sessionWake } from "../../src/actions/session.ts";
+import { beadCreate } from "../../src/actions/work.ts";
 import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
 import { activityModel } from "../../src/vm/activity.ts";
 import type { EventBatch } from "../../src/sync/store.ts";
@@ -51,6 +52,8 @@ async function one(f: ProbeFixture): Promise<ProbeResult> {
   return { fixture: `${f.op}/${f.name}`, ok: true, summary: { value: r.value, unrecognized: unrecognizedIn(r.value), outcome } };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 /** Lets queued promise reactions run (no setImmediate in QuickJS). */
 async function settle(): Promise<void> {
   for (let i = 0; i < 400; i++) await Promise.resolve();
@@ -87,13 +90,21 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   const keys: string[] = [];
   let hangPosts = false;
   let stops = 0;
+  /** The work action's requests: path, body, and whether an Idempotency-Key was sent (UUID-shaped). */
+  const workPosts: { path: string; body: unknown; key: "uuid" | "none" | "other" }[] = [];
+  const keyKind = (k: string | undefined) => (k === undefined ? "none" : UUID.test(k) ? "uuid" : "other");
   const fetch: HostFetch = (url, init) => {
     const path = url.replace("http://127.0.0.1:8372", "");
     paths.push(path);
     if (down) return Promise.reject(new Error("error sending request: connection refused"));
     let reply: unknown = { items: [], total: 0 };
     let status = 200;
-    if (init.method === "POST") {
+    if (init.method === "POST" && (path.endsWith("/beads") || path.endsWith("/sling"))) {
+      // A new bead slung to an agent: create (201, the recorded bead), then sling (the recorded answer).
+      workPosts.push({ path, body: JSON.parse(init.body ?? "null"), key: keyKind(init.headers["Idempotency-Key"]) });
+      status = path.endsWith("/beads") ? 201 : 200;
+      reply = path.endsWith("/beads") ? body("create-bead", "ok") : body("post-v0-city-by-city-name-sling", "ok");
+    } else if (init.method === "POST") {
       keys.push(init.headers["Idempotency-Key"] ?? "");
       if (hangPosts) return new Promise(() => {});
       if (path.endsWith("/respond")) {
@@ -166,6 +177,8 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   await advance(6000);
   const retried = b.value.retryAction(stop);
   await advance(500);
+  b.value.act(beadCreate({ title: "recorder bead mw8vmef1", description: "", priority: 2, labels: [] }, "worker"));
+  await advance(500);
   hangPosts = true;
   const c = registry.subscribe({ apiUrl: "http://127.0.0.1:8372", city: "scratch" });
   if (!c.ok) return { error: "subscribe" };
@@ -207,6 +220,7 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
     activity,
     retryOk,
     sameKeyRetry: keys.length >= 4 && keys[2] === keys[3],
+    workPosts,
     keyShapes: keys.map((k) => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(k)),
   };
 }

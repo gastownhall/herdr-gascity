@@ -3,15 +3,15 @@
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
 **Status: scaffold, gc client, discovery, sync engine, agents panel, work
-board, session actions.** The mod finds the gc API, lists the cities, and
+board, session and work actions.** The mod finds the gc API, lists the cities, and
 shows the copy's city: its connection state, its rigs, agents and sessions
 with live status, pending prompts and active beads, a detail pane for one
 session, and the work board (ready, in progress, recently closed) with a
 detail pane for one bead. It acts on sessions, agents and rigs through gc's
 API (start, wake, suspend, stop the turn, close, kill, pin, send input,
-answer a prompt, suspend and resume agents and rigs) and shows every
-action's outcome. Opening a terminal and work actions (sling, close a bead)
-come next.
+answer a prompt, suspend and resume agents and rigs) and on work (create a
+bead and optionally sling it, sling, close and reopen a bead), and shows
+every action's outcome. Opening a terminal comes next.
 
 ## Layout
 
@@ -21,7 +21,7 @@ come next.
 | `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
 | `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `board.ts` (the work board and bead detail), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
-| `src/actions/` | The person's actions: `session.ts`, `agent.ts`, `rig.ts` (one gc API call each), `activity.ts` (what an action is and the states it goes through), `outcome.ts` (the ledger that sends them and follows their outcomes). |
+| `src/actions/` | The person's actions: `session.ts`, `agent.ts`, `rig.ts`, `work.ts` (one gc API call each), `activity.ts` (what an action is and the states it goes through), `outcome.ts` (the ledger that sends them and follows their outcomes). |
 | `src/sync/` | The sync engine: one shared store per gc city per app, its poll loop, the event watcher, the fetch budget, backoff, visibility and staleness (see below). |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
@@ -360,13 +360,31 @@ and never ends or types into a terminal itself.
   option it was drawn with; if gc's prompt has changed by the click, nothing
   is sent and the panel asks to review it. Each agent row: New session… (an optional alias) and Suspend
   agent… / Resume agent (rig-scoped agents use gc's own route). Each rig gc
-  lists: Suspend rig… / Resume rig. Actions marked `…` ask first: close,
-  kill, agent suspend and rig suspend say what gc will do and send nothing
-  until confirmed.
+  lists: Suspend rig… / Resume rig. The work board: + New bead (title,
+  description, priority, labels, and optionally an agent to sling it to);
+  on the open bead, Sling… (one button per agent gc lists) and Close… (with
+  a reason), or Reopen for a closed bead. Actions marked `…` ask first:
+  close, kill, agent suspend, rig suspend, sling and bead close say what gc
+  will do and send nothing until confirmed. Sling's question says that gc
+  cannot deduplicate a sling, so a retry after an unknown outcome may route
+  the bead twice, and asks again on every retry.
+- **A new bead slung to an agent** is two gc calls, each its own entry in
+  the activity log: the create, then, once gc has created the bead, the
+  sling of that bead. A create that fails, is unknown or is not sent slings
+  nothing (its entry says the sling was not sent and why); a retry of the
+  create that is done slings once. A sling that fails or is unknown after a
+  successful create shows as such, and its retry resends only the sling:
+  the bead is never created again.
+- **What is refetched.** After each action (and before a retry of an
+  unknown one) the mod refetches what it changes: a new bead → Ready; a
+  sling → Ready, In progress and sessions; a bead close or reopen → Ready
+  and In progress (the recently-closed list follows gc's bead events); an
+  open bead's detail is fetched again after an action on it.
 - **Headers.** Every mutation carries `X-GC-Request`. `Idempotency-Key` (a
   fresh UUID per action) goes only on the operations gc declares it on:
   session create, submit, messages, respond, wake, suspend, stop, close and
-  kill. gc declares none on pin/unpin and agent/rig actions.
+  kill, and bead create. gc declares none on pin/unpin, agent/rig actions,
+  sling, and bead close/reopen.
 - **Outcomes.** Each action shows in the activity log as pending, then done,
   failed, outcome unknown or not sent, with gc's answer or reason and its request id.
   A 202 (session create, submit, messages) is followed through gc's request

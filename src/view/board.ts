@@ -2,17 +2,30 @@
 // Recently closed columns (each with its data age, error line, notices,
 // unreadable rows and cards; stale data greyed, never hidden), and the
 // selected bead's detail. Clicking a card opens its detail; clicking the
-// selected card or Close closes it. Read-only: actions come later.
+// selected card or Close closes it. The work actions: + New bead (the form),
+// and on the open bead Sling… (pick an agent) and Close… (with a reason), or
+// Reopen for a closed bead; an action under way on it shows as waiting.
 
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
+import * as work from "../actions/work.ts";
 import type { ThemeRead } from "../host.ts";
+import { isBusy, type ActivityModel } from "../vm/activity.ts";
 import type { BeadCard, BeadDetailModel, BoardModel, ClosedCard, ColumnBase } from "../vm/board.ts";
+import { button, waiting } from "./dialogs.ts";
 import { greyedIf, label, muted } from "./text.ts";
 
 export interface BoardActions {
   /** Opens a bead's detail; null closes it. */
   selectBead(id: string | null, cx: GpuiContext): void;
+  /** Opens the new-bead form. */
+  openNewBead(cx: GpuiContext): void;
+  /** Sling… on the open bead: asks which agent. */
+  requestSling(cx: GpuiContext): void;
+  /** Close… on the open bead: opens the close form. */
+  requestCloseBead(cx: GpuiContext): void;
+  /** Reopens the open bead. */
+  reopenBead(cx: GpuiContext): void;
 }
 
 /** One line per card: id, priority, title, state, type, assignee, labels, close reason. */
@@ -50,12 +63,28 @@ function column(key: string, m: ColumnBase, body: GpuiElement[], theme: ThemeRea
   return el.child(greyedIf(data, state.stale, theme));
 }
 
-function beadDetail(m: BeadDetailModel, theme: ThemeRead, actions: BoardActions): GpuiElement | null {
+/** The open bead's actions, each waiting while one like it is under way. */
+function beadActions(m: Extract<BeadDetailModel, { kind: "bead" }>, activity: ActivityModel | null, theme: ThemeRead, actions: BoardActions): GpuiElement {
+  const one = (key: string, text: string, busy: boolean, onClick: (cx: GpuiContext) => void) => busy
+    ? waiting(`gascity-bead-action-${key}`, text, "under way", theme)
+    : button(`gascity-bead-action-${key}`, `${text}${key === "reopen" ? "" : "…"}`, onClick);
+  // The busy check matches by action kind and bead (whatever the agent or reason).
+  const buttons = m.closed
+    ? [one("reopen", "Reopen", isBusy(activity, work.beadReopen(m.ref)), (cx) => actions.reopenBead(cx))]
+    : [
+      one("sling", "Sling", isBusy(activity, work.beadSling(m.ref, "")), (cx) => actions.requestSling(cx)),
+      one("close", "Close", isBusy(activity, work.beadClose(m.ref, "")), (cx) => actions.requestCloseBead(cx)),
+    ];
+  return h_flex().id("gascity-bead-actions").gap(8).children(buttons);
+}
+
+function beadDetail(m: BeadDetailModel, theme: ThemeRead, actions: BoardActions, activity: ActivityModel | null): GpuiElement | null {
   if (m.kind === "none") return null;
   const close = div().id("gascity-bead-close").on_click((_, cx) => actions.selectBead(null, cx)).child("Close");
   if (m.kind === "missing") return v_flex().id("gascity-bead-detail").gap(4).child(label("gascity-bead-missing", m.text)).child(close);
   let el = v_flex().id("gascity-bead-detail").gap(4)
     .child(h_flex().id("gascity-bead-head").gap(8).child(label("gascity-bead-title", `Bead ${m.id}: "${m.title}"`)).child(close))
+    .child(beadActions(m, activity, theme, actions))
     .child(muted(label("gascity-bead-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme));
   if (m.closeReason !== null) el = el.child(label("gascity-bead-reason", `Close reason: ${m.closeReason}`));
   if (m.region.age !== null) el = el.child(muted(label("gascity-bead-age", m.region.stale ? `${m.region.age} (may be out of date)` : m.region.age), theme));
@@ -68,7 +97,7 @@ function beadDetail(m: BeadDetailModel, theme: ThemeRead, actions: BoardActions)
 }
 
 /** The work region for one board and the selected bead's detail. */
-export function renderBoard(m: BoardModel, detail: BeadDetailModel, theme: ThemeRead, actions: BoardActions): GpuiElement {
+export function renderBoard(m: BoardModel, detail: BeadDetailModel, theme: ThemeRead, actions: BoardActions, activity: ActivityModel | null): GpuiElement {
   const filter = m.hidden > 0 ? `${m.filter} · ${m.hidden} hidden` : m.filter;
   const ready = column("ready", m.ready, m.ready.cards.map((c, i) => card(c, `gascity-card-ready-${i}`, theme, actions)), theme);
   const inProgress = column("inprogress", m.inProgress, m.inProgress.cards.map((c, i) => card(c, `gascity-card-inprogress-${i}`, theme, actions)), theme);
@@ -79,10 +108,11 @@ export function renderBoard(m: BoardModel, detail: BeadDetailModel, theme: Theme
   }
   const closed = column("closed", m.closed, closedBody, theme);
   let el = v_flex().id("gascity-work").flex_1().gap(6)
-    .child(label("gascity-work-title", "Work"))
+    .child(h_flex().id("gascity-work-head").gap(8).child(label("gascity-work-title", "Work"))
+      .child(button("gascity-work-new", "+ New bead", (cx) => actions.openNewBead(cx))))
     .child(muted(label("gascity-work-filter", filter), theme))
     .child(h_flex().id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed));
-  const d = beadDetail(detail, theme, actions);
+  const d = beadDetail(detail, theme, actions, activity);
   if (d !== null) el = el.child(d);
   return el;
 }

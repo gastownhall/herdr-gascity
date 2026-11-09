@@ -239,6 +239,10 @@ export type BeadDetailModel =
   | {
     kind: "bead";
     id: string;
+    /** gc's id as sent, for matching actions under way (never drawn). */
+    ref: string;
+    /** gc says it is closed: Reopen is offered instead of Sling and Close. */
+    closed: boolean;
     title: string;
     state: string;
     /** [label, value] pairs. */
@@ -305,6 +309,8 @@ export function beadDetailModel(input: BoardInput): BeadDetailModel {
   return {
     kind: "bead",
     id,
+    ref: selected,
+    closed: source.status === "closed",
     title: cleanLine(source.title),
     state,
     facts: detailFacts(source, state),
