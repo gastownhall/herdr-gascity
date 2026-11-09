@@ -12,9 +12,12 @@ on:
   workflow_dispatch:
   push:
     branches: ["**"]
+    # The run installs the mod with install.sh, so it also checks the installer.
     paths:
       - .github/workflows/preview.yml
       - canary/preview-linux.sh
+      - install.sh
+      - scripts/package.ts
 
 permissions:
   contents: read
