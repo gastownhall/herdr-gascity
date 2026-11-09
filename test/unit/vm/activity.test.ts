@@ -48,6 +48,8 @@ describe("activity rows", () => {
     const stale = snapshot({ sessions: slot(sessions([]), { ageMs: 1000 }) });
     const [waiting] = activityModel({ rev: 1, entries: [wake] }, stale, NOW).rows;
     expect(waiting?.tone).toBe("unknown");
+    // The tone already says "outcome unknown"; the detail does not repeat it.
+    expect(waiting?.detail).toBe("outcome of x unknown (timeout). Refreshing the state before a retry is offered.");
     expect(waiting?.retry).toEqual({ kind: "wait", reason: "refreshing sessions before a retry" });
     expect(waiting?.refresh).toBe(true);
     expect(waiting?.detail).toContain("Refreshing the state before a retry is offered");

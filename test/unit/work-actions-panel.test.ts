@@ -190,7 +190,8 @@ describe("work actions on the board", () => {
     g.post = (p) => (p.endsWith("/beads") ? CREATED : SLUNG);
     for (let i = 0; i < 10; i++) await b.tick(1000);
     const log = textOf(findById(b.render(), "gascity-activity")!);
-    expect(log).toContain('New bead · new bead "fix login" → outcome unknown:');
+    expect(log).toContain('New bead · new bead "fix login" → outcome unknown: outcome of create-bead unknown (cancelled)');
+    expect(log).not.toContain("outcome unknown: outcome unknown");
     expect(log).toContain("then Sling to worker: not sent, the bead may not exist");
     expect(posts(mod, "/sling")).toEqual([]);
   });

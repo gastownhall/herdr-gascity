@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:aed8a5a1651c4dab6c29f98d6afe90876c343f632957844fbcaf09cb0a83f39e over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:2d9fa00ff035a0fd65fc7dfefcf4ea841a576cedcb744cd3761f38bdcb7a30fd over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -4026,7 +4026,7 @@ function stateRow(e, city, now) {
         tone: "unknown",
         refresh: true,
         requestId: s.error.requestId === null ? null : cleanLine(s.error.requestId),
-        detail: gate.allowed ? `outcome unknown: ${errorText(s.error)}. The state has been refreshed: check it before retrying.` : `outcome unknown: ${errorText(s.error)}. Refreshing the state before a retry is offered.`,
+        detail: gate.allowed ? `${errorText(s.error)}. The state has been refreshed: check it before retrying.` : `${errorText(s.error)}. Refreshing the state before a retry is offered.`,
         retry: gate.allowed ? { kind: "retry", label: twice } : { kind: "wait", reason: gate.reason }
       };
     }
@@ -6042,7 +6042,7 @@ var CopyController = class {
         agents: f.agents.map(cleanLine),
         slingTo: target,
         slingToIndex: f.slingTo,
-        note: target === null ? null : `Two gc calls: create the bead, then sling it to ${target}. A retry of the create cannot make a second bead; ${SLING_MAY_ROUTE_TWICE}`
+        note: target === null ? null : `Two gc calls: create the bead, then sling it to ${target}. A retry of the create reuses its key: gc deduplicates it within 30 min, not across a gc restart, and not after a gc-side error (gc then drops the key). ${SLING_MAY_ROUTE_TWICE}`
       };
     }
     if (this.closingBead) {

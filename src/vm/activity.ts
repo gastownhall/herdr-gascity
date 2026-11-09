@@ -156,8 +156,8 @@ function stateRow(e: ActionEntry, city: CitySnapshot | null, now: number): Activ
         ...base, tone: "unknown", refresh: true,
         requestId: s.error.requestId === null ? null : cleanLine(s.error.requestId),
         detail: gate.allowed
-          ? `outcome unknown: ${errorText(s.error)}. The state has been refreshed: check it before retrying.`
-          : `outcome unknown: ${errorText(s.error)}. Refreshing the state before a retry is offered.`,
+          ? `${errorText(s.error)}. The state has been refreshed: check it before retrying.`
+          : `${errorText(s.error)}. Refreshing the state before a retry is offered.`,
         retry: gate.allowed ? { kind: "retry", label: twice } : { kind: "wait", reason: gate.reason },
       };
     }

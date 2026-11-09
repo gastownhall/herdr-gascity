@@ -533,7 +533,7 @@ export class CopyController {
         slingToIndex: f.slingTo,
         note: target === null
           ? null
-          : `Two gc calls: create the bead, then sling it to ${target}. A retry of the create cannot make a second bead; ${SLING_MAY_ROUTE_TWICE}`,
+          : `Two gc calls: create the bead, then sling it to ${target}. A retry of the create reuses its key: gc deduplicates it within 30 min, not across a gc restart, and not after a gc-side error (gc then drops the key). ${SLING_MAY_ROUTE_TWICE}`,
       };
     }
     if (this.closingBead) {

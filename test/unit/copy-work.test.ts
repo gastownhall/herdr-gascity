@@ -247,7 +247,7 @@ describe("the new-bead form", () => {
     await t.click(a, (c) => c.chooseSlingTarget(4));
     expect(a.copy.view(t.host.now()).dialog).toEqual({
       kind: "new-bead", agents: AGENTS, slingTo: "frontend/builder", slingToIndex: 4,
-      note: `Two gc calls: create the bead, then sling it to frontend/builder. A retry of the create cannot make a second bead; ${SLING_MAY_ROUTE_TWICE}`,
+      note: `Two gc calls: create the bead, then sling it to frontend/builder. A retry of the create reuses its key: gc deduplicates it within 30 min, not across a gc restart, and not after a gc-side error (gc then drops the key). ${SLING_MAY_ROUTE_TWICE}`,
     });
     await t.click(a, (c) => c.createBead(form("fix login")));
     await t.host.advance(500);
