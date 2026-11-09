@@ -41,13 +41,20 @@ export type ActionKind =
   | "agent.suspend"
   | "agent.resume"
   | "rig.suspend"
-  | "rig.resume";
+  | "rig.resume"
+  | "bead.create"
+  | "bead.sling"
+  | "bead.close"
+  | "bead.reopen";
 
 /** What an action acts on, by gc's own id or name. */
 export type ActionTarget =
   | { kind: "session"; id: string }
   | { kind: "agent"; name: string }
-  | { kind: "rig"; name: string };
+  | { kind: "rig"; name: string }
+  | { kind: "bead"; id: string }
+  /** A bead not created yet, by the title the person gave it. */
+  | { kind: "new-bead"; title: string };
 
 /** A question asked before a destructive action is sent. */
 export interface Confirmation {
@@ -56,10 +63,38 @@ export interface Confirmation {
   detail: string;
 }
 
-/** What a sent action's answer says: done now, or accepted (202) with an outcome to follow. */
+/**
+ * What a sent action's answer says: done now, or accepted (202) with an
+ * outcome to follow. `created` is the id gc gave what the action created
+ * (a new bead), for a follow-up action.
+ */
 export type Sent =
-  | { kind: "done"; detail: string }
+  | { kind: "done"; detail: string; created?: string }
   | { kind: "accepted"; requestId: string; afterSeq: string };
+
+/**
+ * A second action sent once the first one is done, built from what the
+ * first created (create a bead, then sling it). It is sent once, from the
+ * turn that learned the first is done, and only then: a first action that
+ * failed, is unknown or was not sent leaves it unsent, and a retry of the
+ * first sends it once that retry is done. It is its own action in the log,
+ * with its own outcome and retry; retrying it never repeats the first.
+ */
+export interface FollowUp {
+  /** What it does, as the log names it before it is sent, e.g. "Sling to worker". */
+  readonly verb: string;
+  /** The action, for the id gc gave what the first action created. */
+  spec(created: string): ActionSpec;
+}
+
+/** Where an action's follow-up is. */
+export type FollowUpState =
+  /** Not sent: the first action is not done (yet). */
+  | { kind: "waiting" }
+  /** Sent as action `id` of the same log. */
+  | { kind: "started"; id: number }
+  /** Never sent, and never will be: `reason`. */
+  | { kind: "not-sent"; reason: string };
 
 /** One action: a single gc API call and what the panel needs to know about it. */
 export interface ActionSpec {
@@ -76,6 +111,8 @@ export interface ActionSpec {
   readonly refresh: readonly Domain[];
   /** Sends the request; `key` goes out only where gc declares Idempotency-Key. Never throws, never retries. */
   send(c: GcClient, city: string, key: string): Promise<Result<Sent, GcError>>;
+  /** Sent once this action is done (FollowUp). */
+  readonly then?: FollowUp;
 }
 
 /** An outcome-unknown error. */
@@ -116,6 +153,8 @@ export interface ActionEntry {
    * refusal or an unsent retry does not prove the earlier attempt failed).
    */
   readonly keyPinned: boolean;
+  /** The follow-up's state; null for an action without one. */
+  readonly followUp: { readonly verb: string; readonly state: FollowUpState } | null;
 }
 
 /** The activity log of one city, oldest first; a new object (and rev) per change. */
@@ -131,10 +170,26 @@ export function isPending(state: ActionState): state is Extract<ActionState, { k
 
 /** A stable key for a target, e.g. "session:sc-20". */
 export function targetKey(t: ActionTarget): string {
-  return t.kind === "session" ? `session:${t.id}` : `${t.kind}:${t.name}`;
+  switch (t.kind) {
+    case "session":
+    case "bead":
+      return `${t.kind}:${t.id}`;
+    case "new-bead":
+      return `new-bead:${t.title}`;
+    default:
+      return `${t.kind}:${t.name}`;
+  }
 }
 
 /** The target as the activity log names it. */
 export function targetText(t: ActionTarget): string {
-  return t.kind === "session" ? `session ${t.id}` : `${t.kind} ${t.name}`;
+  switch (t.kind) {
+    case "session":
+    case "bead":
+      return `${t.kind} ${t.id}`;
+    case "new-bead":
+      return `new bead "${t.title}"`;
+    default:
+      return `${t.kind} ${t.name}`;
+  }
 }

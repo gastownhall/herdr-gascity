@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:0b82c0e687d688e451291701a89c9419fc6fd497a476c5820c3ff0d5507ea174 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:2d9fa00ff035a0fd65fc7dfefcf4ea841a576cedcb744cd3761f38bdcb7a30fd over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -1023,14 +1023,14 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     const shape = zod.def.shape;
     const propValues = {};
     for (const key in shape) {
-      const field = shape[key]._zod;
-      if (field.values) {
+      const field2 = shape[key]._zod;
+      if (field2.values) {
         if (!Object.prototype.hasOwnProperty.call(propValues, key)) {
           assignProp(propValues, key, /* @__PURE__ */ new Set());
         }
-        for (const v of field.values)
+        for (const v of field2.values)
           propValues[key].add(v);
-        if (field.optin !== void 0)
+        if (field2.optin !== void 0)
           propValues[key].add(void 0);
       }
     }
@@ -2927,6 +2927,18 @@ function agentAction(c, city, agent, action) {
 function rigAction(c, city, rig, action) {
   return c.call("post-v0-city-by-city-name-rig-by-name-by-action", { path: { cityName: city, name: rig, action } });
 }
+function sling(c, city, body) {
+  return c.call("post-v0-city-by-city-name-sling", { path: { cityName: city }, body });
+}
+function createBead(c, city, body, idempotencyKey) {
+  return c.call("create-bead", { path: { cityName: city }, body, idempotencyKey });
+}
+function closeBead(c, city, id, body) {
+  return c.call("post-v0-city-by-city-name-bead-by-id-close", { path: { cityName: city, id }, body });
+}
+function reopenBead(c, city, id) {
+  return c.call("post-v0-city-by-city-name-bead-by-id-reopen", { path: { cityName: city, id } });
+}
 
 // src/actions/answers.ts
 function statusDetail(body) {
@@ -3090,6 +3102,96 @@ function sessionRespond(id, requestId, option) {
   );
 }
 
+// src/actions/work.ts
+var SLING_MAY_ROUTE_TWICE = "gc cannot deduplicate a sling: if its outcome is unknown, a retry may route the bead twice. Check the board first.";
+var CREATED = ["ready"];
+var SLUNG = ["ready", "inProgress", "sessions"];
+var MOVED = ["ready", "inProgress"];
+function beadCreate(bead, slingTo) {
+  const body = { title: bead.title };
+  if (bead.description.trim() !== "") body.description = bead.description;
+  if (bead.priority !== null) body.priority = bead.priority;
+  if (bead.labels.length > 0) body.labels = [...bead.labels];
+  const spec2 = {
+    kind: "bead.create",
+    verb: "New bead",
+    target: { kind: "new-bead", title: bead.title },
+    operationId: "create-bead",
+    idempotent: OPERATIONS["create-bead"].idempotencyKey,
+    confirm: null,
+    refresh: CREATED,
+    send: async (c, city, key) => {
+      const r = await createBead(c, city, body, key);
+      return r.ok ? ok({ kind: "done", detail: `gc: created bead ${r.value.id}`, created: r.value.id }) : r;
+    }
+  };
+  if (slingTo === null) return spec2;
+  return { ...spec2, then: { verb: slingVerb(slingTo), spec: (created) => beadSling(created, slingTo) } };
+}
+function slingVerb(agent) {
+  return `Sling to ${agent}`;
+}
+function slingDetail(r, bead) {
+  const status2 = isUnrecognized(r.status) ? r.status.raw : r.status;
+  const parts = [`gc: ${status2} bead ${r.bead ?? bead} to ${r.target}`];
+  if (r.workflow_id !== void 0) parts.push(`workflow ${r.workflow_id}`);
+  if (r.convoy_id !== void 0) parts.push(`convoy ${r.convoy_id}`);
+  if (r.warnings.length > 0) parts.push(`warnings: ${r.warnings.join("; ")}`);
+  return parts.join("; ");
+}
+function beadSling(id, agent) {
+  return {
+    kind: "bead.sling",
+    verb: slingVerb(agent),
+    target: { kind: "bead", id },
+    operationId: "post-v0-city-by-city-name-sling",
+    idempotent: OPERATIONS["post-v0-city-by-city-name-sling"].idempotencyKey,
+    confirm: {
+      question: `Sling bead ${id} to ${agent}?`,
+      detail: `gc routes the bead to ${agent} (and applies the agent's default formula, if it has one). ${SLING_MAY_ROUTE_TWICE}`
+    },
+    refresh: SLUNG,
+    send: async (c, city) => {
+      const r = await sling(c, city, { target: agent, bead: id });
+      return r.ok ? ok({ kind: "done", detail: slingDetail(r.value, id) }) : r;
+    }
+  };
+}
+function beadClose(id, reason) {
+  const why = reason.trim();
+  return {
+    kind: "bead.close",
+    verb: "Close",
+    target: { kind: "bead", id },
+    operationId: "post-v0-city-by-city-name-bead-by-id-close",
+    idempotent: OPERATIONS["post-v0-city-by-city-name-bead-by-id-close"].idempotencyKey,
+    confirm: {
+      question: `Close bead ${id}?`,
+      detail: why === "" ? "gc closes the bead, with no reason. Reopen brings it back." : `gc closes the bead with the reason "${why}". Reopen brings it back.`
+    },
+    refresh: MOVED,
+    send: async (c, city) => {
+      const r = why === "" ? await closeBead(c, city, id) : await closeBead(c, city, id, { reason: why });
+      return r.ok ? ok({ kind: "done", detail: statusDetail(r.value) }) : r;
+    }
+  };
+}
+function beadReopen(id) {
+  return {
+    kind: "bead.reopen",
+    verb: "Reopen",
+    target: { kind: "bead", id },
+    operationId: "post-v0-city-by-city-name-bead-by-id-reopen",
+    idempotent: OPERATIONS["post-v0-city-by-city-name-bead-by-id-reopen"].idempotencyKey,
+    confirm: null,
+    refresh: MOVED,
+    send: async (c, city) => {
+      const r = await reopenBead(c, city, id);
+      return r.ok ? ok({ kind: "done", detail: statusDetail(r.value) }) : r;
+    }
+  };
+}
+
 // src/discovery/city.ts
 var PROPS_API = "props()";
 function decodeCopy(props2, lastSelection) {
@@ -3250,10 +3352,26 @@ function isPending(state) {
   return state.kind === "sending" || state.kind === "polling";
 }
 function targetKey(t) {
-  return t.kind === "session" ? `session:${t.id}` : `${t.kind}:${t.name}`;
+  switch (t.kind) {
+    case "session":
+    case "bead":
+      return `${t.kind}:${t.id}`;
+    case "new-bead":
+      return `new-bead:${t.title}`;
+    default:
+      return `${t.kind}:${t.name}`;
+  }
 }
 function targetText(t) {
-  return t.kind === "session" ? `session ${t.id}` : `${t.kind} ${t.name}`;
+  switch (t.kind) {
+    case "session":
+    case "bead":
+      return `${t.kind} ${t.id}`;
+    case "new-bead":
+      return `new bead "${t.title}"`;
+    default:
+      return `${t.kind} ${t.name}`;
+  }
 }
 
 // src/vm/sanitize.ts
@@ -3578,7 +3696,8 @@ var ActionLedger = class {
       owner,
       group: {},
       token: 0,
-      keyPinned: false
+      keyPinned: false,
+      followUp: spec2.then ? { kind: "waiting" } : null
     };
     this.records.push(rec);
     this.trim();
@@ -3694,6 +3813,7 @@ var ActionLedger = class {
     const sent = r.value;
     if (sent.kind === "done") {
       this.resolve(rec, { kind: "done", at: now, detail: sent.detail, requestId: null });
+      this.startFollowUp(rec, sent.created);
       return;
     }
     rec.state = {
@@ -3742,6 +3862,7 @@ var ActionLedger = class {
       this.resolve(rec, { kind: "unknown", at: now, error: unknown2(s.requestId, rec.spec.operationId, "unreadable-response", [describe3(failure2)]) });
     } else if (outcome.state === "succeeded") {
       this.resolve(rec, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId });
+      this.startFollowUp(rec, void 0);
     } else {
       rec.state = { ...next, lastError: null };
       this.commit();
@@ -3756,9 +3877,30 @@ var ActionLedger = class {
     this.trim();
     this.commit();
   }
+  /**
+   * The first action is done: sends its follow-up now, in this turn (the
+   * owner's), for the id gc gave what it created. Once only.
+   */
+  startFollowUp(rec, created) {
+    const then2 = rec.spec.then;
+    if (!then2 || rec.followUp?.kind !== "waiting") return;
+    const owner = rec.owner;
+    if (created === void 0 || owner === null) {
+      rec.followUp = {
+        kind: "not-sent",
+        reason: created === void 0 ? "gc's answer did not name what it created" : "no Gas City view was left to send it"
+      };
+      this.commit();
+      return;
+    }
+    rec.followUp = { kind: "started", id: this.start(owner, then2.spec(created)) };
+    this.commit();
+  }
   refreshAfter(rec) {
     this.deps.refresh(rec.spec.refresh);
-    if (rec.spec.target.kind === "session") this.deps.refreshDetail(rec.spec.target.id);
+    const t = rec.spec.target;
+    if (t.kind === "session") this.deps.refreshDetail(t.id);
+    if (t.kind === "bead") this.deps.refreshBead(t.id);
   }
   /** Drops the oldest finished actions beyond ACTIVITY_LIMIT. */
   trim() {
@@ -3773,7 +3915,16 @@ var ActionLedger = class {
     }
   }
   entry(rec) {
-    return { id: rec.id, spec: rec.spec, key: rec.key, attempt: rec.attempt, startedAt: rec.startedAt, state: rec.state, keyPinned: rec.keyPinned };
+    return {
+      id: rec.id,
+      spec: rec.spec,
+      key: rec.key,
+      attempt: rec.attempt,
+      startedAt: rec.startedAt,
+      state: rec.state,
+      keyPinned: rec.keyPinned,
+      followUp: rec.spec.then && rec.followUp ? { verb: rec.spec.then.verb, state: rec.followUp } : null
+    };
   }
   commit() {
     this.snap = { rev: ++this.rev, entries: this.records.map((r) => this.entry(r)) };
@@ -3804,7 +3955,36 @@ function retryLabel(e) {
   if (!e.keyPinned) return "Retry";
   return e.spec.idempotent ? SAME_KEY_RETRY : MAY_REPEAT_RETRY;
 }
+function followUpText(e) {
+  const f = e.followUp;
+  if (f === null) return null;
+  let where;
+  if (f.state.kind === "started") where = `sent (action ${f.state.id})`;
+  else if (f.state.kind === "not-sent") where = `not sent, ${f.state.reason}`;
+  else {
+    switch (e.state.kind) {
+      case "sending":
+      case "polling":
+      case "done":
+        where = "sent once the bead is created";
+        break;
+      case "unknown":
+        where = "not sent, the bead may not exist; a retry of the create sends it once gc confirms the bead";
+        break;
+      case "failed":
+      case "not-sent":
+        where = "not sent, the bead was not created";
+        break;
+    }
+  }
+  return cleanLine(`then ${f.verb}: ${where}`);
+}
 function row(e, city, now) {
+  const r = stateRow(e, city, now);
+  const then2 = followUpText(e);
+  return then2 === null ? r : { ...r, detail: `${r.detail.replace(/\.$/, "")}; ${then2}` };
+}
+function stateRow(e, city, now) {
   const s = e.state;
   const base = {
     id: e.id,
@@ -3846,7 +4026,7 @@ function row(e, city, now) {
         tone: "unknown",
         refresh: true,
         requestId: s.error.requestId === null ? null : cleanLine(s.error.requestId),
-        detail: gate.allowed ? `outcome unknown: ${errorText(s.error)}. The state has been refreshed: check it before retrying.` : `outcome unknown: ${errorText(s.error)}. Refreshing the state before a retry is offered.`,
+        detail: gate.allowed ? `${errorText(s.error)}. The state has been refreshed: check it before retrying.` : `${errorText(s.error)}. Refreshing the state before a retry is offered.`,
         retry: gate.allowed ? { kind: "retry", label: twice } : { kind: "wait", reason: gate.reason }
       };
     }
@@ -4179,6 +4359,14 @@ var CityStore = class {
       part.held = false;
       part.due = true;
     }
+    this.commit();
+  }
+  /** Refetches a bead fetched by id (a watched or active bead) at the next tick; a bead the store does not fetch by id is left alone. */
+  refreshBead(beadId) {
+    const b = this.lookups.get(beadId);
+    if (!b) return;
+    b.held = false;
+    b.due = true;
     this.commit();
   }
   /** Ends the store: a running step's late results are dropped. */
@@ -5150,6 +5338,8 @@ function beadDetailModel(input) {
   return {
     kind: "bead",
     id,
+    ref: selected,
+    closed: source.status === "closed",
     title: cleanLine(source.title),
     state,
     facts: detailFacts(source, state),
@@ -5497,8 +5687,13 @@ var CopyController = class {
   beadWatch = null;
   signature = "";
   closed = false;
+  /** Asking before sending one of `specs`; `pick` asks one question for all of them. */
   confirming = null;
   creating = null;
+  /** The new-bead form: the agents listed when it opened (gc's names), and the chosen one's index. */
+  beadForm = null;
+  /** The close-bead form, for this bead (gc's id). */
+  closingBead = null;
   notice = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   applied = /* @__PURE__ */ new WeakSet();
@@ -5637,16 +5832,14 @@ var CopyController = class {
    */
   request(spec2) {
     if (spec2.confirm !== null) {
-      this.creating = null;
-      this.confirming = { specs: [spec2], retryOf: null };
+      this.ask({ specs: [spec2], retryOf: null, pick: null });
       return;
     }
     this.send(spec2);
   }
   /** Kill asks first, offering a plain and a forced kill. */
   requestKill(sessionId) {
-    this.creating = null;
-    this.confirming = { specs: [sessionKill(sessionId, false), sessionKill(sessionId, true)], retryOf: null };
+    this.ask({ specs: [sessionKill(sessionId, false), sessionKill(sessionId, true)], retryOf: null, pick: null });
   }
   /** The person confirmed the dialog with its `choice`-th action. */
   confirm(choice) {
@@ -5659,16 +5852,14 @@ var CopyController = class {
   }
   /** Closes the dialog without acting. */
   cancelDialog() {
-    this.confirming = null;
-    this.creating = null;
+    this.clearDialogs();
   }
   /** Retries an action from the activity log (a destructive one asks again). */
   retryAction(id) {
     const entry = this.city?.activity().entries.find((e) => e.id === id);
     if (!entry) return;
     if (entry.spec.confirm !== null) {
-      this.creating = null;
-      this.confirming = { specs: [entry.spec], retryOf: id };
+      this.ask({ specs: [entry.spec], retryOf: id, pick: null });
       return;
     }
     this.retryNow(id);
@@ -5707,8 +5898,77 @@ var CopyController = class {
   }
   /** Opens the new-session form for an agent (gc's qualified name). */
   openNewSession(agent) {
-    this.confirming = null;
+    this.clearDialogs();
     this.creating = { agent };
+  }
+  /**
+   * Sling… on the open bead: asks which of the city's agents to route it to,
+   * saying that gc cannot deduplicate a sling. Picking one (confirm) sends it.
+   */
+  requestSling() {
+    const id = this.selectedBeadRef();
+    if (id === null) return;
+    const agents = this.agentNames();
+    if (agents.length === 0) {
+      this.refuse("the agent list has not loaded yet");
+      return;
+    }
+    this.ask({
+      specs: agents.map((a) => beadSling(id, a)),
+      retryOf: null,
+      pick: {
+        question: `Sling bead ${id} to which agent?`,
+        detail: `gc routes the bead to the agent you pick (and applies the agent's default formula, if it has one). ${SLING_MAY_ROUTE_TWICE}`,
+        labels: agents
+      }
+    });
+  }
+  /** Close… on the open bead: opens the close form (a reason, then Close). */
+  requestCloseBead() {
+    const id = this.selectedBeadRef();
+    if (id === null) return;
+    this.clearDialogs();
+    this.closingBead = { id };
+  }
+  /** Closes the bead of the close form with `reason` (blank: none). Returns whether it was sent. */
+  closeBead(reason) {
+    const c = this.closingBead;
+    if (!c) return false;
+    this.closingBead = null;
+    return this.send(beadClose(c.id, reason));
+  }
+  /** Reopens the open bead. */
+  reopenBead() {
+    const id = this.selectedBeadRef();
+    if (id !== null) this.send(beadReopen(id));
+  }
+  /** Opens the new-bead form, with the city's agents to sling it to. */
+  openNewBead() {
+    this.clearDialogs();
+    this.beadForm = { agents: this.agentNames(), slingTo: null };
+  }
+  /** Chooses the form's sling target by its place in the form's agent list; null: create only. */
+  chooseSlingTarget(index) {
+    const f = this.beadForm;
+    if (!f) return;
+    f.slingTo = index !== null && index >= 0 && index < f.agents.length ? index : null;
+  }
+  /**
+   * Creates a bead from the form (and slings it to the chosen agent once gc
+   * created it). Refuses a blank title or a priority that is not a whole
+   * number, keeping the form open. Returns whether it was sent.
+   */
+  createBead(form) {
+    const f = this.beadForm;
+    if (!f) return false;
+    const title = form.title.trim();
+    if (title === "") return this.refuse("a new bead needs a title");
+    const p = form.priority.trim();
+    if (p !== "" && !/^\d+$/.test(p)) return this.refuse("priority must be a whole number, like 2 (or blank)");
+    const labels = form.labels.split(",").map((l) => l.trim()).filter((l) => l !== "");
+    const slingTo = f.slingTo === null ? null : f.agents[f.slingTo] ?? null;
+    this.beadForm = null;
+    return this.send(beadCreate({ title, description: form.description, priority: p === "" ? null : Number(p), labels }, slingTo));
   }
   /** Starts a session of the form's agent; `alias` may be empty. Returns whether it was sent. */
   createSession(alias) {
@@ -5734,6 +5994,34 @@ var CopyController = class {
     const r = this.city.retryAction(id);
     this.notice = r.ok ? null : `not retried: ${r.error}`;
   }
+  ask(c) {
+    this.clearDialogs();
+    this.confirming = c;
+  }
+  clearDialogs() {
+    this.confirming = null;
+    this.creating = null;
+    this.beadForm = null;
+    this.closingBead = null;
+  }
+  /** The city's agents by gc's qualified names, in gc's order. */
+  agentNames() {
+    return this.city?.snapshot().agents.value?.items.map((a) => a.name) ?? [];
+  }
+  /** The open bead's id as gc sent it, if the board shows it or gc returned it by id; else says why not. */
+  selectedBeadRef() {
+    const id = this.selectedBead;
+    const s = this.city?.snapshot();
+    if (id === null || !s) {
+      this.refuse("open a bead first");
+      return null;
+    }
+    if (beadDetailModel({ snapshot: s, now: this.deps.clock.now(), selected: id }).kind !== "bead") {
+      this.refuse(`bead ${cleanLine(id)} is not on the board or known to gc`);
+      return null;
+    }
+    return id;
+  }
   refuse(why) {
     this.notice = why;
     return false;
@@ -5746,7 +6034,26 @@ var CopyController = class {
   }
   dialog() {
     if (this.creating) return { kind: "new-session", agent: cleanLine(this.creating.agent) };
+    const f = this.beadForm;
+    if (f) {
+      const target = f.slingTo === null ? null : cleanLine(f.agents[f.slingTo] ?? "");
+      return {
+        kind: "new-bead",
+        agents: f.agents.map(cleanLine),
+        slingTo: target,
+        slingToIndex: f.slingTo,
+        note: target === null ? null : `Two gc calls: create the bead, then sling it to ${target}. A retry of the create reuses its key: gc deduplicates it within 30 min, not across a gc restart, and not after a gc-side error (gc then drops the key). ${SLING_MAY_ROUTE_TWICE}`
+      };
+    }
+    if (this.closingBead) {
+      return {
+        kind: "close-bead",
+        question: cleanLine(`Close bead ${this.closingBead.id}?`),
+        detail: "gc closes the bead with the reason below as its close reason (blank: none). Reopen brings it back."
+      };
+    }
     const c = this.confirming;
+    if (c?.pick) return { kind: "pick", question: cleanLine(c.pick.question), detail: cleanLine(c.pick.detail), choices: c.pick.labels.map(cleanLine) };
     const first = c?.specs[0];
     if (!c || !first?.confirm) return null;
     const choices = c.specs.map((x) => ({ label: cleanLine(x.verb), detail: cleanLine(x.confirm?.detail ?? "") }));
@@ -6570,6 +6877,7 @@ var SyncRegistry = class {
         dropQueued: (group) => ep.dropQueued(group),
         refresh: (domains) => store.refresh(domains),
         refreshDetail: (sessionId) => store.refreshDetail(sessionId),
+        refreshBead: (beadId) => store.refreshBead(beadId),
         newKey: this.deps.newKey ?? (() => newIdempotencyKey())
       });
       entry = { store, ledger, subs: 0 };
@@ -6820,13 +7128,44 @@ function button(id, text, onClick) {
 function waiting(id, text, why, theme2) {
   return muted(label(id, `[${text}: ${why}]`), theme2);
 }
-function renderDialog(d, theme2, actions, alias) {
+function field(id, text, state) {
+  return h_flex().id(id).gap(4).child(label(`${id}-label`, text)).child(Input.new(state));
+}
+function newBeadForm(d, theme2, actions, inputs, cancel) {
+  let form = v_flex().id("gascity-dialog").gap(4).child(label("gascity-dialog-question", "New bead"));
+  if (inputs !== null) {
+    form = form.child(field("gascity-dialog-title", "Title:", inputs.beadTitle)).child(field("gascity-dialog-description", "Description:", inputs.beadDescription)).child(field("gascity-dialog-priority", "Priority:", inputs.beadPriority)).child(field("gascity-dialog-labels", "Labels:", inputs.beadLabels));
+  }
+  const targets = [label("gascity-dialog-sling-label", "Sling to:")];
+  const target = (id, text, chosen, index) => {
+    if (chosen) targets.push(label(`${id}-chosen`, "▸"));
+    targets.push(button(id, text, (cx) => actions.chooseSlingTarget(index, cx)));
+  };
+  target("gascity-dialog-sling-none", "none", d.slingTo === null, null);
+  d.agents.forEach((a, i) => target(`gascity-dialog-sling-${i}`, a, d.slingToIndex === i, i));
+  form = form.child(h_flex().id("gascity-dialog-sling").gap(4).children(targets));
+  if (d.agents.length === 0) form = form.child(muted(label("gascity-dialog-sling-empty", "no agents listed yet: the bead can be slung from its detail later"), theme2));
+  if (d.note !== null) form = form.child(muted(label("gascity-dialog-note", d.note), theme2));
+  const create = button("gascity-dialog-create-bead", d.slingTo === null ? "Create" : "Create and sling", (cx) => actions.createBead(cx));
+  return form.child(h_flex().id("gascity-dialog-buttons").gap(8).child(create).child(cancel));
+}
+function renderDialog(d, theme2, actions, inputs) {
   if (d === null) return null;
   const cancel = button("gascity-dialog-cancel", "Cancel", (cx) => actions.cancelDialog(cx));
   if (d.kind === "new-session") {
     let form = v_flex().id("gascity-dialog").gap(4).child(label("gascity-dialog-question", `New session of agent ${d.agent}`));
-    if (alias !== null) form = form.child(h_flex().id("gascity-dialog-alias").gap(4).child(label("gascity-dialog-alias-label", "Alias (optional):")).child(Input.new(alias)));
+    if (inputs !== null) form = form.child(field("gascity-dialog-alias", "Alias (optional):", inputs.alias));
     return form.child(h_flex().id("gascity-dialog-buttons").gap(8).child(button("gascity-dialog-create", "Start session", (cx) => actions.createSession(cx))).child(cancel));
+  }
+  if (d.kind === "new-bead") return newBeadForm(d, theme2, actions, inputs, cancel);
+  if (d.kind === "close-bead") {
+    let form = v_flex().id("gascity-dialog").gap(4).child(label("gascity-dialog-question", d.question)).child(muted(label("gascity-dialog-detail", d.detail), theme2));
+    if (inputs !== null) form = form.child(field("gascity-dialog-reason", "Reason:", inputs.closeReason));
+    return form.child(h_flex().id("gascity-dialog-buttons").gap(8).child(button("gascity-dialog-close-bead", "Close bead", (cx) => actions.closeBead(cx))).child(cancel));
+  }
+  if (d.kind === "pick") {
+    const picks = d.choices.map((c, i) => button(`gascity-dialog-pick-${i}`, c, (cx) => actions.confirm(i, cx)));
+    return v_flex().id("gascity-dialog").gap(4).child(label("gascity-dialog-question", d.question)).child(muted(label("gascity-dialog-detail", d.detail), theme2)).child(h_flex().id("gascity-dialog-buttons").gap(8).children([...picks, cancel]));
   }
   let el = v_flex().id("gascity-dialog").gap(4).child(label("gascity-dialog-question", d.question));
   d.choices.forEach((c, i) => {
@@ -6950,11 +7289,19 @@ function column(key, m, body, theme2) {
   if (m.empty !== null) data = data.child(muted(label(`${id}-empty`, m.empty), theme2));
   return el.child(greyedIf(data, state.stale, theme2));
 }
-function beadDetail(m, theme2, actions) {
+function beadActions(m, activity, theme2, actions) {
+  const one = (key, text, busy, onClick) => busy ? waiting(`gascity-bead-action-${key}`, text, "under way", theme2) : button(`gascity-bead-action-${key}`, `${text}${key === "reopen" ? "" : "…"}`, onClick);
+  const buttons = m.closed ? [one("reopen", "Reopen", isBusy(activity, beadReopen(m.ref)), (cx) => actions.reopenBead(cx))] : [
+    one("sling", "Sling", isBusy(activity, beadSling(m.ref, "")), (cx) => actions.requestSling(cx)),
+    one("close", "Close", isBusy(activity, beadClose(m.ref, "")), (cx) => actions.requestCloseBead(cx))
+  ];
+  return h_flex3().id("gascity-bead-actions").gap(8).children(buttons);
+}
+function beadDetail(m, theme2, actions, activity) {
   if (m.kind === "none") return null;
   const close = div3().id("gascity-bead-close").on_click((_, cx) => actions.selectBead(null, cx)).child("Close");
   if (m.kind === "missing") return v_flex3().id("gascity-bead-detail").gap(4).child(label("gascity-bead-missing", m.text)).child(close);
-  let el = v_flex3().id("gascity-bead-detail").gap(4).child(h_flex3().id("gascity-bead-head").gap(8).child(label("gascity-bead-title", `Bead ${m.id}: "${m.title}"`)).child(close)).child(muted(label("gascity-bead-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2));
+  let el = v_flex3().id("gascity-bead-detail").gap(4).child(h_flex3().id("gascity-bead-head").gap(8).child(label("gascity-bead-title", `Bead ${m.id}: "${m.title}"`)).child(close)).child(beadActions(m, activity, theme2, actions)).child(muted(label("gascity-bead-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2));
   if (m.closeReason !== null) el = el.child(label("gascity-bead-reason", `Close reason: ${m.closeReason}`));
   if (m.region.age !== null) el = el.child(muted(label("gascity-bead-age", m.region.stale ? `${m.region.age} (may be out of date)` : m.region.age), theme2));
   if (m.region.error !== null) el = el.child(label("gascity-bead-error", m.region.error));
@@ -6963,7 +7310,7 @@ function beadDetail(m, theme2, actions) {
   else description = description.children(m.description.split("\n").map((line, i) => label(`gascity-bead-line-${i}`, line)));
   return el.child(greyedIf(description, m.region.stale, theme2));
 }
-function renderBoard(m, detail, theme2, actions) {
+function renderBoard(m, detail, theme2, actions, activity) {
   const filter = m.hidden > 0 ? `${m.filter} · ${m.hidden} hidden` : m.filter;
   const ready = column("ready", m.ready, m.ready.cards.map((c, i) => card2(c, `gascity-card-ready-${i}`, theme2, actions)), theme2);
   const inProgress = column("inprogress", m.inProgress, m.inProgress.cards.map((c, i) => card2(c, `gascity-card-inprogress-${i}`, theme2, actions)), theme2);
@@ -6973,8 +7320,8 @@ function renderBoard(m, detail, theme2, actions) {
     closedBody.push(...m.closed.earlier.map((c, i) => card2(c, `gascity-card-earlier-${i}`, theme2, actions)));
   }
   const closed2 = column("closed", m.closed, closedBody, theme2);
-  let el = v_flex3().id("gascity-work").flex_1().gap(6).child(label("gascity-work-title", "Work")).child(muted(label("gascity-work-filter", filter), theme2)).child(h_flex3().id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed2));
-  const d = beadDetail(detail, theme2, actions);
+  let el = v_flex3().id("gascity-work").flex_1().gap(6).child(h_flex3().id("gascity-work-head").gap(8).child(label("gascity-work-title", "Work")).child(button("gascity-work-new", "+ New bead", (cx) => actions.openNewBead(cx)))).child(muted(label("gascity-work-filter", filter), theme2)).child(h_flex3().id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed2));
+  const d = beadDetail(detail, theme2, actions, activity);
   if (d !== null) el = el.child(d);
   return el;
 }
@@ -7107,13 +7454,13 @@ function renderPanel(model) {
   }
   const { view, theme: theme2, actions, inputs } = model;
   root = root.children(renderHeader(view.header, theme2, actions));
-  const dialog = renderDialog(view.dialog, theme2, actions, inputs?.alias ?? null);
+  const dialog = renderDialog(view.dialog, theme2, actions, inputs);
   if (dialog !== null) root = root.child(dialog);
   const notice = renderNotice(view.notice);
   if (notice !== null) root = root.child(notice);
   const regions = [];
   if (view.agents !== null) regions.push(div6().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme2, actions, view.activity)));
-  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions));
+  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions, view.activity));
   if (regions.length > 0) root = root.child(h_flex6().id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme2, actions, { activity: view.activity, message: inputs?.message ?? null });
   if (detail !== null) root = root.child(detail);
@@ -7159,9 +7506,29 @@ function setUp() {
   });
   return { kind: "ready", copy };
 }
+function beadForm(inputs) {
+  return {
+    title: inputs.beadTitle.value(),
+    description: inputs.beadDescription.value(),
+    priority: inputs.beadPriority.value(),
+    labels: inputs.beadLabels.value()
+  };
+}
+function createBead2(copy, inputs) {
+  if (!copy.createBead(beadForm(inputs))) return;
+  for (const i of [inputs.beadTitle, inputs.beadDescription, inputs.beadPriority, inputs.beadLabels]) i.set_value("");
+}
+function closeBead2(copy, inputs) {
+  if (copy.closeBead(inputs.closeReason.value())) inputs.closeReason.set_value("");
+}
 function inputsFor(copy) {
   const message = InputState.new({ placeholder: "Message to the session" });
   const alias = InputState.new({ placeholder: "alias (optional)" });
+  const beadTitle = InputState.new({ placeholder: "title (required)" });
+  const beadDescription = InputState.new({ placeholder: "description (optional)" });
+  const beadPriority = InputState.new({ placeholder: "priority, e.g. 2 (optional)" });
+  const beadLabels = InputState.new({ placeholder: "labels, comma-separated (optional)" });
+  const closeReason = InputState.new({ placeholder: "close reason (optional)" });
   message.on("submit", (_, cx) => {
     if (copy.sendInput(message.value(), "default")) message.set_value("");
     cx.notify();
@@ -7170,7 +7537,16 @@ function inputsFor(copy) {
     if (copy.createSession(alias.value())) alias.set_value("");
     cx.notify();
   });
-  return { message, alias };
+  const inputs = { message, alias, beadTitle, beadDescription, beadPriority, beadLabels, closeReason };
+  beadTitle.on("submit", (_, cx) => {
+    createBead2(copy, inputs);
+    cx.notify();
+  });
+  closeReason.on("submit", (_, cx) => {
+    closeBead2(copy, inputs);
+    cx.notify();
+  });
+  return inputs;
 }
 function actionsFor(copy, inputs) {
   return {
@@ -7224,6 +7600,34 @@ function actionsFor(copy, inputs) {
     },
     createSession: (cx) => {
       if (inputs !== null && copy.createSession(inputs.alias.value())) inputs.alias.set_value("");
+      cx.notify();
+    },
+    openNewBead: (cx) => {
+      copy.openNewBead();
+      cx.notify();
+    },
+    chooseSlingTarget: (index, cx) => {
+      copy.chooseSlingTarget(index);
+      cx.notify();
+    },
+    createBead: (cx) => {
+      if (inputs !== null) createBead2(copy, inputs);
+      cx.notify();
+    },
+    requestSling: (cx) => {
+      copy.requestSling();
+      cx.notify();
+    },
+    requestCloseBead: (cx) => {
+      copy.requestCloseBead();
+      cx.notify();
+    },
+    closeBead: (cx) => {
+      if (inputs !== null) closeBead2(copy, inputs);
+      cx.notify();
+    },
+    reopenBead: (cx) => {
+      copy.reopenBead();
       cx.notify();
     },
     confirm: (choice, cx) => {

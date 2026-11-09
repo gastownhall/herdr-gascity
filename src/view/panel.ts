@@ -8,7 +8,7 @@ import type { ThemeRead } from "../host.ts";
 import { renderAgents, type AgentsActions } from "./agents.ts";
 import { renderBoard, type BoardActions } from "./board.ts";
 import { renderDetail, type DetailActions } from "./detail.ts";
-import { renderActivity, renderDialog, renderNotice, type DialogActions } from "./dialogs.ts";
+import { renderActivity, renderDialog, renderNotice, type DialogActions, type DialogInputs } from "./dialogs.ts";
 import { renderHeader, type HeaderActions } from "./header.ts";
 import { label, muted, themedRoot } from "./text.ts";
 
@@ -18,11 +18,9 @@ export interface PanelActions extends HeaderActions, AgentsActions, BoardActions
 }
 
 /** The copy's retained text inputs, created in init (never in render). */
-export interface PanelInputs {
+export interface PanelInputs extends DialogInputs {
   /** The detail pane's send box. */
   message: InputState;
-  /** The new-session form's alias. */
-  alias: InputState;
 }
 
 /** What the panel shows. */
@@ -70,14 +68,14 @@ export function renderPanel(model: PanelModel): GpuiElement {
   }
   const { view, theme, actions, inputs } = model;
   root = root.children(renderHeader(view.header, theme, actions));
-  const dialog = renderDialog(view.dialog, theme, actions, inputs?.alias ?? null);
+  const dialog = renderDialog(view.dialog, theme, actions, inputs);
   if (dialog !== null) root = root.child(dialog);
   const notice = renderNotice(view.notice);
   if (notice !== null) root = root.child(notice);
   // Agents beside the work board; the session detail below both.
   const regions: GpuiElement[] = [];
   if (view.agents !== null) regions.push(div().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme, actions, view.activity)));
-  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme, actions));
+  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme, actions, view.activity));
   if (regions.length > 0) root = root.child(h_flex().id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme, actions, { activity: view.activity, message: inputs?.message ?? null });
   if (detail !== null) root = root.child(detail);

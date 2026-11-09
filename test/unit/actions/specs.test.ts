@@ -1,4 +1,4 @@
-// The action specs (src/actions/session.ts, agent.ts, rig.ts): each one is a
+// The action specs (src/actions/session.ts, agent.ts, rig.ts, work.ts): each one is a
 // single gc API call. These tests pin the exact request every action sends —
 // method, path, query, body, X-GC-Request, and Idempotency-Key exactly where
 // the pinned spec declares it — and how its answer reads, from the recorded
@@ -9,6 +9,7 @@ import { agentResume, agentSuspend } from "../../../src/actions/agent.ts";
 import type { ActionSpec } from "../../../src/actions/activity.ts";
 import { rigResume, rigSuspend } from "../../../src/actions/rig.ts";
 import * as session from "../../../src/actions/session.ts";
+import * as work from "../../../src/actions/work.ts";
 import { createGcClient, X_GC_REQUEST, type HostRequest } from "../../../src/gc/client.ts";
 import { OPERATIONS } from "../../../src/gc/operations.gen.ts";
 import { fixtureBody } from "../sync/fakes.ts";
@@ -42,7 +43,8 @@ async function run(spec: ActionSpec, reply: { status: number; body: unknown }) {
   return { req: seen[0] as Seen, result };
 }
 
-const fixture = (op: string, name = "ok") => ({ status: op === "create-session" || op === "submit-session" || op === "send-session-message" || op === "respond-session" ? 202 : 200, body: fixtureBody(op, name) });
+const ACCEPTED = new Set(["create-session", "submit-session", "send-session-message", "respond-session"]);
+const fixture = (op: string, name = "ok") => ({ status: ACCEPTED.has(op) ? 202 : op === "create-bead" ? 201 : 200, body: fixtureBody(op, name) });
 
 type Case = [name: string, spec: ActionSpec, method: string, path: string, body: unknown, reply: { status: number; body: unknown }, sent: unknown];
 
@@ -88,6 +90,20 @@ const CASES: Case[] = [
     fixture("post-v0-city-by-city-name-rig-by-name-by-action", "suspend"), { kind: "done", detail: "gc: ok" }],
   ["rig resume", rigResume("frontend"), "POST", "/v0/city/scratch/rig/frontend/resume", undefined,
     fixture("post-v0-city-by-city-name-rig-by-name-by-action", "resume"), { kind: "done", detail: "gc: ok" }],
+  ["new bead", work.beadCreate({ title: "recorder bead mw8vmef1", description: "recorded for the herdr-gascity contract fixtures", priority: 2, labels: [] }, null),
+    "POST", "/v0/city/scratch/beads", { title: "recorder bead mw8vmef1", description: "recorded for the herdr-gascity contract fixtures", priority: 2 },
+    fixture("create-bead"), { kind: "done", detail: "gc: created bead sc-74", created: "sc-74" }],
+  ["new bead, title only, with labels", work.beadCreate({ title: "t", description: "", priority: null, labels: ["ui", "p1"] }, null),
+    "POST", "/v0/city/scratch/beads", { title: "t", labels: ["ui", "p1"] },
+    fixture("create-bead"), { kind: "done", detail: "gc: created bead sc-74", created: "sc-74" }],
+  ["sling", work.beadSling("sc-74", "worker"), "POST", "/v0/city/scratch/sling", { target: "worker", bead: "sc-74" },
+    fixture("post-v0-city-by-city-name-sling"), { kind: "done", detail: "gc: slung bead sc-74 to worker; convoy sc-75" }],
+  ["close bead with a reason", work.beadClose("sc-74", "recorded mw8vmef1"), "POST", "/v0/city/scratch/bead/sc-74/close", { reason: "recorded mw8vmef1" },
+    fixture("post-v0-city-by-city-name-bead-by-id-close"), { kind: "done", detail: "gc: closed" }],
+  ["close bead without a reason", work.beadClose("sc-74", "  "), "POST", "/v0/city/scratch/bead/sc-74/close", undefined,
+    fixture("post-v0-city-by-city-name-bead-by-id-close"), { kind: "done", detail: "gc: closed" }],
+  ["reopen bead", work.beadReopen("sc-74"), "POST", "/v0/city/scratch/bead/sc-74/reopen", undefined,
+    fixture("post-v0-city-by-city-name-bead-by-id-reopen"), { kind: "done", detail: "gc: reopened" }],
 ];
 
 describe("every action is one gc API call", () => {
@@ -111,13 +127,35 @@ describe("every action is one gc API call", () => {
     expect(new Set(keyed)).toEqual(new Set([
       "create-session", "post-v0-city-by-city-name-session-by-id-wake", "post-v0-city-by-city-name-session-by-id-suspend",
       "post-v0-city-by-city-name-session-by-id-stop", "post-v0-city-by-city-name-session-by-id-close",
-      "post-v0-city-by-city-name-session-by-id-kill", "submit-session", "send-session-message", "respond-session",
+      "post-v0-city-by-city-name-session-by-id-kill", "submit-session", "send-session-message", "respond-session", "create-bead",
     ]));
     expect(new Set(unkeyed)).toEqual(new Set([
       "post-v0-city-by-city-name-session-by-id-pin", "post-v0-city-by-city-name-session-by-id-unpin",
       "post-v0-city-by-city-name-agent-by-base-by-action", "post-v0-city-by-city-name-agent-by-dir-by-base-by-action",
-      "post-v0-city-by-city-name-rig-by-name-by-action",
+      "post-v0-city-by-city-name-rig-by-name-by-action", "post-v0-city-by-city-name-sling",
+      "post-v0-city-by-city-name-bead-by-id-close", "post-v0-city-by-city-name-bead-by-id-reopen",
     ]));
+  });
+
+  test("a bead id or agent name is sent as gc listed it: path-escaped, never interpreted", async () => {
+    const { req } = await run(work.beadClose("rig/x 1", "r"), fixture("post-v0-city-by-city-name-bead-by-id-close"));
+    expect(req.path).toBe("/v0/city/scratch/bead/rig%2Fx%201/close");
+    const sling = await run(work.beadSling("a;b", "frontend/builder"), fixture("post-v0-city-by-city-name-sling"));
+    expect(sling.req.body).toEqual({ target: "frontend/builder", bead: "a;b" });
+  });
+
+  test("a sling that gc answers partial, with warnings, says so", async () => {
+    const { result } = await run(work.beadSling("sc-74", "worker"), {
+      status: 200, body: { status: "partial", target: "worker", bead: "sc-74", workflow_id: "wf-1", warnings: ["bead already routed to worker"] },
+    });
+    expect(result).toEqual({ ok: true, value: { kind: "done", detail: "gc: partial bead sc-74 to worker; workflow wf-1; warnings: bead already routed to worker" } });
+  });
+
+  test("gc's validation refusal of a new bead is the action's error, verbatim", async () => {
+    const { result } = await run(work.beadCreate({ title: "x", description: "", priority: null, labels: [] }, null), {
+      status: 422, body: fixtureBody("create-bead", "validation-failed"),
+    });
+    expect(result).toMatchObject({ ok: false, error: { kind: "http", status: 422, problem: { detail: "validation failed" } } });
   });
 
   test("a rig action that could not stop every session says which", async () => {
@@ -141,9 +179,11 @@ describe("what each action is", () => {
       session.sessionClose("s"), session.sessionKill("s", false), session.sessionKill("s", true), session.sessionPin("s"),
       session.sessionUnpin("s"), session.sessionSubmit("s", "m", "default"), session.sessionMessage("s", "m"),
       session.sessionRespond("s", "r", "approve"), agentSuspend("a"), agentResume("a"), rigSuspend("r"), rigResume("r"),
+      work.beadCreate({ title: "t", description: "", priority: null, labels: [] }, null), work.beadSling("b", "a"), work.beadClose("b", ""),
+      work.beadReopen("b"),
     ];
     expect(all.filter((s) => s.confirm !== null).map((s) => s.kind)).toEqual([
-      "session.close", "session.kill", "session.kill-force", "agent.suspend", "rig.suspend",
+      "session.close", "session.kill", "session.kill-force", "agent.suspend", "rig.suspend", "bead.sling", "bead.close",
     ]);
     for (const s of all) if (s.confirm) expect(s.confirm.detail.length).toBeGreaterThan(20);
   });
@@ -154,6 +194,40 @@ describe("what each action is", () => {
     expect(session.sessionRespond("s", "r", "deny").refresh).toEqual(["pending", "sessions"]);
     expect(agentSuspend("a").refresh).toEqual(["agents", "sessions"]);
     expect(rigSuspend("r").refresh).toEqual(["rigs", "agents", "sessions"]);
+    expect(work.beadCreate({ title: "t", description: "", priority: null, labels: [] }, null).refresh).toEqual(["ready"]);
+    expect(work.beadSling("b", "a").refresh).toEqual(["ready", "inProgress", "sessions"]);
+    expect(work.beadClose("b", "").refresh).toEqual(["ready", "inProgress"]);
+    expect(work.beadReopen("b").refresh).toEqual(["ready", "inProgress"]);
+  });
+
+  test("sling asks first and says a retry may route the bead twice: gc declares no Idempotency-Key on it", () => {
+    const s = work.beadSling("sc-74", "worker");
+    expect(OPERATIONS[s.operationId].idempotencyKey).toBe(false);
+    expect(s.confirm).toEqual({
+      question: "Sling bead sc-74 to worker?",
+      detail: `gc routes the bead to worker (and applies the agent's default formula, if it has one). ${work.SLING_MAY_ROUTE_TWICE}`,
+    });
+    expect(work.SLING_MAY_ROUTE_TWICE).toBe(
+      "gc cannot deduplicate a sling: if its outcome is unknown, a retry may route the bead twice. Check the board first.",
+    );
+  });
+
+  test("close asks first; its reason is kept for a retry; reopen does not ask", () => {
+    const c = work.beadClose("sc-74", "done here");
+    expect(c.confirm?.question).toBe("Close bead sc-74?");
+    expect(c.confirm?.detail).toBe('gc closes the bead with the reason "done here". Reopen brings it back.');
+    expect(work.beadClose("sc-74", "").confirm?.detail).toBe("gc closes the bead, with no reason. Reopen brings it back.");
+    expect(work.beadReopen("sc-74").confirm).toBeNull();
+  });
+
+  test("a new bead with a sling target carries the sling as its follow-up, built from the created id", () => {
+    const create = work.beadCreate({ title: "fix login", description: "", priority: 1, labels: [] }, "frontend/builder");
+    expect(create.target).toEqual({ kind: "new-bead", title: "fix login" });
+    expect(create.then?.verb).toBe("Sling to frontend/builder");
+    const sling = create.then?.spec("sc-80");
+    expect(sling?.kind).toBe("bead.sling");
+    expect(sling?.target).toEqual({ kind: "bead", id: "sc-80" });
+    expect(work.beadCreate({ title: "x", description: "", priority: null, labels: [] }, null).then).toBeUndefined();
   });
 
   test("the targets are what the activity log shows", () => {
@@ -161,6 +235,8 @@ describe("what each action is", () => {
     expect(agentResume("frontend/builder").target).toEqual({ kind: "agent", name: "frontend/builder" });
     expect(rigResume("frontend").target).toEqual({ kind: "rig", name: "frontend" });
     expect(session.sessionNew("frontend/builder", "x").target).toEqual({ kind: "agent", name: "frontend/builder" });
+    expect(work.beadSling("sc-74", "worker").target).toEqual({ kind: "bead", id: "sc-74" });
+    expect(work.beadSling("sc-74", "worker").verb).toBe("Sling to worker");
   });
 
   test("a respond option is gc's verb as given, never translated", () => {

@@ -21,10 +21,12 @@
 // (actions/outcome.ts), which sends it now and follows its outcome from this
 // copy's ticks. A destructive action asks first (the dialog), and an action
 // already under way is not sent twice. Nothing is ever retried without the
-// person asking.
+// person asking. Session actions act on the open session, work actions on
+// the open bead, each by the id gc sent, and only while gc still lists it.
 
 import type { ActionSpec } from "./actions/activity.ts";
 import { sessionKill, sessionMessage, sessionNew, sessionRespond, sessionSubmit } from "./actions/session.ts";
+import { SLING_MAY_ROUTE_TWICE, beadClose, beadCreate, beadReopen, beadSling } from "./actions/work.ts";
 import type { CityScopedError } from "./discovery/city.ts";
 import { selectedCity } from "./discovery/city.ts";
 import type { DiscoveryController, DiscoveryTask } from "./discovery/controller.ts";
@@ -62,11 +64,27 @@ export interface CopyDeps {
   probe: ProbeWriter;
 }
 
-/** A question the copy asks before acting, or the new-session form. */
+/** A question the copy asks before acting, or a form. */
 export type DialogModel =
   /** One button per choice (kill offers a plain and a forced kill), each with what gc will do. */
   | { kind: "confirm"; question: string; choices: { label: string; detail: string }[] }
-  | { kind: "new-session"; agent: string };
+  /** One button per choice, all doing what `detail` says (sling: one per agent). */
+  | { kind: "pick"; question: string; detail: string; choices: string[] }
+  | { kind: "new-session"; agent: string }
+  /** The new-bead form: the agents it may be slung to, the chosen one, and what creating it then does. */
+  | { kind: "new-bead"; agents: string[]; slingTo: string | null; slingToIndex: number | null; note: string | null }
+  /** Close the open bead, with a reason typed in the form. */
+  | { kind: "close-bead"; question: string; detail: string };
+
+/** The new-bead form's fields, as typed. */
+export interface BeadForm {
+  title: string;
+  description: string;
+  /** Blank, or a whole number. */
+  priority: string;
+  /** Comma-separated. */
+  labels: string;
+}
 
 /** How a message is sent: as input (gc's submit, plain or interrupting the turn) or as a queued message. */
 export type InputMode = "default" | "interrupt_now" | "message";
@@ -117,8 +135,13 @@ export class CopyController {
   private beadWatch: { id: string; release: () => void } | null = null;
   private signature = "";
   private closed = false;
-  private confirming: { specs: ActionSpec[]; retryOf: number | null } | null = null;
+  /** Asking before sending one of `specs`; `pick` asks one question for all of them. */
+  private confirming: { specs: ActionSpec[]; retryOf: number | null; pick: { question: string; detail: string; labels: string[] } | null } | null = null;
   private creating: { agent: string } | null = null;
+  /** The new-bead form: the agents listed when it opened (gc's names), and the chosen one's index. */
+  private beadForm: { agents: string[]; slingTo: number | null } | null = null;
+  /** The close-bead form, for this bead (gc's id). */
+  private closingBead: { id: string } | null = null;
   private notice: string | null = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   private applied = new WeakSet<object>();
@@ -272,8 +295,7 @@ export class CopyController {
    */
   request(spec: ActionSpec): void {
     if (spec.confirm !== null) {
-      this.creating = null;
-      this.confirming = { specs: [spec], retryOf: null };
+      this.ask({ specs: [spec], retryOf: null, pick: null });
       return;
     }
     this.send(spec);
@@ -281,8 +303,7 @@ export class CopyController {
 
   /** Kill asks first, offering a plain and a forced kill. */
   requestKill(sessionId: string): void {
-    this.creating = null;
-    this.confirming = { specs: [sessionKill(sessionId, false), sessionKill(sessionId, true)], retryOf: null };
+    this.ask({ specs: [sessionKill(sessionId, false), sessionKill(sessionId, true)], retryOf: null, pick: null });
   }
 
   /** The person confirmed the dialog with its `choice`-th action. */
@@ -297,8 +318,7 @@ export class CopyController {
 
   /** Closes the dialog without acting. */
   cancelDialog(): void {
-    this.confirming = null;
-    this.creating = null;
+    this.clearDialogs();
   }
 
   /** Retries an action from the activity log (a destructive one asks again). */
@@ -306,8 +326,7 @@ export class CopyController {
     const entry = this.city?.activity().entries.find((e) => e.id === id);
     if (!entry) return;
     if (entry.spec.confirm !== null) {
-      this.creating = null;
-      this.confirming = { specs: [entry.spec], retryOf: id };
+      this.ask({ specs: [entry.spec], retryOf: id, pick: null });
       return;
     }
     this.retryNow(id);
@@ -350,8 +369,84 @@ export class CopyController {
 
   /** Opens the new-session form for an agent (gc's qualified name). */
   openNewSession(agent: string): void {
-    this.confirming = null;
+    this.clearDialogs();
     this.creating = { agent };
+  }
+
+  /**
+   * Sling… on the open bead: asks which of the city's agents to route it to,
+   * saying that gc cannot deduplicate a sling. Picking one (confirm) sends it.
+   */
+  requestSling(): void {
+    const id = this.selectedBeadRef();
+    if (id === null) return;
+    const agents = this.agentNames();
+    if (agents.length === 0) {
+      this.refuse("the agent list has not loaded yet");
+      return;
+    }
+    this.ask({
+      specs: agents.map((a) => beadSling(id, a)),
+      retryOf: null,
+      pick: {
+        question: `Sling bead ${id} to which agent?`,
+        detail: `gc routes the bead to the agent you pick (and applies the agent's default formula, if it has one). ${SLING_MAY_ROUTE_TWICE}`,
+        labels: agents,
+      },
+    });
+  }
+
+  /** Close… on the open bead: opens the close form (a reason, then Close). */
+  requestCloseBead(): void {
+    const id = this.selectedBeadRef();
+    if (id === null) return;
+    this.clearDialogs();
+    this.closingBead = { id };
+  }
+
+  /** Closes the bead of the close form with `reason` (blank: none). Returns whether it was sent. */
+  closeBead(reason: string): boolean {
+    const c = this.closingBead;
+    if (!c) return false;
+    this.closingBead = null;
+    return this.send(beadClose(c.id, reason));
+  }
+
+  /** Reopens the open bead. */
+  reopenBead(): void {
+    const id = this.selectedBeadRef();
+    if (id !== null) this.send(beadReopen(id));
+  }
+
+  /** Opens the new-bead form, with the city's agents to sling it to. */
+  openNewBead(): void {
+    this.clearDialogs();
+    this.beadForm = { agents: this.agentNames(), slingTo: null };
+  }
+
+  /** Chooses the form's sling target by its place in the form's agent list; null: create only. */
+  chooseSlingTarget(index: number | null): void {
+    const f = this.beadForm;
+    if (!f) return;
+    f.slingTo = index !== null && index >= 0 && index < f.agents.length ? index : null;
+  }
+
+  /**
+   * Creates a bead from the form (and slings it to the chosen agent once gc
+   * created it). Refuses a blank title or a priority that is not a whole
+   * number, keeping the form open. Returns whether it was sent.
+   */
+  createBead(form: BeadForm): boolean {
+    const f = this.beadForm;
+    if (!f) return false;
+    const title = form.title.trim();
+    if (title === "") return this.refuse("a new bead needs a title");
+    const p = form.priority.trim();
+    if (p !== "" && !/^\d+$/.test(p)) return this.refuse("priority must be a whole number, like 2 (or blank)");
+    const labels = form.labels.split(",").map((l) => l.trim()).filter((l) => l !== "");
+    const slingTo = f.slingTo === null ? null : (f.agents[f.slingTo] ?? null);
+    this.beadForm = null;
+    return this.send(beadCreate({ title, description: form.description, priority: p === "" ? null : Number(p), labels }, slingTo));
   }
 
   /** Starts a session of the form's agent; `alias` may be empty. Returns whether it was sent. */
@@ -382,6 +477,38 @@ export class CopyController {
     this.notice = r.ok ? null : `not retried: ${r.error}`;
   }
 
+  private ask(c: NonNullable<CopyController["confirming"]>): void {
+    this.clearDialogs();
+    this.confirming = c;
+  }
+
+  private clearDialogs(): void {
+    this.confirming = null;
+    this.creating = null;
+    this.beadForm = null;
+    this.closingBead = null;
+  }
+
+  /** The city's agents by gc's qualified names, in gc's order. */
+  private agentNames(): string[] {
+    return this.city?.snapshot().agents.value?.items.map((a) => a.name) ?? [];
+  }
+
+  /** The open bead's id as gc sent it, if the board shows it or gc returned it by id; else says why not. */
+  private selectedBeadRef(): string | null {
+    const id = this.selectedBead;
+    const s = this.city?.snapshot();
+    if (id === null || !s) {
+      this.refuse("open a bead first");
+      return null;
+    }
+    if (beadDetailModel({ snapshot: s, now: this.deps.clock.now(), selected: id }).kind !== "bead") {
+      this.refuse(`bead ${cleanLine(id)} is not on the board or known to gc`);
+      return null;
+    }
+    return id;
+  }
+
   private refuse(why: string): false {
     this.notice = why;
     return false;
@@ -396,7 +523,28 @@ export class CopyController {
 
   private dialog(): DialogModel | null {
     if (this.creating) return { kind: "new-session", agent: cleanLine(this.creating.agent) };
+    const f = this.beadForm;
+    if (f) {
+      const target = f.slingTo === null ? null : cleanLine(f.agents[f.slingTo] ?? "");
+      return {
+        kind: "new-bead",
+        agents: f.agents.map(cleanLine),
+        slingTo: target,
+        slingToIndex: f.slingTo,
+        note: target === null
+          ? null
+          : `Two gc calls: create the bead, then sling it to ${target}. A retry of the create reuses its key: gc deduplicates it within 30 min, not across a gc restart, and not after a gc-side error (gc then drops the key). ${SLING_MAY_ROUTE_TWICE}`,
+      };
+    }
+    if (this.closingBead) {
+      return {
+        kind: "close-bead",
+        question: cleanLine(`Close bead ${this.closingBead.id}?`),
+        detail: "gc closes the bead with the reason below as its close reason (blank: none). Reopen brings it back.",
+      };
+    }
     const c = this.confirming;
+    if (c?.pick) return { kind: "pick", question: cleanLine(c.pick.question), detail: cleanLine(c.pick.detail), choices: c.pick.labels.map(cleanLine) };
     const first = c?.specs[0];
     if (!c || !first?.confirm) return null;
     const choices = c.specs.map((x) => ({ label: cleanLine(x.verb), detail: cleanLine(x.confirm?.detail ?? "") }));

@@ -38,8 +38,8 @@ describe("probeDocument", () => {
       activity: activityModel({
         rev: 2,
         entries: [
-          { id: 1, spec: sessionWake("s-1"), key: "k1", attempt: 1, startedAt: NOW - 9000, state: { kind: "done", at: NOW - 8000, detail: "gc: ok", requestId: null }, keyPinned: false },
-          { id: 2, spec: sessionSubmit("s-1", "close fe-1 n1", "default"), key: "k2", attempt: 1, startedAt: NOW - 3000, state: { kind: "done", at: NOW - 1000, detail: "delivered", requestId: "req-9" }, keyPinned: false },
+          { id: 1, spec: sessionWake("s-1"), key: "k1", attempt: 1, startedAt: NOW - 9000, state: { kind: "done", at: NOW - 8000, detail: "gc: ok", requestId: null }, keyPinned: false, followUp: null },
+          { id: 2, spec: sessionSubmit("s-1", "close fe-1 n1", "default"), key: "k2", attempt: 1, startedAt: NOW - 3000, state: { kind: "done", at: NOW - 1000, detail: "delivered", requestId: "req-9" }, keyPinned: false, followUp: null },
         ],
       }, snap, NOW),
       diagnostics: [{ at: "2026-11-09T12:00:00Z", source: "events", text: "x" }],
