@@ -122,7 +122,7 @@ if [ -n "$from" ]; then
   [ -f "$from" ] || fail "--from $from: no such file"
   cp "$from" "$tarball"
   if [ -f "$from.sha256" ]; then
-    want=$(sed -n '1s/[[:space:]].*//p' "$from.sha256")
+    want=$(sed -n '1{s/[[:space:]].*//;p;}' "$from.sha256")
     [ "$(sha256 "$tarball")" = "$want" ] || fail "$from does not match $from.sha256 (checksum mismatch)"
     say "installing $from (sha256 checked)"
   else
@@ -173,7 +173,10 @@ if [ -e "$mods/$mod" ] || [ -L "$mods/$mod" ]; then
   mv "$mods/$mod" "$backup" || fail "cannot move the earlier install to $backup"
   say "the earlier install is in $backup"
 fi
-mv "$staged" "$mods/$mod" || fail "cannot move the new build into $mods/$mod"
+if ! mv "$staged" "$mods/$mod"; then
+  if [ -n "${backup:-}" ]; then mv "$backup" "$mods/$mod" || true; fi
+  fail "cannot move the new build into $mods/$mod"
+fi
 staged=""
 say "installed into $mods/$mod"
 
@@ -181,7 +184,8 @@ say "installed into $mods/$mod"
 # `/` and most characters pass through the mod's command grammar as written;
 # ":" separates arguments and "%" starts an escape, so those two are encoded.
 encoded_gc_bin=$(printf '%s' "$gc_bin" | sed -e 's/%/%25/g' -e 's/:/%3A/g')
-gc_bin_command="herdr-app do $mod.set-gc-bin:$encoded_gc_bin"
+# Quoted for a shell, for the command printed when Herdr is not open.
+gc_bin_command="herdr-app do '$(printf '%s' "$mod.set-gc-bin:$encoded_gc_bin" | sed "s/'/'\\\\''/g")'"
 
 if ! herdr-app status >/dev/null 2>&1; then
   say "Herdr is not open. Once it is, open the mod with:"

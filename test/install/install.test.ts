@@ -359,7 +359,19 @@ describe("the app is not open", () => {
     expect(r.dos).toEqual([]);
     expect(await installed()).toEqual(["THIRD_PARTY_NOTICES.md", "main.js", "mod.json"]);
     expect(r.stdout).toContain('herdr-app do tab.new --mod gascity --name "Gas City"');
-    expect(r.stdout).toContain(`herdr-app do gascity.set-gc-bin:${gc}`);
+    expect(r.stdout).toContain(`herdr-app do 'gascity.set-gc-bin:${gc}'`);
+  });
+
+  test("the printed set-gc-bin command is one shell word, whatever the path holds", async () => {
+    const dir = join(base, "it's a dir");
+    await mkdir(dir);
+    const gc = await gcOnPath(dir);
+    const r = await run(["--from", fixture, "--gc-bin", gc]);
+    expect(r.code).toBe(0);
+    const line = r.stdout.split("\n").find((l) => l.includes("set-gc-bin"))!.trim();
+    expect(line).toStartWith("herdr-app do ");
+    const parsed = Bun.spawnSync(["/bin/sh", "-c", `eval "set -- $1"; printf '%s|%s' "$#" "$1"`, "sh", line.slice("herdr-app do ".length)]);
+    expect(parsed.stdout.toString()).toBe(`1|gascity.set-gc-bin:${gc}`);
   });
 });
 
@@ -392,6 +404,14 @@ describe("the tarball", () => {
     const r = await run(["--from", fixture, "--gc-bin", "gc"]);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain("checksum");
+  });
+
+  test("a .sha256 file with only the hash in it is read too", async () => {
+    await appRunning();
+    await writeFile(`${fixture}.sha256`, `${sha256(await readFile(fixture))}\n`);
+    const r = await run(["--from", fixture, "--gc-bin", "gc"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("sha256 checked");
   });
 
   test("a release's install.sh downloads its own tarball and checks the sha256 it carries", async () => {
