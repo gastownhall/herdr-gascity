@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:514dacbd8fffd0145eb947ef2cf2bca2bf0e1295f47e1fc6bde62d50ab0a04a6 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:28bcb6bcf024ef508db26a3c51e21047d40e2066af9e682d772d20b26b9558bb over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
