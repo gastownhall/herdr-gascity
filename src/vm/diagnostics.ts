@@ -35,6 +35,8 @@ export function syncErrorText(e: SyncError): string {
       return cleanLine(`a refresh step crashed: ${e.message}`);
     case "probe-truncated":
       return cleanLine(`the probe document was over ${e.limitBytes} bytes and was cut down: ${e.dropped.join("; ")}`);
+    case "discovery-stalled":
+      return `discovery made no progress for ${Math.round(e.idleMs / 1000)} s and was started again`;
     case "tick-crashed":
       return cleanLine(`a periodic update failed: ${e.message}`);
     case "step-stalled":

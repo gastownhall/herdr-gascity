@@ -165,6 +165,8 @@ export type SyncError =
   | { kind: "step-crashed"; message: string }
   | { kind: "step-stalled"; idleMs: number }
   | { kind: "tick-crashed"; message: string }
+  /** A copy's discovery made no progress (its host calls were taken with another copy) and was started again. */
+  | { kind: "discovery-stalled"; idleMs: number }
   /** The probe document was over herdr's file limit and was cut down (probe.ts): what it lost. */
   | { kind: "probe-truncated"; limitBytes: number; dropped: string[] };
 

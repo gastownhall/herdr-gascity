@@ -118,7 +118,10 @@ reads `o.constructor` only to compare it and read its prototype.
 ## Discovery
 
 Each copy of the mod finds gc's API on this machine. Candidates, first that
-answers `GET /health` within 5 s wins:
+answers `GET /health` within 5 s of the request being sent wins (time spent
+waiting in the fetch budget's queue does not count; a probe still queued
+after 40 s is dropped, and a probe the mod cancelled is tried once more
+before the candidate counts as unreachable):
 
 1. the `apiUrl` setting;
 2. the URL gc reports in `gc supervisor status --json` (`api_url`), when gc
@@ -141,6 +144,13 @@ shows its last choice (kept in that copy's localStorage), else the only
 running city, else asks. City states: discovering, no endpoint, cities failed,
 choose a city, unknown city, running, stopped; a running city also shows
 read-only and "gc too old" notices from gc's answers.
+
+With no endpoint, the copy rediscovers from its own 250 ms timer: 5 s after
+the failure, then 10, 20, 40 and every 60 s ("retry now" does it at once). A
+discovery that makes no progress for 90 s (herdr resumed it in another copy
+that then closed, so its requests never settle) is started again. Closing a
+copy cancels its discovery: its queued requests are dropped and nothing it
+had started runs gc or sends a request afterwards.
 
 ## Drift jobs
 
@@ -241,9 +251,10 @@ promise never settles. The engine is built around that rule:
   `cancelled` error, not a gc timeout. A cancelled read does not back off and
   is not held: it is simply still due. A cancelled mutation is
   outcome-unknown. Time spent queued never counts as a timeout. Discovery's
-  `/health` and `/v0/cities` probes go through the same budget; a probe that
-  lost its 5 s race is dropped if it is still queued, and otherwise stays
-  counted in flight until herdr's fetch settles.
+  `/health` and `/v0/cities` probes go through the same budget; a probe's 5 s
+  race starts when it leaves the queue, and a probe that lost it stays counted
+  in flight until herdr's fetch settles. Each copy's tick also reclaims, so a
+  queued request starts in a live copy's turn even with no city subscribed.
 - **Backoff** (`backoff.ts`, `endpoint.ts`). A transport failure, a 5xx, or
   an answer from off the loopback origin (a followed redirect) on a read
   backs the endpoint off: 1 s doubling to 60 s, with jitter. Until it

@@ -74,8 +74,9 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean; herdrVersi
     const o: Opened = { owner, copy, notifies: 0 };
     await host.run(owner, () => {
       void copy.discover({ notify: () => o.notifies++, sleep: (ms) => host.sleep(ms) });
+      // the timer's own context spawns a rediscovery, so its work belongs to this copy
       host.every(TICK_MS, () => {
-        if (copy.tick()) o.notifies++;
+        if (copy.tick((body) => void body({ notify: () => o.notifies++, sleep: (ms) => host.sleep(ms) }))) o.notifies++;
       });
     });
     await host.runTurns();
@@ -362,3 +363,61 @@ describe("failures inside a copy's own work reach its diagnostics", () => {
     expect(a.copy.view(host.now()).header.chip.text).toBe("connected");
   });
 });
+
+describe("rediscovery from the copy's own tick", () => {
+  test("a copy with no endpoint rediscovers from its own tick, backing off, until gc answers; no Retry needed", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => (req.path === "/health" ? { reject: "error sending request: connection refused" } : undefined);
+    const a = await open();
+    await host.advance(1000);
+    expect(a.copy.view(host.now()).header.chip.text).toMatch(/^gc not reachable/);
+    const first = gc.count("/health");
+    await host.advance(40_000);
+    // 5 s, then 10 s, then 20 s apart: three more tries in 40 s, not one per tick
+    expect(gc.count("/health") - first).toBe(3);
+    gc.override = null;
+    await host.advance(60_000);
+    expect(a.copy.view(host.now()).header.chip.text).toBe("connected");
+    expect(host.starts.filter((s) => s.path === "/health").every((s) => s.owner === a.owner)).toBe(true);
+  });
+
+  test("a discovering copy whose /health ran in another copy's turn recovers when that copy closes", async () => {
+    const { host, gc, registry, open, close } = setup();
+    const a = await open();
+    await host.advance(3000);
+    // two slow requests of a take both fetch slots; gc is slow to answer /health too
+    gc.override = (req) => (req.path.endsWith("/rigs") || req.path === "/health" ? { hold: true } : undefined);
+    await host.run(a.owner, () => {
+      for (let i = 0; i < 2; i++) registry.probeFetch().fetch(`${API}/v0/city/scratch/rigs`, { method: "GET", headers: {} }).catch(() => {});
+    });
+    expect(registry.budgetStats().inFlight).toBe(2);
+    const healthBefore = gc.count("/health");
+    const b = await open();
+    await host.advance(1000);
+    // b's /health waits in the queue; a's held request ends in a's turn, which starts b's probe there
+    expect(gc.count("/health")).toBe(healthBefore);
+    gc.release(200, { items: [], total: 1 });
+    await host.runTurns();
+    expect(gc.count("/health")).toBe(healthBefore + 1);
+    expect(host.starts.filter((s) => s.path === "/health").at(-1)?.owner).toBe(a.owner);
+    // a closes with b's probe in flight: herdr never settles it
+    await close(a);
+    gc.override = null;
+    await host.advance(120_000);
+    expect(b.copy.view(host.now()).header.chip.text).toBe("connected");
+    expect(host.starts.filter((s) => s.path === "/health").at(-1)?.owner).toBe(b.owner);
+  });
+
+  test("closing a copy cancels its discovery: nothing it started runs gc or sends a request afterwards", async () => {
+    const { host, gc, open, close } = setup();
+    gc.override = (req) => (req.path === "/health" ? { hold: true } : undefined);
+    const a = await open();
+    await host.advance(1000);
+    const starts = host.starts.length;
+    await close(a);
+    gc.override = null;
+    await host.advance(120_000);
+    expect(host.starts.slice(starts)).toEqual([]);
+  });
+});
+

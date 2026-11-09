@@ -247,7 +247,8 @@ export default class GasCity extends View {
     this.inputs = inputsFor(state.copy);
     cx.spawn((task) => state.copy.discover(taskOf(task)));
     cx.timer.every(TICK_MS, (tcx) => {
-      if (state.copy.tick()) tcx.notify();
+      // A rediscovery is spawned from this copy's own timer, so its work belongs to this copy.
+      if (state.copy.tick((body) => tcx.spawn((task) => body(taskOf(task))))) tcx.notify();
     });
   }
 

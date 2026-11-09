@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:f28992f4554a4ee81f27dea94b6703a46804167208bd90c534375bf13f16e42a over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:1f23602f44c578b34a5e77c1d63c6ab8d76eec3a68a4bb4e76ead3744d62e2d3 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -3510,8 +3510,9 @@ var FetchBudget = class {
   /**
    * A fetch for `endpoint` (an API base URL) at `priority`, for a GcClient.
    * Requests made with a `group` can be dropped together while still queued.
+   * `onStart` runs when a request leaves the queue and is handed to herdr.
    */
-  fetchFor(endpoint, priority, group = null) {
+  fetchFor(endpoint, priority, group = null, onStart = null) {
     const rank = PRIORITIES.indexOf(priority);
     return (url, init) => new Promise((resolve, reject) => {
       this.queue.push({
@@ -3519,7 +3520,10 @@ var FetchBudget = class {
         rank,
         seq: this.seq++,
         group,
-        start: () => this.start(endpoint, url, init, resolve, reject),
+        start: () => {
+          onStart?.();
+          this.start(endpoint, url, init, resolve, reject);
+        },
         drop: () => reject(timedRejection(`gascity: request to ${url} dropped before it was sent`, 0, "abandoned"))
       });
       this.reclaim();
@@ -5426,6 +5430,8 @@ function syncErrorText(e) {
       return cleanLine(`a refresh step crashed: ${e.message}`);
     case "probe-truncated":
       return cleanLine(`the probe document was over ${e.limitBytes} bytes and was cut down: ${e.dropped.join("; ")}`);
+    case "discovery-stalled":
+      return `discovery made no progress for ${Math.round(e.idleMs / 1e3)} s and was started again`;
     case "tick-crashed":
       return cleanLine(`a periodic update failed: ${e.message}`);
     case "step-stalled":
@@ -5671,6 +5677,12 @@ var CITY_SCOPED = /* @__PURE__ */ new Set(["city-not-running", "write-grant-requ
 function isCityScoped(e) {
   return e !== null && CITY_SCOPED.has(e.kind);
 }
+var REDISCOVER_BASE_MS = 5e3;
+var REDISCOVER_CAP_MS = 6e4;
+var DISCOVERY_STALL_MS = 9e4;
+function rediscoverDelay(attempt) {
+  return Math.min(REDISCOVER_CAP_MS, REDISCOVER_BASE_MS * 2 ** Math.min(Math.max(attempt, 1) - 1, 16));
+}
 var HOST_ERROR_LIMIT = 20;
 var COPY_ERROR_LIMIT = 20;
 function messageOf5(cause) {
@@ -5708,8 +5720,13 @@ var CopyController = class {
   applied = /* @__PURE__ */ new WeakSet();
   /** Failures of this copy's own work, oldest first (diagnostics). */
   failures = [];
+  /** The next rediscovery while this copy has no endpoint, and how many there were. */
+  rediscovery = null;
+  /** The discovery's progress count when it last moved, and when (stall detection). */
+  discoveryProgress = { count: 0, at: 0 };
   /** Discovers gc's API and the cities; run it in a task of this copy (init). */
   discover(task) {
+    this.discoveryProgress = { count: this.deps.discovery.progress, at: this.deps.clock.now() };
     return this.deps.discovery.run(task);
   }
   /**
@@ -5717,21 +5734,24 @@ var CopyController = class {
    * subscribes and unsubscribes as the machine says, ticks the shared city
    * list and city store, and writes the probe. Returns true when the view
    * should be redrawn. An exception inside is recorded in the diagnostics
-   * (and the view redrawn to show it); the next tick starts over.
+   * (and the view redrawn to show it); the next tick starts over. `spawn`
+   * starts a task of this copy for a rediscovery (no endpoint, or a stalled run).
    */
-  tick() {
+  tick(spawn = null) {
     if (this.closed) return false;
     try {
-      return this.step();
+      return this.step(spawn);
     } catch (cause) {
       this.recordFailure("tick", { kind: "tick-crashed", message: messageOf5(cause) });
       return true;
     }
   }
-  step() {
+  step(spawn) {
     const { registry: registry3, discovery, clock } = this.deps;
     this.readVisibility();
     registry3.setOnScreen(this.onScreen);
+    registry3.reclaim();
+    if (spawn !== null) this.followDiscovery(clock.now(), spawn);
     const before = discovery.machine.state;
     this.followCities("endpoint" in before ? before.endpoint.url : null, before.phase !== "city-running");
     const state = discovery.machine.state;
@@ -5769,6 +5789,7 @@ var CopyController = class {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.deps.discovery.cancel();
     this.peek?.release();
     this.peek = null;
     this.beadWatch?.release();
@@ -5819,6 +5840,7 @@ var CopyController = class {
    */
   retry(task) {
     this.refreshCount++;
+    this.rediscovery = null;
     this.cities?.refresh();
     if (this.city) {
       this.city.retryNow();
@@ -6083,6 +6105,34 @@ var CopyController = class {
     return { kind: "confirm", question: cleanLine(c.retryOf === null ? first.confirm.question : `Retry: ${first.confirm.question}`), choices };
   }
   // ---- subscriptions --------------------------------------------------------------
+  /**
+   * Without an endpoint, rediscovers from this copy's own tick: after
+   * rediscoverDelay(1), (2), … once each run has ended. A run that made no
+   * progress for DISCOVERY_STALL_MS is started again at once.
+   */
+  followDiscovery(now, spawn) {
+    const d = this.deps.discovery;
+    const phase = d.machine.state.phase;
+    if (phase !== "no-endpoint" && phase !== "discovering" && phase !== "listing") {
+      this.rediscovery = null;
+      return;
+    }
+    if (d.running()) {
+      if (d.progress !== this.discoveryProgress.count) {
+        this.discoveryProgress = { count: d.progress, at: now };
+        return;
+      }
+      const idleMs = now - this.discoveryProgress.at;
+      if (idleMs < DISCOVERY_STALL_MS) return;
+      this.recordFailure("discovery", { kind: "discovery-stalled", idleMs });
+    } else {
+      this.rediscovery ??= { attempt: 1, at: now + rediscoverDelay(1) };
+      if (now < this.rediscovery.at) return;
+      const attempt = this.rediscovery.attempt + 1;
+      this.rediscovery = { attempt, at: now + rediscoverDelay(attempt) };
+    }
+    spawn((task) => this.discover(task));
+  }
   readVisibility() {
     const v = this.deps.host.visibility();
     if (v.ok) {
@@ -6470,6 +6520,8 @@ function supervisorApiUrl(listen) {
 // src/discovery/resolve.ts
 var DEFAULT_API_URL = "http://127.0.0.1:8372";
 var HEALTH_PROBE_MS = 5e3;
+var HEALTH_QUEUE_MS = 4e4;
+var PROBE_ATTEMPTS = 2;
 var SOURCE_NAMES = {
   setting: "the apiUrl setting",
   "gc-reported": "gc supervisor status",
@@ -6480,16 +6532,20 @@ async function probe(host, url) {
   const pf = host.probeFetch();
   const client = createGcClient({ baseUrl: url, fetch: pf.fetch });
   if (!client.ok) return client;
-  let settled = false;
-  const answer = getHealth(client.value).then((r) => {
-    settled = true;
-    return r;
-  });
-  const deadline = host.sleep(HEALTH_PROBE_MS).then(() => {
-    if (!settled) pf.drop();
-    return err({ kind: "timeout", url: `${client.value.baseUrl}/health`, ms: HEALTH_PROBE_MS });
-  });
+  const answer = getHealth(client.value);
+  const waited = await Promise.race([
+    answer.then(() => "answered"),
+    pf.sent.then(() => "sent"),
+    host.sleep(HEALTH_QUEUE_MS).then(() => "queue-expired")
+  ]);
+  if (waited === "answered" || waited === "queue-expired" && pf.drop() > 0) return answer;
+  const deadline = host.sleep(HEALTH_PROBE_MS).then(() => err({ kind: "timeout", url: `${client.value.baseUrl}/health`, ms: HEALTH_PROBE_MS }));
   return Promise.race([answer, deadline]);
+}
+async function probeCandidate(host, url) {
+  let health = await probe(host, url);
+  for (let attempt = 1; attempt < PROBE_ATTEMPTS && !health.ok && health.error.kind === "cancelled"; attempt++) health = await probe(host, url);
+  return health;
 }
 async function resolveEndpoint(host) {
   const attempts = [];
@@ -6538,7 +6594,7 @@ async function resolveEndpoint(host) {
       continue;
     }
     probed.set(url, source);
-    const health = await probe(host, url);
+    const health = await probeCandidate(host, url);
     if (!health.ok) {
       attempts.push({ source, outcome: "unreachable", url, error: health.error });
       continue;
@@ -6551,6 +6607,10 @@ async function resolveEndpoint(host) {
 
 // src/discovery/controller.ts
 var HOST_ERROR_LIMIT2 = 20;
+var NOT_RUN = "not run: this discovery was cancelled";
+function droppedRejection(url) {
+  return Object.assign(new Error(`gascity: request to ${url} not sent: this discovery was cancelled`), { hostElapsedMs: 0, cancelled: "abandoned" });
+}
 var DiscoveryController = class {
   constructor(host, copy) {
     this.host = host;
@@ -6560,10 +6620,29 @@ var DiscoveryController = class {
   machine;
   /** Host calls that failed outside the machine (e.g. remembering the city); shown, newest last. */
   hostErrors = [];
+  /** How many host calls of runs have settled so far: a run whose count stops moving has stalled. */
+  progress = 0;
   generation = 0;
+  active = false;
+  /** The current run's budgeted fetches, so their queued requests can be dropped. */
+  fetches = /* @__PURE__ */ new Set();
   /** Applies one event. */
   apply(event) {
     this.machine = step(this.machine, event);
+  }
+  /** Whether a run is under way (and not cancelled or superseded). */
+  running() {
+    return this.active;
+  }
+  /**
+   * Ends the current run: its queued requests are dropped (never sent) and its
+   * later host calls start nothing. Starts nothing (it runs from a copy's close).
+   */
+  cancel() {
+    this.generation++;
+    this.active = false;
+    for (const f of this.fetches) f.drop();
+    this.fetches = /* @__PURE__ */ new Set();
   }
   /**
    * Discovers from scratch: endpoint, then cities. A newer run supersedes an
@@ -6571,20 +6650,30 @@ var DiscoveryController = class {
    * describe a discovery the person already replaced.
    */
   async run(task) {
-    const generation = ++this.generation;
+    this.cancel();
+    const generation = this.generation;
     const current = () => generation === this.generation;
-    this.apply({ type: "discover" });
-    task.notify();
-    const resolved = await resolveEndpoint({ ...this.host, sleep: (ms) => task.sleep(ms) });
-    if (!current()) return;
-    this.apply({ type: "resolved", result: resolved });
-    task.notify();
-    if (!resolved.ok) return;
-    const client = createGcClient({ baseUrl: resolved.value.url, fetch: this.host.fetch });
-    const cities = client.ok ? await listCities(client.value) : client;
-    if (!current()) return;
-    this.apply({ type: "cities", result: cities });
-    task.notify();
+    const host = this.guarded(current);
+    this.active = true;
+    try {
+      this.apply({ type: "discover" });
+      task.notify();
+      const resolved = await resolveEndpoint({ ...host, sleep: (ms) => task.sleep(ms) });
+      if (!current()) return;
+      this.apply({ type: "resolved", result: resolved });
+      task.notify();
+      if (!resolved.ok) return;
+      const client = createGcClient({ baseUrl: resolved.value.url, fetch: host.probeFetch().fetch });
+      const cities = client.ok ? await listCities(client.value) : client;
+      if (!current()) return;
+      this.apply({ type: "cities", result: cities });
+      task.notify();
+    } finally {
+      if (current()) {
+        this.active = false;
+        this.fetches = /* @__PURE__ */ new Set();
+      }
+    }
   }
   /** The person chose a city; an unpinned copy remembers it. */
   select(city) {
@@ -6593,6 +6682,24 @@ var DiscoveryController = class {
     if (this.machine === before) return;
     const remembered = this.host.rememberCity(city);
     if (!remembered.ok) this.hostErrors = [...this.hostErrors, remembered.error].slice(-HOST_ERROR_LIMIT2);
+  }
+  /** The host as one run sees it: nothing starts once the run is no longer current; every settled call is progress. */
+  guarded(current) {
+    const settled = (p) => p.finally(() => {
+      if (current()) this.progress++;
+    });
+    return {
+      settings: () => this.host.settings(),
+      gcStatus: (gcBin) => current() ? settled(this.host.gcStatus(gcBin)) : Promise.resolve(err({ kind: "exec", argv: [gcBin, ...GC_STATUS_ARGS], code: null, stderr: NOT_RUN })),
+      readSupervisorConfig: () => current() ? settled(this.host.readSupervisorConfig()) : Promise.resolve(err({ kind: "host-call", api: "readTextFile(supervisor.toml)", cause: NOT_RUN })),
+      fetch: this.host.fetch,
+      probeFetch: () => {
+        const pf = this.host.probeFetch();
+        if (current()) this.fetches.add(pf);
+        const fetch2 = (url, init) => current() ? settled(pf.fetch(url, init)) : Promise.reject(droppedRejection(url));
+        return { fetch: fetch2, drop: () => pf.drop(), sent: settled(pf.sent) };
+      }
+    };
   }
 };
 
@@ -7086,12 +7193,23 @@ var SyncRegistry = class {
    */
   probeFetch() {
     const group = {};
+    let markSent;
+    const sent = new Promise((resolve) => {
+      markSent = resolve;
+    });
     return {
-      fetch: (url, init) => this.budget.fetchFor(originOf2(url), "snapshot", group)(url, init),
-      drop: () => {
-        this.budget.dropQueued(group);
-      }
+      fetch: (url, init) => this.budget.fetchFor(originOf2(url), "snapshot", group, markSent)(url, init),
+      drop: () => this.budget.dropQueued(group),
+      sent
     };
+  }
+  /**
+   * Frees fetch slots herdr can no longer settle (their copy closed) and
+   * starts what fits; call from a copy's own tick, so a queued request
+   * (discovery's) starts in a live copy's turn even with no city subscribed.
+   */
+  reclaim() {
+    this.budget.reclaim();
   }
   /** Sets the app-wide "a gascity view may be on screen" (visibility.ts) for every store. */
   setOnScreen(onScreen) {
@@ -7846,7 +7964,7 @@ var GasCity = class extends View {
     this.inputs = inputsFor(state.copy);
     cx.spawn((task) => state.copy.discover(taskOf(task)));
     cx.timer.every(TICK_MS, (tcx) => {
-      if (state.copy.tick()) tcx.notify();
+      if (state.copy.tick((body) => tcx.spawn((task) => body(taskOf(task))))) tcx.notify();
     });
   }
   close(_cx) {

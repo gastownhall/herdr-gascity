@@ -7,9 +7,10 @@ import { describe, expect, test } from "bun:test";
 import type { HostFetch } from "../../../src/gc/client.ts";
 import type { GcError } from "../../../src/gc/errors.ts";
 import {
-  DEFAULT_API_URL, HEALTH_PROBE_MS, resolveEndpoint, type ResolveHost,
+  DEFAULT_API_URL, HEALTH_PROBE_MS, HEALTH_QUEUE_MS, resolveEndpoint, type ResolveHost,
 } from "../../../src/discovery/resolve.ts";
 import { err, ok, type Result } from "../../../src/result.ts";
+import { FakeClock, flush } from "../sync/fakes.ts";
 
 const HEALTH = { status: "ok", version: "1.2.3", build_id: "b1", uptime_sec: 5, cities_total: 1, cities_running: 1 };
 const CONFIG_PATH = "/home/u/.gc/supervisor.toml";
@@ -53,7 +54,7 @@ function host(setup: Setup) {
       return Promise.resolve(r.ok ? ok({ path: CONFIG_PATH, text: r.value }) : r);
     },
     fetch,
-    probeFetch: () => ({ fetch, drop: () => { drops++; } }),
+    probeFetch: () => ({ fetch, drop: () => { drops++; return 0; }, sent: Promise.resolve() }),
     sleep: (ms) => {
       sleeps.push(ms);
       // A passing deadline fires after the immediate replies have settled.
@@ -159,9 +160,9 @@ describe("/health probing and fallback", () => {
       replies: { "http://127.0.0.1:9443": "hang", "http://127.0.0.1:8372": "health" },
       deadlinesPass: true,
     });
-    expect(sleeps[0]).toBe(5_000);
-    // the lost probe's request is dropped from the fetch budget if it is still queued; the answered one's is not
-    expect(drops()).toBe(1);
+    expect(sleeps).toContain(5_000);
+    // the lost probe's request was sent (it left the queue): there is nothing to drop; it stays in flight until herdr settles it
+    expect(drops()).toBe(0);
     expect(r.ok && r.value.attempts[0]).toEqual({
       source: "setting", outcome: "unreachable", url: "http://127.0.0.1:9443",
       error: { kind: "timeout", url: "http://127.0.0.1:9443/health", ms: 5_000 },
@@ -241,5 +242,112 @@ describe("loopback only, and nothing guessed past a source that cannot be read",
     expect(execs).toEqual([]);
     expect(fetched).toEqual([]);
     expect(!r.ok && r.error).toMatchObject({ reason: "invalid", source: "setting", error: { kind: "host-decode", path: "gcBin" } });
+  });
+});
+
+/**
+ * A host whose /health requests wait in a fetch queue until the test sends
+ * them: `send(i)` takes request i out of the queue, `answer(i)` answers it,
+ * `drop` rejects the queued ones as the budget does. Sleeps follow a fake clock.
+ */
+function queuedHost(settings: unknown = { apiUrl: "http://127.0.0.1:9443" }) {
+  const clock = new FakeClock();
+  const requests: { url: string; sent: () => void; answer: () => void; cancel: () => void; queued: boolean }[] = [];
+  let drops = 0;
+  const h: ResolveHost = {
+    settings: () => settings,
+    gcStatus: () => Promise.resolve(ok("{}")),
+    readSupervisorConfig: () => Promise.resolve(ok({ path: CONFIG_PATH, text: null })),
+    fetch: () => Promise.reject(new Error("not used")),
+    probeFetch: () => {
+      let markSent!: () => void;
+      const sent = new Promise<void>((r) => { markSent = r; });
+      const mine: number[] = [];
+      return {
+        sent,
+        fetch: (url) => new Promise((resolve, reject) => {
+          mine.push(requests.length);
+          const req = {
+            url,
+            queued: true,
+            sent: () => { req.queued = false; markSent(); },
+            answer: () => resolve({ status: 200, ok: true, url, text: () => Promise.resolve(JSON.stringify(HEALTH)) }),
+            cancel: () => reject(Object.assign(new Error("dropped before it was sent"), { hostElapsedMs: 0, cancelled: "abandoned" })),
+          };
+          requests.push(req);
+        }),
+        drop: () => {
+          let n = 0;
+          for (const i of mine) {
+            const r = requests[i]!;
+            if (r.queued) {
+              r.queued = false;
+              r.cancel();
+              n++;
+            }
+          }
+          drops += n;
+          return n;
+        },
+      };
+    },
+    sleep: (ms) => clock.after(ms),
+  };
+  return { h, clock, requests, drops: () => drops };
+}
+
+describe("the /health race runs from when the request is sent, not while it waits in the fetch queue", () => {
+  test("a probe that waited 8 s behind other requests and then answers at once is reachable", async () => {
+    const q = queuedHost();
+    const result = resolveEndpoint(q.h);
+    await q.clock.advance(8_000);
+    expect(q.requests.length).toBe(1);
+    q.requests[0]!.sent();
+    await q.clock.advance(100);
+    q.requests[0]!.answer();
+    const r = await result;
+    expect(r.ok && r.value).toMatchObject({ url: "http://127.0.0.1:9443", source: "setting" });
+  });
+
+  test("a sent probe still gets only 5 s", async () => {
+    const q = queuedHost();
+    const result = resolveEndpoint(q.h);
+    await flush();
+    q.requests[0]!.sent();
+    await q.clock.advance(HEALTH_PROBE_MS);
+    await flush();
+    // the setting's candidate timed out; the default's probe is the next request
+    expect(q.requests.length).toBe(2);
+    q.requests[1]!.sent();
+    q.requests[1]!.answer();
+    const r = await result;
+    expect(r.ok && r.value.attempts[0]).toMatchObject({ source: "setting", outcome: "unreachable", error: { kind: "timeout", ms: HEALTH_PROBE_MS } });
+  });
+
+  test("a probe still queued at the queue deadline is dropped and tried again, not called unreachable", async () => {
+    const q = queuedHost();
+    const result = resolveEndpoint(q.h);
+    await q.clock.advance(HEALTH_QUEUE_MS);
+    expect(q.drops()).toBe(1);
+    await flush();
+    expect(q.requests.map((r) => r.url)).toEqual(["http://127.0.0.1:9443/health", "http://127.0.0.1:9443/health"]);
+    q.requests[1]!.sent();
+    q.requests[1]!.answer();
+    const r = await result;
+    expect(r.ok && r.value).toMatchObject({ source: "setting", attempts: [{ source: "setting", outcome: "ok" }] });
+  });
+
+  test("a probe cancelled twice is recorded with the cancellation, and the next candidate is tried", async () => {
+    const q = queuedHost();
+    const result = resolveEndpoint(q.h);
+    await q.clock.advance(HEALTH_QUEUE_MS);
+    await q.clock.advance(HEALTH_QUEUE_MS);
+    await flush();
+    expect(q.requests.length).toBe(3);
+    q.requests[2]!.sent();
+    q.requests[2]!.answer();
+    const r = await result;
+    expect(r.ok && r.value.attempts[0]).toMatchObject({ source: "setting", outcome: "unreachable", error: { kind: "cancelled", reason: "abandoned" } });
+    expect(r.ok && r.value.source).toBe("default");
   });
 });

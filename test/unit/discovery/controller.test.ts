@@ -21,7 +21,7 @@ function fakeHost(fetch: HostFetch, remember: Result<null, GcError> = ok(null)) 
     gcStatus: () => Promise.resolve(ok("{}")),
     readSupervisorConfig: () => Promise.resolve(ok({ path: "/h/.gc/supervisor.toml", text: null })),
     fetch,
-    probeFetch: () => ({ fetch, drop: () => {} }),
+    probeFetch: () => ({ fetch, drop: () => 0, sent: Promise.resolve() }),
     rememberCity: (city) => {
       remembered.push(city);
       return remember;
@@ -73,6 +73,8 @@ describe("run", () => {
     };
     const c = new DiscoveryController(fakeHost(fetch).host, { pinned: "alpha", lastSelection: null });
     const first = c.run(task());
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(calls).toBe(1);
     await c.run(task());
     release();
     await first;
@@ -110,3 +112,82 @@ describe("select", () => {
     expect(c.hostErrors).toEqual([failure]);
   });
 });
+
+describe("cancel (the copy closes) and supersede", () => {
+  /** A host that records every exec, file read, fetch and drop; gc's status answers when the test releases it. */
+  function recordingHost(settings: unknown = undefined) {
+    const log: string[] = [];
+    let releaseStatus!: (r: Result<string, GcError>) => void;
+    const status = new Promise<Result<string, GcError>>((r) => { releaseStatus = r; });
+    const host: DiscoveryHost = {
+      settings: () => settings,
+      gcStatus: (bin) => {
+        log.push(`exec ${bin}`);
+        return status;
+      },
+      readSupervisorConfig: () => {
+        log.push("read supervisor.toml");
+        return Promise.resolve(ok({ path: "/h/.gc/supervisor.toml", text: null }));
+      },
+      fetch: () => Promise.reject(new Error("not used")),
+      probeFetch: () => ({
+        fetch: (url) => {
+          log.push(`fetch ${url}`);
+          return new Promise(() => {});
+        },
+        drop: () => {
+          log.push("drop");
+          return 1;
+        },
+        sent: new Promise(() => {}),
+      }),
+      rememberCity: () => ok(null),
+    };
+    return { host, log, releaseStatus };
+  }
+
+  test("a run that resumes after cancel starts nothing: no file read, no fetch, and its results are not applied", async () => {
+    const { host, log, releaseStatus } = recordingHost();
+    const c = new DiscoveryController(host, { pinned: null, lastSelection: null });
+    const run = c.run(task());
+    await Promise.resolve();
+    expect(c.running()).toBe(true);
+    c.cancel();
+    expect(c.running()).toBe(false);
+    releaseStatus(ok("{}"));
+    await run;
+    expect(log).toEqual(["exec gc"]);
+    expect(c.machine.state.phase).toBe("discovering");
+  });
+
+  test("cancel drops the run's queued requests and starts nothing", async () => {
+    const { host, log } = recordingHost({ apiUrl: "http://127.0.0.1:9443" });
+    const c = new DiscoveryController(host, { pinned: null, lastSelection: null });
+    void c.run(task());
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(log).toEqual(["fetch http://127.0.0.1:9443/health"]);
+    c.cancel();
+    expect(log).toEqual(["fetch http://127.0.0.1:9443/health", "drop"]);
+  });
+
+  test("a newer run drops the older run's queued requests", async () => {
+    const { host, log } = recordingHost({ apiUrl: "http://127.0.0.1:9443" });
+    const c = new DiscoveryController(host, { pinned: null, lastSelection: null });
+    void c.run(task());
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    void c.run(task());
+    expect(log.slice(0, 2)).toEqual(["fetch http://127.0.0.1:9443/health", "drop"]);
+  });
+
+  test("progress counts each host call that settled, so a stalled run can be told apart", async () => {
+    const { host, releaseStatus } = recordingHost();
+    const c = new DiscoveryController(host, { pinned: null, lastSelection: null });
+    void c.run(task());
+    await Promise.resolve();
+    const before = c.progress;
+    releaseStatus(ok("{}"));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(c.progress).toBeGreaterThan(before);
+  });
+});
+

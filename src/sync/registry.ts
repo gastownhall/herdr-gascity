@@ -108,11 +108,13 @@ export interface CitiesSubscription {
   unsubscribe(): void;
 }
 
-/** A fetch through the app-wide budget whose queued requests can be dropped together (a discovery probe that lost its race). */
+/** A fetch through the app-wide budget whose queued requests can be dropped together (discovery's requests). */
 export interface ProbeFetch {
   fetch: HostFetch;
-  /** Drops this fetch's queued requests; one already sent stays in flight until herdr settles it. */
-  drop(): void;
+  /** Drops this fetch's queued requests (they reject as cancelled); one already sent stays in flight until herdr settles it. Returns how many. */
+  drop(): number;
+  /** Resolves when this fetch's first request leaves the queue (is sent). */
+  sent: Promise<void>;
 }
 
 /** "scheme://host[:port]" of a URL: the budget's endpoint key. */
@@ -224,12 +226,24 @@ export class SyncRegistry {
    */
   probeFetch(): ProbeFetch {
     const group = {};
+    let markSent!: () => void;
+    const sent = new Promise<void>((resolve) => {
+      markSent = resolve;
+    });
     return {
-      fetch: (url, init) => this.budget.fetchFor(originOf(url), "snapshot", group)(url, init),
-      drop: () => {
-        this.budget.dropQueued(group);
-      },
+      fetch: (url, init) => this.budget.fetchFor(originOf(url), "snapshot", group, markSent)(url, init),
+      drop: () => this.budget.dropQueued(group),
+      sent,
     };
+  }
+
+  /**
+   * Frees fetch slots herdr can no longer settle (their copy closed) and
+   * starts what fits; call from a copy's own tick, so a queued request
+   * (discovery's) starts in a live copy's turn even with no city subscribed.
+   */
+  reclaim(): void {
+    this.budget.reclaim();
   }
 
   /** Sets the app-wide "a gascity view may be on screen" (visibility.ts) for every store. */

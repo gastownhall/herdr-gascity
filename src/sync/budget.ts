@@ -94,8 +94,9 @@ export class FetchBudget {
   /**
    * A fetch for `endpoint` (an API base URL) at `priority`, for a GcClient.
    * Requests made with a `group` can be dropped together while still queued.
+   * `onStart` runs when a request leaves the queue and is handed to herdr.
    */
-  fetchFor(endpoint: string, priority: FetchPriority, group: object | null = null): HostFetch {
+  fetchFor(endpoint: string, priority: FetchPriority, group: object | null = null, onStart: (() => void) | null = null): HostFetch {
     const rank = PRIORITIES.indexOf(priority);
     return (url: string, init: HostRequest) =>
       new Promise<HostResponse>((resolve, reject) => {
@@ -104,7 +105,10 @@ export class FetchBudget {
           rank,
           seq: this.seq++,
           group,
-          start: () => this.start(endpoint, url, init, resolve, reject),
+          start: () => {
+            onStart?.();
+            this.start(endpoint, url, init, resolve, reject);
+          },
           drop: () => reject(timedRejection(`gascity: request to ${url} dropped before it was sent`, 0, "abandoned")),
         });
         this.reclaim();
