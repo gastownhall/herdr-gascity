@@ -16,6 +16,10 @@ ref=$1 out=$2
 [[ $ref =~ ^[A-Za-z0-9._/-]+$ && $ref != *..* && $ref != -* ]] || fail "not a branch, tag or commit: $ref"
 
 if [[ $ref =~ ^[0-9a-f]{40}$ ]]; then
+  # Taken as given: raw.githubusercontent.com also serves a commit that only
+  # exists in a fork of gascity, so a hex ref is not proof the commit is
+  # upstream's. Only people with write access can dispatch the workflow with
+  # a ref; the scheduled run always resolves main.
   commit=$ref
 else
   # A branch first; for a tag, the commit an annotated tag points at (^{}).

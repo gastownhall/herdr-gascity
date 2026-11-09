@@ -21,6 +21,7 @@ import {
   PINNED_SPEC, PIN_FILE, ROOT, USED_SURFACE, operationsById, parsePin, readJson, refName, requestBody, successResponse,
   type LocatedOperation, type Parameter, type Pin, type Schema, type Spec, type UsedSurface,
 } from "./gc-spec.ts";
+import { workflowCommand } from "./workflow-command.ts";
 import { PROBLEM_MODEL, component, componentProperties, isObjectModel } from "./gen-gc.ts";
 
 /** One difference in the used surface. */
@@ -248,7 +249,8 @@ export interface UpstreamRef {
   commit: string;
 }
 
-const cell = (s: string) => s.replaceAll("|", "\\|");
+// One table cell: a line break from the other spec would end the row (and, in the log, could start a workflow command).
+const cell = (s: string) => s.replaceAll("|", "\\|").replace(/[\r\n]+/g, " ");
 
 /** A Markdown report for the job summary. */
 export function formatReport(findings: Finding[], meta: { pinned: Pin; upstream: UpstreamRef }): string {
@@ -284,6 +286,13 @@ export function formatReport(findings: Finding[], meta: { pinned: Pin; upstream:
   return out.join("\n");
 }
 
+/** One ::error annotation per breaking change. Field names and enum values come from the other spec: escaped. */
+export function annotations(findings: Finding[]): string[] {
+  return findings
+    .filter((f) => f.level === "breaking")
+    .map((f) => workflowCommand("error", { title: "gc drift" }, `${f.where}: ${f.change} (reached from ${f.via})`));
+}
+
 function arg(args: string[], name: string, fallback?: string): string {
   const at = args.indexOf(name);
   const value = at >= 0 ? args[at + 1] : fallback;
@@ -308,7 +317,7 @@ if (import.meta.main) {
   const broken = findings.filter((f) => f.level === "breaking");
   // GitHub annotations: one per breaking change, on the run's summary page.
   if (process.env["GITHUB_ACTIONS"] === "true") {
-    for (const f of broken) console.log(`::error title=gc drift::${f.where}: ${f.change} (reached from ${f.via})`);
+    for (const line of annotations(findings)) console.log(line);
   }
   if (broken.length > 0) process.exit(1);
 }

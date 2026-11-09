@@ -18,6 +18,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import ts from "typescript";
 import { ROOT } from "./gc-spec.ts";
+import { workflowCommand } from "./workflow-command.ts";
 
 /** The file `herdr-app types <dir>` writes. */
 export const GENERATED_FILE = "gpui-kit.d.ts";
@@ -251,7 +252,8 @@ if (import.meta.main) {
   if (surfacePath) await writeFile(surfacePath, JSON.stringify(check.surface, null, 2) + "\n");
   console.log(report);
   if (process.env["GITHUB_ACTIONS"] === "true" && check.diagnostics.length > 0) {
-    console.log(`::error title=herdr-app types drift::src/ does not type-check against herdr-app ${required(args, "--version")} (${check.diagnostics.length} errors)`);
+    console.log(workflowCommand("error", { title: "herdr-app types drift" },
+      `src/ does not type-check against herdr-app ${required(args, "--version")} (${check.diagnostics.length} errors)`));
   }
   if (check.diagnostics.length > 0) process.exit(1);
 }

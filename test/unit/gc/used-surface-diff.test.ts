@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { PINNED_SPEC, ROOT, USED_SURFACE, operationsById, readJson, type Schema, type Spec, type UsedSurface } from "../../../scripts/gc-spec.ts";
-import { diffUsedSurface, formatReport, type Finding } from "../../../scripts/used-surface-diff.ts";
+import { annotations, diffUsedSurface, formatReport, type Finding } from "../../../scripts/used-surface-diff.ts";
 
 const pinned = await readJson<Spec>(ROOT, PINNED_SPEC);
 const used = await readJson<UsedSurface>(ROOT, USED_SURFACE);
@@ -239,4 +239,32 @@ test("the report names every breaking change and says what to do", () => {
   expect(report).toContain("gastownhall/gascity@bbbb");
   expect(formatReport([], { pinned: { repo: "r", commit: "a", committed: "c", path: "p", sha256: "s" }, upstream: { ref: "main", commit: "b" } }))
     .toContain("No change to the operations and fields this mod uses");
+});
+
+describe("text from the other spec cannot break out of the output", () => {
+  // A new required parameter whose name carries a line break and a command.
+  const upstream = drifted((s) => {
+    op(s, "get-v0-city-by-city-name-rigs").op.parameters!.push({
+      name: "x\n::add-mask::secret%",
+      in: "query",
+      required: true,
+      schema: { type: "string" },
+    });
+  });
+  const findings = diffUsedSurface(pinned, upstream, used);
+
+  test("each annotation is one escaped line", () => {
+    expect(annotations(findings)).toEqual([
+      "::error title=gc drift::get-v0-city-by-city-name-rigs query x%0A::add-mask::secret%25: new required parameter (reached from get-v0-city-by-city-name-rigs)",
+    ]);
+  });
+
+  test("the report keeps it inside its table cell", () => {
+    const report = formatReport(findings, {
+      pinned: { repo: "r", commit: "a", committed: "c", path: "p", sha256: "s" },
+      upstream: { ref: "main", commit: "b" },
+    });
+    expect(report.split("\n").some((line) => line.startsWith("::"))).toBe(false);
+    expect(report).toContain("| `get-v0-city-by-city-name-rigs query x ::add-mask::secret%` | new required parameter |");
+  });
 });
