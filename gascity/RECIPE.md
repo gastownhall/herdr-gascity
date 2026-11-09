@@ -21,8 +21,11 @@ the only authority over its sessions.
   and, when you click Open terminal, a herdr tab running `env -u HC_SCOPE -u
   HC_TERMINAL_ID -u HC_TERMINAL_SOCKET <gc> --city <path> session attach
   <id>`. `<gc>` is the shared `gascity.settings.gcBin`: `gc`, or the absolute
-  path to a program named gc; nothing else is run. It never runs `hc`,
-  `tmux` or `bd`.
+  path to a program named gc. The source also has an opener for gc's
+  dashboard link, `xdg-open <url>` (`open <url>` on macOS), refused for
+  anything but an http(s) URL on this computer; no control calls it yet, so
+  this build's `main.js` does not contain it. It never runs `hc`, `tmux` or
+  `bd`.
 - **It reads a file outside its folder:** `~/.gc/supervisor.toml` (the
   `[supervisor]` bind and port).
 - **It writes** only `<app home>/data/gascity-probe/probe.json`, and only
@@ -120,7 +123,8 @@ secondary text in the theme's muted color.
 - `herdr` functions: `theme`, `props`, `shared`/`setShared`
   (`gascity.settings`, `gascity.probe`, `gascity.focus`, `gascity.window`),
   `localStorage`, `home`, `appHome`, `readTextFile`, `writeTextFile`,
-  `exec` (gc only), `fetch` (loopback only), `panes`, `focused`, `layout`,
+  `exec` (gc; the source's dashboard opener `xdg-open`/`open` is not in this
+  build), `fetch` (loopback only), `panes`, `focused`, `layout`,
   `spaces`, `terminals`, `notify`, `nextCommand`, `closeOverlay`, and `run`
   with `tab.new`, `tab.select` and `mod.open` only.
 - Programs: gc (above). Shipped mods: none.

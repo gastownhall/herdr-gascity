@@ -49,6 +49,19 @@ describe("compat.json", () => {
     if (gc.minimumRelease !== null) expect(gc.minimumRelease).toMatch(/^v[0-9]+\.[0-9]+\.[0-9]+$/);
   });
 
+  test("RECIPE.md names every program the mod can exec, and says whether this build holds the opener", async () => {
+    const recipe = await read("gascity/RECIPE.md");
+    const host = await read("src/host.ts");
+    const bundle = await read("gascity/main.js");
+    const execs = [...host.matchAll(/herdr\.exec\(\s*"([^"]+)"/g)].map((m) => m[1]!);
+    expect(execs.sort()).toEqual(["open", "xdg-open"]);
+    for (const program of execs) expect(recipe).toContain(`\`${program}`);
+    expect(host).toContain("herdr.exec(gcBin,");
+    expect(recipe).toContain("supervisor status --json");
+    const shipped = bundle.includes('"xdg-open"');
+    expect(recipe.includes("this build's `main.js` does not contain it")).toBe(!shipped);
+  });
+
   test("RECIPE.md states the same versions", async () => {
     const { herdrApp, gc } = await compat();
     const recipe = await read("gascity/RECIPE.md");
