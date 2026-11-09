@@ -149,6 +149,10 @@ the job summary; they need no secrets and only read.
   (a test refuses unclassified files) and map any global type it declares in
   `compat/host-aliases.ts`.
 
+GitHub disables scheduled workflows in a public repository after 60 days
+without activity in it; a commit, or re-enabling the workflow in the Actions
+tab, starts them again.
+
 ## The sync engine
 
 herdr's `fetch` blocks a background-pool thread for the whole request, and
