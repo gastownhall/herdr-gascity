@@ -13,7 +13,7 @@ import type { DiagnosticLine } from "./diagnostics.ts";
 import type { HeaderModel } from "./header.ts";
 
 /** The probe's schema name; bumped on an incompatible change. */
-export const PROBE_SCHEMA = "gascity-herdr-probe/3";
+export const PROBE_SCHEMA = "gascity-herdr-probe/4";
 
 /**
  * A program the mod ran, an app command it ran, or a toast it posted (argv:
@@ -49,15 +49,17 @@ export interface ProbeInput {
   window: boolean;
   /** Why the last action or command was not done, if it was not (cleaned). */
   notice: string | null;
-  /** Commands this copy ran, newest last (cleaned). */
+  /** Commands the app's copies got, newest last (cleaned). */
   commands: readonly ProbeCommand[];
 }
 
-/** One command a copy ran and what became of it. */
+/** One command a copy got (any copy of the app) and what became of it (commandBook.ts). */
 export interface ProbeCommand {
   at: number;
   command: string;
-  result: "done" | "asked" | "refused";
+  /** Which copy: "window", "panel", or "panel <city>" for a pinned one. */
+  copy: string;
+  result: "done" | "asked" | "refused" | "skipped" | "duplicate";
   detail: string;
 }
 

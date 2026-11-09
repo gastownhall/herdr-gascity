@@ -693,6 +693,11 @@ export class CityStore implements EndpointListener {
     return false;
   }
 
+  /** Records a failure of app-wide work on this city's data (a toast that could not be posted) in its diagnostics. */
+  noteError(source: string, error: SyncError): void {
+    this.record(source, error);
+  }
+
   private record(source: string, error: SyncError): void {
     const entry: ErrorEntry = { at: this.deps.clock.now(), source, error };
     this.errors = [...this.errors, entry].slice(-ERROR_RING);

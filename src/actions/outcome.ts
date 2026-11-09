@@ -190,11 +190,11 @@ export class ActionLedger {
     return this.snap;
   }
 
-  /** Sends a new action now, in the turn of `owner` (the caller's copy). Returns its id. */
-  start(owner: object, spec: ActionSpec): number {
+  /** Sends a new action now, in the turn of `owner` (the caller's copy), with `key` or a fresh Idempotency-Key. Returns its id. */
+  start(owner: object, spec: ActionSpec, key?: string): number {
     const now = this.deps.clock.now();
     const rec: ActionRecord = {
-      id: ++this.seq, spec, key: this.deps.newKey(), attempt: 1, startedAt: now,
+      id: ++this.seq, spec, key: key ?? this.deps.newKey(), attempt: 1, startedAt: now,
       state: { kind: "sending", since: now }, owner, group: {}, token: 0, keyPinned: false,
       followUp: spec.then ? { kind: "waiting" } : null,
     };

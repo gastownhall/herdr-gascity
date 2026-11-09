@@ -26,9 +26,10 @@ import {
   readHerdrVersion, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTheme, readVisibility, rememberCity,
   selectTab, setProbeEnabled, setWindowOpen,
 } from "./host.ts";
+import { sharedCommandBook } from "./commandBook.ts";
 import { CopyController, type CommandUi } from "./copy.ts";
 import { keyAction } from "./keys.ts";
-import { overlayOf } from "./notify/window.ts";
+import { WINDOW_REFRESH_MS, overlayOf } from "./notify/window.ts";
 import { decodeCopy } from "./discovery/city.ts";
 import { DiscoveryController, type DiscoveryTask } from "./discovery/controller.ts";
 import { ProbeWriter, sharedProbeWriter } from "./probe.ts";
@@ -43,7 +44,14 @@ import { renderPanel, type PanelActions, type PanelInputs, type PanelKeyboard } 
 type Copy =
   | { kind: "host-incompatible"; missing: readonly string[] }
   | { kind: "copy-invalid"; error: string }
-  | { kind: "ready"; copy: CopyController; overlay: string | null; focus: { handle: GpuiFocusHandle | null } };
+  | {
+    kind: "ready";
+    copy: CopyController;
+    overlay: string | null;
+    focus: { handle: GpuiFocusHandle | null };
+    /** The session whose detail last drew the send box: Enter in the box sends there. */
+    box: { session: string | null };
+  };
 
 /** The app's registry: one per module run, shared by every copy. */
 function registry(): SyncRegistry {
@@ -99,8 +107,9 @@ function setUp(): Copy {
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
     window: overlay !== null,
+    commands: sharedCommandBook(),
   });
-  return { kind: "ready", copy, overlay, focus };
+  return { kind: "ready", copy, overlay, focus, box: { session: null } };
 }
 
 /** The new-bead form's fields as typed. */
@@ -129,7 +138,7 @@ function closeBead(copy: CopyController, inputs: PanelInputs): void {
  * starts the session, Enter in the new bead's title creates it, Enter in the
  * close reason closes the bead.
  */
-function inputsFor(copy: CopyController): PanelInputs {
+function inputsFor(copy: CopyController, box: { session: string | null }): PanelInputs {
   const message = InputState.new({ placeholder: "Message to the session" });
   const alias = InputState.new({ placeholder: "alias (optional)" });
   const beadTitle = InputState.new({ placeholder: "title (required)" });
@@ -138,7 +147,7 @@ function inputsFor(copy: CopyController): PanelInputs {
   const beadLabels = InputState.new({ placeholder: "labels, comma-separated (optional)" });
   const closeReason = InputState.new({ placeholder: "close reason (optional)" });
   message.on("submit", (_, cx) => {
-    if (copy.sendInput(message.value(), "default")) message.set_value("");
+    if (copy.sendInputTo(box.session, message.value(), "default")) message.set_value("");
     cx.notify();
   });
   alias.on("submit", (_, cx) => {
@@ -169,6 +178,7 @@ function uiFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs | nu
       cx.spawn((task) => state.copy.retry(taskOf(task)));
     },
     closeReason: (reason) => inputs?.closeReason.set_value(reason),
+    beadTitle: (title) => inputs?.beadTitle.set_value(title),
   };
 }
 
@@ -219,8 +229,8 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
       copy.requestKill(sessionId);
       cx.notify();
     },
-    send: (mode, cx) => {
-      if (inputs !== null && copy.sendInput(inputs.message.value(), mode)) inputs.message.set_value("");
+    send: (sessionId, mode, cx) => {
+      if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode)) inputs.message.set_value("");
       cx.notify();
     },
     answer: (requestId, option, cx) => {
@@ -290,7 +300,7 @@ export default class GasCity extends View {
     this.state = setUp();
     const state = this.state;
     if (state.kind !== "ready") return;
-    const inputs = inputsFor(state.copy);
+    const inputs = inputsFor(state.copy, state.box);
     this.inputs = inputs;
     if (typeof cx.focus_handle === "function") state.focus.handle = cx.focus_handle();
     if (state.overlay !== null) {
@@ -298,7 +308,13 @@ export default class GasCity extends View {
       visibility().invalidate();
     }
     cx.spawn((task) => state.copy.discover(taskOf(task)));
+    let flagged = systemClock.now();
     cx.timer.every(TICK_MS, (tcx) => {
+      // The open window keeps its shared flag fresh: a stale one (a window that died with herdr) expires.
+      if (state.overlay !== null && systemClock.now() - flagged >= WINDOW_REFRESH_MS) {
+        flagged = systemClock.now();
+        setWindowOpen(true);
+      }
       // A rediscovery is spawned from this copy's own timer, so its work belongs to this copy.
       if (state.copy.tick((body) => tcx.spawn((task) => body(taskOf(task))))) tcx.notify();
     });
@@ -306,7 +322,11 @@ export default class GasCity extends View {
     cx.spawn(async (task) => {
       for (;;) {
         const command = await nextCommand();
-        state.copy.runCommand(command, uiFor(state, inputs, task));
+        try {
+          state.copy.runCommand(command, uiFor(state, inputs, task));
+        } catch (cause) {
+          logError(`gascity: command ${JSON.stringify(command.slice(0, 80))} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+        }
         task.notify();
       }
     });
@@ -329,6 +349,9 @@ export default class GasCity extends View {
     return {
       handle,
       onKey: (event, cx) => {
+        // Keys reach the root while anything inside it holds the keyboard; a
+        // text box's typing is the box's: act only when the root itself is focused.
+        if (!handle.is_focused()) return;
         const action = keyAction(event.keystroke);
         if (action !== null && state.copy.key(action, uiFor(state, inputs, cx))) cx.notify();
       },
@@ -342,8 +365,10 @@ export default class GasCity extends View {
     if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme = readTheme();
     if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme, error: state.error });
+    const view = state.copy.view(systemClock.now());
+    state.box.session = view.detail.kind === "session" ? view.detail.ref : null;
     return renderPanel({
-      kind: "city", theme, view: state.copy.view(systemClock.now()), actions: actionsFor(state, this.inputs), inputs: this.inputs, keyboard: this.keyboard(state),
+      kind: "city", theme, view, actions: actionsFor(state, this.inputs), inputs: this.inputs, keyboard: this.keyboard(state),
     });
   }
 }

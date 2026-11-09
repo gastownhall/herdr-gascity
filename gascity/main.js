@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:9ec9a4eabbf2b256cbe920fa7abc0b24f7bd952305372bf04cbe29217d9197a1 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:d51faee7f76523d4bd0672d171ac4c2249f355bc6d1cf59f651d003068dc0b73 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2719,10 +2719,15 @@ function cleanLine(text2) {
 
 // src/notify/needsYou.ts
 var TOAST_INTERVAL_MS = 3e4;
+var BURST_LIMIT = 3;
 var SEEN_LIMIT = 1e3;
 function toastText(n) {
   return { title: `${n.label} needs you`, body: cleanLine(`${n.kind} · session ${n.session} · city ${n.city}`) };
 }
+function summaryText(city, more) {
+  return { title: `${more} more sessions need you`, body: cleanLine(`city ${city}`) };
+}
+var keyOf = (n) => `${n.session}\0${n.requestId}`;
 var NeedsYouNotifier = class {
   constructor(city) {
     this.city = city;
@@ -2730,39 +2735,94 @@ var NeedsYouNotifier = class {
   city;
   baseline = false;
   lastList = null;
-  seen = /* @__PURE__ */ new Set();
+  /** Pairs posted, covered by a summary, or in the baseline. */
+  posted = /* @__PURE__ */ new Set();
+  /** Pairs to post once their session's window has passed, oldest first. */
+  waiting = /* @__PURE__ */ new Map();
   lastToast = /* @__PURE__ */ new Map();
   /**
-   * The items to toast now, given the store's current pending list (null:
-   * not fetched yet) and session list. Call on every tick; an unchanged list
-   * returns nothing at once.
+   * What to post now, given the store's current pending list (null: not
+   * fetched yet) and session list. Call on every tick: a waiting prompt
+   * becomes due with time alone.
    */
   observe(pending, sessions, now) {
-    if (pending === null || pending === this.lastList) return [];
-    this.lastList = pending;
-    const out = [];
-    for (const p of pending.items) {
-      const key = `${p.session_id}\0${p.request_id}`;
-      if (this.seen.has(key)) continue;
-      this.remember(key);
-      if (!this.baseline) continue;
-      const last = this.lastToast.get(p.session_id);
+    const batch = { city: this.city, toasts: [], more: 0 };
+    if (pending === null) return batch;
+    if (pending !== this.lastList) {
+      this.lastList = pending;
+      this.take(pending, sessions);
+    }
+    const due = [];
+    const taken = /* @__PURE__ */ new Set();
+    for (const [key, n] of this.waiting) {
+      if (taken.has(n.session)) continue;
+      const last = this.lastToast.get(n.session);
       if (last !== void 0 && now - last < TOAST_INTERVAL_MS) continue;
-      this.lastToast.set(p.session_id, now);
+      taken.add(n.session);
+      due.push([key, n]);
+    }
+    for (const [key, n] of due) {
+      this.waiting.delete(key);
+      this.remember(key);
+      this.lastToast.set(n.session, now);
+    }
+    batch.toasts = due.slice(0, BURST_LIMIT).map(([, n]) => n);
+    batch.more = Math.max(0, due.length - BURST_LIMIT);
+    return batch;
+  }
+  /** Toasts the host could not post: tried again once their session's window has passed. */
+  failed(items, now) {
+    for (const n of items) {
+      const key = keyOf(n);
+      this.posted.delete(key);
+      this.waiting.set(key, n);
+      this.lastToast.set(n.session, now);
+    }
+  }
+  take(pending, sessions) {
+    const present = /* @__PURE__ */ new Set();
+    for (const p of pending.items) {
+      const key = keyOf({ session: p.session_id, requestId: p.request_id });
+      present.add(key);
+      if (this.posted.has(key) || this.waiting.has(key)) continue;
+      if (!this.baseline) {
+        this.remember(key);
+        continue;
+      }
       const s = sessions?.items.find((x) => x.id === p.session_id);
       const label2 = cleanLine(s?.alias || s?.template || p.session_id);
-      out.push({ city: this.city, session: p.session_id, requestId: p.request_id, label: label2, kind: cleanLine(p.kind) });
+      this.waiting.set(key, { city: this.city, session: p.session_id, requestId: p.request_id, label: label2, kind: cleanLine(p.kind) });
+    }
+    if (!pending.partial && (pending.unreadable?.length ?? 0) === 0) {
+      for (const key of [...this.waiting.keys()]) if (!present.has(key)) this.waiting.delete(key);
     }
     this.baseline = true;
-    return out;
   }
   remember(key) {
-    this.seen.add(key);
-    if (this.seen.size <= SEEN_LIMIT) return;
-    const oldest = this.seen.values().next().value;
-    if (oldest !== void 0) this.seen.delete(oldest);
+    this.posted.add(key);
+    if (this.posted.size <= SEEN_LIMIT) return;
+    const oldest = this.posted.values().next().value;
+    if (oldest !== void 0) this.posted.delete(oldest);
   }
 };
+
+// src/notify/window.ts
+function overlayOf(props2) {
+  if (typeof props2 !== "object" || props2 === null || Array.isArray(props2)) return null;
+  const v = props2["overlay"];
+  return typeof v === "string" && v !== "" ? v : null;
+}
+var WINDOW_REFRESH_MS = 5e3;
+var WINDOW_TTL_MS = 15e3;
+function windowFlag(now) {
+  return { open: true, at: now };
+}
+function windowOpenAt(value, now) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value;
+  const at3 = v["at"];
+  return v["open"] === true && typeof at3 === "number" && Number.isFinite(at3) && Math.abs(now - at3) <= WINDOW_TTL_MS;
+}
 
 // src/sync/visibility.ts
 var MOD_NAME = "gascity";
@@ -2865,7 +2925,7 @@ function readVisibility() {
   if (!focus.ok) return focus;
   const first = panes2.value.errors[0];
   if (first) return err(first);
-  return ok({ windowOpen: herdr.shared(WINDOW_KEY) === true, layoutMods: layoutModNames(herdr.layout()), panes: panes2.value.items, focus: focus.value });
+  return ok({ windowOpen: readWindowOpen(), layoutMods: layoutModNames(herdr.layout()), panes: panes2.value.items, focus: focus.value });
 }
 function readProbeEnabled() {
   return herdr.shared(PROBE_KEY) === true;
@@ -2874,30 +2934,46 @@ function setProbeEnabled(on) {
   herdr.setShared(PROBE_KEY, on);
 }
 function readWindowOpen() {
-  return herdr.shared(WINDOW_KEY) === true;
+  return windowOpenAt(herdr.shared(WINDOW_KEY), Date.now());
 }
 function setWindowOpen(open) {
-  herdr.setShared(WINDOW_KEY, open);
+  herdr.setShared(WINDOW_KEY, open ? windowFlag(Date.now()) : false);
 }
 function readFocusTarget() {
   return herdr.shared(FOCUS_KEY);
 }
-function postNeedsYou(items) {
-  for (const n of items) {
-    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), n.city, n.session, Date.now()));
-    const { title, body } = toastText(n);
+function postToast(title, body) {
+  if (readWindowOpen()) {
+    herdr.notify({ title, body, level: "warning" });
+    logRecord("notify", []);
+  } else {
+    herdr.notify({ title, body, level: "warning", action: { name: "mod.open", args: { name: "gascity" } } });
+    logRecord("notify", ["mod.open", MOD_NAME]);
+  }
+}
+function postNeedsYou(batch) {
+  const failed = [];
+  const errors = [];
+  for (const n of batch.toasts) {
     try {
-      if (readWindowOpen()) {
-        herdr.notify({ title, body, level: "warning" });
-        logRecord("notify", []);
-      } else {
-        herdr.notify({ title, body, level: "warning", action: { name: "mod.open", args: { name: "gascity" } } });
-        logRecord("notify", ["mod.open", MOD_NAME]);
-      }
+      herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), n.city, n.session, Date.now()));
+      const { title, body } = toastText(n);
+      postToast(title, body);
     } catch (cause) {
-      logError(`gascity: notify failed: ${messageOf2(cause)}`);
+      failed.push(n);
+      errors.push(`toast for session ${n.session} not posted: ${messageOf2(cause)}`);
     }
   }
+  if (batch.more > 0) {
+    try {
+      const { title, body } = summaryText(batch.city, batch.more);
+      postToast(title, body);
+    } catch (cause) {
+      errors.push(`summary toast for ${batch.more} sessions not posted: ${messageOf2(cause)}`);
+    }
+  }
+  for (const e of errors) logError(`gascity: ${e}`);
+  return { failed, errors };
 }
 function selectTab(id2) {
   logRecord("run", ["tab.select", id2]);
@@ -2981,6 +3057,38 @@ function readTheme() {
   };
   const colors = { background: pick2("background"), foreground: pick2("foreground"), muted: pick2("muted") };
   return { colors, issues };
+}
+
+// src/commandBook.ts
+var DUPLICATE_WINDOW_MS = 2e3;
+var NONCE_WINDOW_MS = 10 * 6e4;
+var COMMAND_LOG_LIMIT = 20;
+var CommandBook = class {
+  claims = /* @__PURE__ */ new Map();
+  log = [];
+  /** Claims delivery `text` at `now`; false when a copy already claimed it within its window. */
+  claim(text2, nonce, now) {
+    for (const [k, until] of this.claims) if (until <= now) this.claims.delete(k);
+    if (this.claims.has(text2)) return false;
+    this.claims.set(text2, now + (nonce ? NONCE_WINDOW_MS : DUPLICATE_WINDOW_MS));
+    return true;
+  }
+  /** Gives up a claim: the copy that claimed `text` refused it. */
+  release(text2) {
+    this.claims.delete(text2);
+  }
+  record(entry) {
+    this.log = [...this.log, entry].slice(-COMMAND_LOG_LIMIT);
+  }
+  /** The log, oldest first. */
+  entries() {
+    return this.log;
+  }
+};
+var shared2 = null;
+function sharedCommandBook() {
+  shared2 ??= new CommandBook();
+  return shared2;
 }
 
 // src/gc/ops.ts
@@ -3295,105 +3403,151 @@ function sessionRespond(id2, requestId, option) {
 // src/commands.ts
 var id = (name) => ({ name, kind: "id" });
 var text = (name) => ({ name, kind: "text" });
+var CITY = id("city");
 var CONFIRM = "confirm";
+var NONCE = /^nonce=([A-Za-z0-9._-]{1,64})$/;
 var MAX_COMMAND_LENGTH = 8192;
 var at2 = (a, i) => a[i] ?? "";
 var GRAMMAR = {
   focus: {
+    mutating: false,
     args: [],
     optional: [id("city"), id("session")],
     summary: "bare: take the keyboard; with a city and a session: select the city and open the session's detail",
     build: (a) => a.length === 0 ? { verb: "focus" } : { verb: "focus-session", city: at2(a, 0), session: at2(a, 1) }
   },
-  city: { args: [id("city")], summary: "select a city (as the header's city list does)", build: (a) => ({ verb: "city", city: at2(a, 0) }) },
-  session: { args: [id("session")], summary: "open a session's detail (as clicking its row does)", build: (a) => ({ verb: "session", session: at2(a, 0) }) },
-  bead: { args: [id("bead")], summary: "open a bead's detail (as clicking its card does)", build: (a) => ({ verb: "bead", bead: at2(a, 0) }) },
-  refresh: { args: [], summary: "refetch everything now (Retry now; the r key)", build: () => ({ verb: "refresh" }) },
-  probe: { args: [id("on-or-off")], summary: "turn the probe file on or off (shared for every copy)", build: (a) => ({ verb: "probe", on: at2(a, 0) === "on" }) },
-  cancel: { args: [], summary: "close the open question or form without acting (Cancel)", build: () => ({ verb: "cancel" }) },
+  city: {
+    mutating: false,
+    args: [id("city")],
+    summary: "select a city (as the header's city list does; refused by a pinned copy)",
+    build: (a) => ({ verb: "city", city: at2(a, 0) })
+  },
+  session: { mutating: false, args: [id("session")], summary: "open a session's detail (as clicking its row does)", build: (a) => ({ verb: "session", session: at2(a, 0) }) },
+  bead: { mutating: false, args: [id("bead")], summary: "open a bead's detail (as clicking its card does)", build: (a) => ({ verb: "bead", bead: at2(a, 0) }) },
+  refresh: { mutating: false, args: [], summary: "refetch everything now (Retry now; the r key)", build: () => ({ verb: "refresh" }) },
+  probe: {
+    mutating: false,
+    args: [id("on-or-off")],
+    summary: "turn the probe file on or off (shared for every copy)",
+    build: (a) => ({ verb: "probe", on: at2(a, 0) === "on" })
+  },
+  cancel: { mutating: false, args: [], summary: "close the open question or form without acting (Cancel)", build: () => ({ verb: "cancel" }) },
   "session-new": {
+    mutating: true,
     args: [id("agent")],
     optional: [text("alias")],
     summary: "start a session of an agent, with an optional alias (New session…, then Start session)",
-    build: (a) => ({ verb: "session-new", agent: at2(a, 0), alias: a.length > 1 && at2(a, 1) !== "" ? at2(a, 1) : null })
+    build: (a) => ({ verb: "session-new", city: at2(a, 0), agent: at2(a, 1), alias: a.length > 2 && at2(a, 2) !== "" ? at2(a, 2) : null })
   },
-  wake: { args: [id("session")], summary: "wake a session (Wake)", build: (a) => ({ verb: "wake", session: at2(a, 0) }) },
-  suspend: { args: [id("session")], summary: "suspend a session (Suspend)", build: (a) => ({ verb: "suspend", session: at2(a, 0) }) },
-  stop: { args: [id("session")], summary: "stop a session's current turn (Stop turn)", build: (a) => ({ verb: "stop", session: at2(a, 0) }) },
-  pin: { args: [id("session")], summary: "pin a session awake (Pin)", build: (a) => ({ verb: "pin", session: at2(a, 0) }) },
-  unpin: { args: [id("session")], summary: "clear a session's pin (Unpin)", build: (a) => ({ verb: "unpin", session: at2(a, 0) }) },
+  wake: { mutating: true, args: [id("session")], summary: "wake a session (Wake)", build: (a) => ({ verb: "wake", city: at2(a, 0), session: at2(a, 1) }) },
+  suspend: { mutating: true, args: [id("session")], summary: "suspend a session (Suspend)", build: (a) => ({ verb: "suspend", city: at2(a, 0), session: at2(a, 1) }) },
+  stop: { mutating: true, args: [id("session")], summary: "stop a session's current turn (Stop turn)", build: (a) => ({ verb: "stop", city: at2(a, 0), session: at2(a, 1) }) },
+  pin: { mutating: true, args: [id("session")], summary: "pin a session awake (Pin)", build: (a) => ({ verb: "pin", city: at2(a, 0), session: at2(a, 1) }) },
+  unpin: { mutating: true, args: [id("session")], summary: "clear a session's pin (Unpin)", build: (a) => ({ verb: "unpin", city: at2(a, 0), session: at2(a, 1) }) },
   close: {
+    mutating: true,
     args: [id("session")],
     confirm: true,
     summary: "close a session (Close…, then Close)",
-    build: (a, confirm) => ({ verb: "close", session: at2(a, 0), confirm })
+    build: (a, confirm) => ({ verb: "close", city: at2(a, 0), session: at2(a, 1), confirm })
   },
   kill: {
+    mutating: true,
     args: [id("session")],
     confirm: true,
     summary: "kill a session's runtime (Kill…, then Kill)",
-    build: (a, confirm) => ({ verb: "kill", session: at2(a, 0), confirm })
+    build: (a, confirm) => ({ verb: "kill", city: at2(a, 0), session: at2(a, 1), confirm })
   },
   "kill-force": {
+    mutating: true,
     args: [id("session")],
     confirm: true,
     summary: "force-kill a session's runtime (Kill…, then Force kill)",
-    build: (a, confirm) => ({ verb: "kill-force", session: at2(a, 0), confirm })
+    build: (a, confirm) => ({ verb: "kill-force", city: at2(a, 0), session: at2(a, 1), confirm })
   },
   submit: {
+    mutating: true,
     args: [id("session"), text("text")],
     summary: "send input to a session (Send)",
-    build: (a) => ({ verb: "submit", session: at2(a, 0), text: at2(a, 1) })
+    build: (a) => ({ verb: "submit", city: at2(a, 0), session: at2(a, 1), text: at2(a, 2) })
   },
   interrupt: {
+    mutating: true,
     args: [id("session"), text("text")],
     summary: "interrupt the turn and send input (Interrupt and send)",
-    build: (a) => ({ verb: "interrupt", session: at2(a, 0), text: at2(a, 1) })
+    build: (a) => ({ verb: "interrupt", city: at2(a, 0), session: at2(a, 1), text: at2(a, 2) })
   },
   message: {
+    mutating: true,
     args: [id("session"), text("text")],
     summary: "send a queued message to a session (Send as message)",
-    build: (a) => ({ verb: "message", session: at2(a, 0), text: at2(a, 1) })
+    build: (a) => ({ verb: "message", city: at2(a, 0), session: at2(a, 1), text: at2(a, 2) })
   },
   answer: {
+    mutating: true,
     args: [id("session"), id("request"), id("option")],
     summary: "answer a session's pending prompt with one of gc's options (its answer button); the session's detail must show that prompt",
-    build: (a) => ({ verb: "answer", session: at2(a, 0), requestId: at2(a, 1), option: at2(a, 2) })
+    build: (a) => ({ verb: "answer", city: at2(a, 0), session: at2(a, 1), requestId: at2(a, 2), option: at2(a, 3) })
   },
   "agent-suspend": {
+    mutating: true,
     args: [id("agent")],
     confirm: true,
     summary: "suspend an agent (Suspend agent…, then Suspend agent)",
-    build: (a, confirm) => ({ verb: "agent-suspend", name: at2(a, 0), confirm })
+    build: (a, confirm) => ({ verb: "agent-suspend", city: at2(a, 0), name: at2(a, 1), confirm })
   },
-  "agent-resume": { args: [id("agent")], summary: "resume an agent (Resume agent)", build: (a) => ({ verb: "agent-resume", name: at2(a, 0) }) },
+  "agent-resume": {
+    mutating: true,
+    args: [id("agent")],
+    summary: "resume an agent (Resume agent)",
+    build: (a) => ({ verb: "agent-resume", city: at2(a, 0), name: at2(a, 1) })
+  },
   "rig-suspend": {
+    mutating: true,
     args: [id("rig")],
     confirm: true,
     summary: "suspend a rig (Suspend rig…, then Suspend rig)",
-    build: (a, confirm) => ({ verb: "rig-suspend", name: at2(a, 0), confirm })
+    build: (a, confirm) => ({ verb: "rig-suspend", city: at2(a, 0), name: at2(a, 1), confirm })
   },
-  "rig-resume": { args: [id("rig")], summary: "resume a rig (Resume rig)", build: (a) => ({ verb: "rig-resume", name: at2(a, 0) }) },
+  "rig-resume": {
+    mutating: true,
+    args: [id("rig")],
+    summary: "resume a rig (Resume rig)",
+    build: (a) => ({ verb: "rig-resume", city: at2(a, 0), name: at2(a, 1) })
+  },
   "bead-new": {
+    mutating: true,
     args: [text("title")],
     optional: [id("agent")],
-    summary: "create a bead, and sling it to an agent if one is given (+ New bead, then Create / Create and sling)",
-    build: (a) => ({ verb: "bead-new", title: at2(a, 0), slingTo: a.length > 1 ? at2(a, 1) : null })
+    confirm: true,
+    summary: "create a bead (+ New bead, then Create); with an agent it is also slung there, which needs confirm (else the form opens filled in)",
+    build: (a, confirm) => ({ verb: "bead-new", city: at2(a, 0), title: at2(a, 1), slingTo: a.length > 2 ? at2(a, 2) : null, confirm })
   },
   sling: {
+    mutating: true,
     args: [id("bead"), id("agent")],
     confirm: true,
     summary: "sling a bead to an agent (Sling…, then the agent)",
-    build: (a, confirm) => ({ verb: "sling", bead: at2(a, 0), agent: at2(a, 1), confirm })
+    build: (a, confirm) => ({ verb: "sling", city: at2(a, 0), bead: at2(a, 1), agent: at2(a, 2), confirm })
   },
   "bead-close": {
+    mutating: true,
     args: [id("bead"), text("reason")],
     confirm: true,
     summary: "close a bead with a reason, which may be empty (Close…, then Close bead)",
-    build: (a, confirm) => ({ verb: "bead-close", bead: at2(a, 0), reason: at2(a, 1), confirm })
+    build: (a, confirm) => ({ verb: "bead-close", city: at2(a, 0), bead: at2(a, 1), reason: at2(a, 2), confirm })
   },
-  "bead-reopen": { args: [id("bead")], summary: "reopen a closed bead (Reopen)", build: (a) => ({ verb: "bead-reopen", bead: at2(a, 0) }) }
+  "bead-reopen": {
+    mutating: true,
+    args: [id("bead")],
+    summary: "reopen a closed bead (Reopen)",
+    build: (a) => ({ verb: "bead-reopen", city: at2(a, 0), bead: at2(a, 1) })
+  }
 };
+function isMutating(c) {
+  const spec2 = GRAMMAR[c.verb];
+  return spec2?.mutating === true;
+}
 function shownCommand(raw) {
   const line = cleanLine(raw);
   return line.length > 80 ? `${line.slice(0, 79)}…` : line;
@@ -3405,40 +3559,59 @@ function decode2(part, index) {
     return err(`argument ${index} has a bad percent escape`);
   }
 }
+function counts(verb, spec2) {
+  const lead = spec2.mutating ? 1 : 0;
+  if (verb === "focus") return [0, 2];
+  const required2 = lead + spec2.args.length;
+  return Array.from({ length: (spec2.optional?.length ?? 0) + 1 }, (_, k) => required2 + k);
+}
 function parseCommand(raw) {
   if (raw.length > MAX_COMMAND_LENGTH) return err(`longer than ${MAX_COMMAND_LENGTH} characters`);
-  const [verb = "", ...parts] = raw.split(":");
+  const [verb = "", ...rest] = raw.split(":");
   const spec2 = Object.hasOwn(GRAMMAR, verb) ? GRAMMAR[verb] : void 0;
   if (!spec2) return err(`unknown command "${shownCommand(verb)}"`);
+  let parts = rest;
+  let nonce = null;
+  const last = NONCE.exec(parts.at(-1) ?? "");
+  if (last) {
+    nonce = last[1] ?? null;
+    parts = parts.slice(0, -1);
+  }
   const args = [];
   for (const [i, part] of parts.entries()) {
     const d = decode2(part, i + 1);
     if (!d.ok) return d;
     args.push(d.value);
   }
-  const required2 = spec2.args.length;
-  const optional3 = spec2.optional?.length ?? 0;
+  const allowed = counts(verb, spec2);
+  const most = Math.max(...allowed);
   let confirm = false;
-  if (spec2.confirm && args.length === required2 + 1) {
-    if (args[required2] !== CONFIRM) return err(`${verb}: the argument after ${spec2.args.map((a) => `<${a.name}>`).join(":")} can only be "${CONFIRM}"`);
+  if (spec2.confirm && args.length === most + 1) {
+    if (args[most] !== CONFIRM) return err(`${verb}: the argument after ${placeholders(verb)} can only be "${CONFIRM}"`);
     confirm = true;
     args.pop();
   }
-  const counts = verb === "focus" ? [0, 2] : Array.from({ length: optional3 + 1 }, (_, k) => required2 + k);
-  if (!counts.includes(args.length)) return err(`${verb}: expected ${usage(verb)}`);
-  const kinds = [...spec2.args, ...spec2.optional ?? []];
+  if (!allowed.includes(args.length)) return err(`${verb}: expected ${usage(verb)}`);
+  const kinds = [...spec2.mutating ? [CITY] : [], ...spec2.args, ...spec2.optional ?? []];
   for (const [i, value] of args.entries()) {
     const arg = kinds[i];
     if (arg?.kind === "id" && value.trim() === "") return err(`${verb}: <${arg.name}> is empty`);
   }
   if (verb === "probe" && args[0] !== "on" && args[0] !== "off") return err(`probe: expected "on" or "off", got "${shownCommand(args[0] ?? "")}"`);
-  return ok(spec2.build(args, confirm));
+  return ok({ command: spec2.build(args, confirm), nonce });
+}
+function placeholders(verb) {
+  const spec2 = GRAMMAR[verb];
+  if (!spec2) return "";
+  return [...spec2.mutating ? [CITY] : [], ...spec2.args, ...spec2.optional ?? []].map((a) => `<${a.name}>`).join(":");
 }
 function usage(verb) {
   const spec2 = GRAMMAR[verb];
   if (!spec2) return verb;
-  const req = spec2.args.map((a) => `:<${a.name}>`).join("");
-  const opt = verb === "focus" ? "[:<city>:<session>]" : (spec2.optional ?? []).map((a) => `[:<${a.name}>]`).join("");
+  const req = [...spec2.mutating ? [CITY] : [], ...spec2.args].map((a) => `:<${a.name}>`).join("");
+  if (verb === "focus") return "focus[:<city>:<session>]";
+  if (verb === "bead-new") return `bead-new${req}[:<agent>[:${CONFIRM}]]`;
+  const opt = (spec2.optional ?? []).map((a) => `[:<${a.name}>]`).join("");
   return `${verb}${req}${opt}${spec2.confirm ? `[:${CONFIRM}]` : ""}`;
 }
 
@@ -4026,13 +4199,13 @@ var ActionLedger = class {
   snapshot() {
     return this.snap;
   }
-  /** Sends a new action now, in the turn of `owner` (the caller's copy). Returns its id. */
-  start(owner, spec2) {
+  /** Sends a new action now, in the turn of `owner` (the caller's copy), with `key` or a fresh Idempotency-Key. Returns its id. */
+  start(owner, spec2, key) {
     const now = this.deps.clock.now();
     const rec = {
       id: ++this.seq,
       spec: spec2,
-      key: this.deps.newKey(),
+      key: key ?? this.deps.newKey(),
       attempt: 1,
       startedAt: now,
       state: { kind: "sending", since: now },
@@ -4910,6 +5083,10 @@ var CityStore = class {
     if (backsOff(r.error)) this.deps.endpoint.failed(r.error);
     else this.deps.endpoint.succeeded();
     return false;
+  }
+  /** Records a failure of app-wide work on this city's data (a toast that could not be posted) in its diagnostics. */
+  noteError(source, error) {
+    this.record(source, error);
   }
   record(source, error) {
     const entry = { at: this.deps.clock.now(), source, error };
@@ -5936,7 +6113,7 @@ function headerModel(m, hostErrors = [], live = null) {
 }
 
 // src/vm/probe.ts
-var PROBE_SCHEMA = "gascity-herdr-probe/3";
+var PROBE_SCHEMA = "gascity-herdr-probe/4";
 function probeSession(r, agent, group) {
   return {
     id: r.id,
@@ -6025,7 +6202,6 @@ function probeDocument(input) {
 }
 
 // src/copy.ts
-var COMMAND_LOG_LIMIT = 20;
 var FOCUS_WAIT_MS = 6e4;
 var CITY_SCOPED = /* @__PURE__ */ new Set(["city-not-running", "write-grant-required", "read-grant-required", "read-only", "api-missing"]);
 function isCityScoped(e) {
@@ -6084,7 +6260,9 @@ var CopyController = class {
   focusApplied = 0;
   focusShown = null;
   gascityTabs = [];
-  commandLog = [];
+  /** The Idempotency-Key a command's nonce gives the action it sends (only while that command runs). */
+  commandKey = null;
+  ownBook = null;
   /** Discovers gc's API and the cities; run it in a task of this copy (init). */
   discover(task) {
     this.discoveryProgress = { count: this.deps.discovery.progress, at: this.deps.clock.now() };
@@ -6196,7 +6374,7 @@ var CopyController = class {
       refreshCount: this.refreshCount,
       onScreen: this.onScreen,
       window: this.deps.window ? this.windowModel() : null,
-      commands: this.commandLog
+      commands: this.commands().entries()
     };
   }
   // ---- actions (buttons; later also keys and commands) -------------------------
@@ -6280,14 +6458,14 @@ var CopyController = class {
   refreshAction(id2) {
     this.city?.refreshAction(id2);
   }
-  /** Sends text to the open session; returns whether it was sent (the caller then clears its input). */
-  sendInput(text2, mode) {
-    const id2 = this.selectedRef();
-    if (id2 === null) return this.refuse("open a session first");
-    return this.sendInputTo(id2, text2, mode);
-  }
-  /** Sends text to a session gc lists (the send box, and the submit/interrupt/message commands). */
+  /**
+   * Sends text to a session gc lists: the send box (for the session whose
+   * detail drew it, never the selection at send time) and the
+   * submit/interrupt/message commands. Returns whether it was sent (the
+   * caller then clears its input).
+   */
   sendInputTo(id2, text2, mode) {
+    if (id2 === null) return this.refuse("open a session first");
     if (!this.listed(id2)) return this.refuse(`session ${cleanLine(id2)} is not listed by gc`);
     if (text2.trim() === "") return this.refuse("type a message first");
     const spec2 = mode === "message" ? sessionMessage(id2, text2) : sessionSubmit(id2, text2, mode);
@@ -6433,28 +6611,60 @@ var CopyController = class {
   // ---- commands -----------------------------------------------------------------------
   /**
    * Runs one command herdr delivered (commands.ts), in this copy's turn,
-   * through the methods the buttons call. A command the grammar or the
-   * copy refuses changes nothing and says why in the notice.
+   * through the methods the buttons call. herdr delivers it to every shown
+   * copy: one that changes gc state runs only in a copy showing the city it
+   * names, and only once per app (commandBook.ts). A command the grammar or
+   * the copy refuses changes nothing and says why in the notice. Every
+   * outcome goes to the app's command log.
    */
   runCommand(raw, ui) {
+    const now = this.deps.clock.now();
     const parsed = parseCommand(raw);
     this.notice = null;
     const hadDialog = this.dialog() !== null;
+    const entry = (result, detail) => ({ at: now, command: shownCommand(raw), copy: this.copyName(), result, detail: cleanLine(detail) });
     let record2;
     if (!parsed.ok) {
-      record2 = this.commandRecord(raw, "refused", parsed.error);
+      record2 = entry("refused", parsed.error);
     } else {
-      const done = this.perform(parsed.value, ui);
-      if (this.notice !== null && !hadDialog) this.clearDialogs();
-      if (this.notice !== null) record2 = this.commandRecord(raw, "refused", this.notice);
-      else record2 = this.commandRecord(raw, done === "asked" ? "asked" : "done", done === "asked" ? "asked first: add :confirm to answer" : done);
+      const { command: c, nonce } = parsed.value;
+      const shows = this.city?.key.city ?? null;
+      if (isMutating(c) && shows !== c.city) {
+        record2 = entry("skipped", `it names city ${c.city}; this copy shows ${shows ?? "no running city"}`);
+      } else if (isMutating(c) && !this.commands().claim(raw, nonce !== null, now)) {
+        record2 = entry("duplicate", "another copy ran this delivery");
+      } else {
+        let done = "";
+        this.commandKey = nonce;
+        try {
+          done = this.perform(c, ui);
+        } catch (cause) {
+          this.refuse(`the command failed: ${messageOf5(cause)}`);
+          this.recordFailure("command", { kind: "listener-failed", message: messageOf5(cause) });
+        } finally {
+          this.commandKey = null;
+        }
+        if (this.notice !== null && !hadDialog) this.clearDialogs();
+        if (this.notice !== null) {
+          record2 = entry("refused", this.notice);
+          if (isMutating(c)) this.commands().release(raw);
+        } else record2 = entry(done === "asked" ? "asked" : "done", done === "asked" ? "asked first: add :confirm to answer" : done);
+      }
     }
     if (record2.result === "refused") this.notice = cleanLine(`gascity.${record2.command}: refused: ${record2.detail}`);
-    this.commandLog = [...this.commandLog, record2].slice(-COMMAND_LOG_LIMIT);
+    if (record2.result === "skipped") this.notice = cleanLine(`gascity.${record2.command}: not run here: ${record2.detail}`);
+    this.commands().record(record2);
     return record2;
   }
-  commandRecord(raw, result, detail) {
-    return { at: this.deps.clock.now(), command: shownCommand(raw), result, detail: cleanLine(detail) };
+  commands() {
+    this.ownBook ??= this.deps.commands ?? new CommandBook();
+    return this.ownBook;
+  }
+  /** This copy, as the command log names it. */
+  copyName() {
+    if (this.deps.window) return "window";
+    const pinned = this.deps.discovery.machine.copy.pinned;
+    return pinned === null ? "panel" : `panel ${cleanLine(pinned)}`;
   }
   /** Does what a parsed command says; "asked" when it only opened its button's question. Refusals set the notice. */
   perform(c, ui) {
@@ -6465,9 +6675,12 @@ var CopyController = class {
       case "focus-session":
         this.focusSession(c.city, c.session);
         return "focusing";
-      case "city":
-        if (this.checkCity(c.city)) this.selectCity(c.city);
+      case "city": {
+        const pinned = this.deps.discovery.machine.copy.pinned;
+        if (pinned !== null) this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
+        else if (this.checkCity(c.city)) this.selectCity(c.city);
         return "selected";
+      }
       case "session": {
         const id2 = this.resolveSession(c.session);
         if (id2 !== null) this.selectSession(id2);
@@ -6544,6 +6757,10 @@ var CopyController = class {
             return "";
           }
           this.chooseSlingTarget(index);
+          if (!c.confirm) {
+            ui.beadTitle(c.title);
+            return "asked";
+          }
         }
         this.createBead({ title: c.title, description: "", priority: "", labels: "" });
         return "sent";
@@ -6668,7 +6885,7 @@ var CopyController = class {
     const activity = this.city ? activityModel(this.city.activity(), null, this.deps.clock.now()) : null;
     if (isBusy(activity, spec2)) return this.refuse(`${spec2.verb} is already under way`);
     this.notice = null;
-    this.city.act(spec2);
+    this.city.act(spec2, this.commandKey ?? void 0);
     return true;
   }
   retryNow(id2) {
@@ -6899,13 +7116,6 @@ function remember(m) {
   const id2 = ++machineSeq;
   machineIds.set(m, id2);
   return id2;
-}
-
-// src/notify/window.ts
-function overlayOf(props2) {
-  if (typeof props2 !== "object" || props2 === null || Array.isArray(props2)) return null;
-  const v = props2["overlay"];
-  return typeof v === "string" && v !== "" ? v : null;
 }
 
 // src/discovery/supervisorConfig.ts
@@ -7530,10 +7740,10 @@ var ProbeWriter = class {
     this.failures = [...this.failures, { at: at3, source: "probe", error }].slice(-ERROR_LIMIT);
   }
 };
-var shared2 = null;
+var shared3 = null;
 function sharedProbeWriter(create) {
-  shared2 ??= create();
-  return shared2;
+  shared3 ??= create();
+  return shared3;
 }
 
 // src/sync/clock.ts
@@ -7933,8 +8143,13 @@ var SyncRegistry = class {
           store.tick(owner);
           ledger.tick(owner);
           const s = store.snapshot();
-          const items = notifier.observe(s.pending.value, s.sessions.value, this.clock.now());
-          if (items.length > 0) this.deps.onNeedsYou?.(items);
+          const now = this.clock.now();
+          const batch = notifier.observe(s.pending.value, s.sessions.value, now);
+          if (this.deps.onNeedsYou && (batch.toasts.length > 0 || batch.more > 0)) {
+            const posted = this.deps.onNeedsYou(batch);
+            notifier.failed(posted.failed, now);
+            for (const message of posted.errors) store.noteError("toasts", { kind: "listener-failed", message });
+          }
         }
         return store.snapshot().rev;
       },
@@ -7952,7 +8167,7 @@ var SyncRegistry = class {
         if (active) store.refresh(domains);
       },
       client: () => endpoint.client("mutation"),
-      act: (spec2) => active ? ledger.start(owner, spec2) : -1,
+      act: (spec2, key) => active ? ledger.start(owner, spec2, key) : -1,
       retryAction: (actionId) => active ? ledger.retry(owner, actionId, store.snapshot()) : err("this view has closed"),
       refreshAction: (actionId) => {
         if (active) ledger.refreshFor(actionId);
@@ -7962,10 +8177,10 @@ var SyncRegistry = class {
     };
   }
 };
-var shared3 = null;
+var shared4 = null;
 function sharedRegistry(create) {
-  shared3 ??= create();
-  return shared3;
+  shared4 ??= create();
+  return shared4;
 }
 
 // src/sync/visibilityCache.ts
@@ -7994,10 +8209,10 @@ var VisibilityCache = class {
     this.stale = true;
   }
 };
-var shared4 = null;
+var shared5 = null;
 function sharedVisibilityCache(create) {
-  shared4 ??= create();
-  return shared4;
+  shared5 ??= create();
+  return shared5;
 }
 
 // src/view/panel.ts
@@ -8138,8 +8353,8 @@ function agentRow(a, id2, theme2, actions, activity) {
   return el.children(a.sessions.map((r, k) => sessionRow(r, `${id2}-session-${k}`, theme2, actions)));
 }
 function groupHead(g, i, theme2, actions, activity) {
-  const counts = g.counts === null ? g.listed ? "" : " (not in gc's rig list)" : ` · ${g.counts}`;
-  const title = label(`gascity-group-${i}`, `${g.collapsed ? "▸" : "▾"} ${g.title}${g.suspended ? " (suspended)" : ""}${counts}`).on_click((_, cx) => actions.toggleGroup(g.key, cx));
+  const counts2 = g.counts === null ? g.listed ? "" : " (not in gc's rig list)" : ` · ${g.counts}`;
+  const title = label(`gascity-group-${i}`, `${g.collapsed ? "▸" : "▾"} ${g.title}${g.suspended ? " (suspended)" : ""}${counts2}`).on_click((_, cx) => actions.toggleGroup(g.key, cx));
   if (g.rig === null) return title;
   const spec2 = g.suspended ? rigResume(g.rig) : rigSuspend(g.rig);
   return h_flex2().id(`gascity-group-${i}-head`).gap(8).child(title).child(actionButton(`gascity-group-${i}-${g.suspended ? "resume" : "suspend"}`, spec2, activity, theme2, actions));
@@ -8273,12 +8488,12 @@ function answers(p, actions) {
   const { requestId, options } = p.answer;
   return h_flex4().id("gascity-detail-answers").gap(8).children(options.map((raw, i) => button(`gascity-answer-${i}`, p.options[i] ?? "", (cx) => actions.answer(requestId, raw, cx))));
 }
-function sendBox(canInterrupt, ctx, actions) {
+function sendBox(sessionId, canInterrupt, ctx, actions) {
   let row2 = h_flex4().id("gascity-send").gap(8);
   if (ctx.message !== null) row2 = row2.child(Input2.new(ctx.message));
-  row2 = row2.child(button("gascity-send-default", "Send", (cx) => actions.send("default", cx)));
-  if (canInterrupt) row2 = row2.child(button("gascity-send-interrupt", "Interrupt and send", (cx) => actions.send("interrupt_now", cx)));
-  return row2.child(button("gascity-send-message", "Send as message", (cx) => actions.send("message", cx)));
+  row2 = row2.child(button("gascity-send-default", "Send", (cx) => actions.send(sessionId, "default", cx)));
+  if (canInterrupt) row2 = row2.child(button("gascity-send-interrupt", "Interrupt and send", (cx) => actions.send(sessionId, "interrupt_now", cx)));
+  return row2.child(button("gascity-send-message", "Send as message", (cx) => actions.send(sessionId, "message", cx)));
 }
 function renderDetail(m, theme2, actions, ctx) {
   if (m.kind === "none") return null;
@@ -8290,7 +8505,7 @@ function renderDetail(m, theme2, actions, ctx) {
   });
   const answer = answers(m.pending, actions);
   if (answer !== null) el = el.child(answer);
-  el = el.child(sendBox(m.canInterrupt, ctx, actions));
+  el = el.child(sendBox(m.ref, m.canInterrupt, ctx, actions));
   const out = m.output;
   let output = v_flex4().id("gascity-detail-output").gap(0);
   if (out.region.age !== null) output = output.child(muted(label("gascity-detail-output-age", `output, ${out.region.age}`), theme2));
@@ -8446,9 +8661,10 @@ function setUp() {
     },
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
-    window: overlay !== null
+    window: overlay !== null,
+    commands: sharedCommandBook()
   });
-  return { kind: "ready", copy, overlay, focus };
+  return { kind: "ready", copy, overlay, focus, box: { session: null } };
 }
 function beadForm(inputs) {
   return {
@@ -8465,7 +8681,7 @@ function createBead2(copy, inputs) {
 function closeBead2(copy, inputs) {
   if (copy.closeBead(inputs.closeReason.value())) inputs.closeReason.set_value("");
 }
-function inputsFor(copy) {
+function inputsFor(copy, box) {
   const message = InputState.new({ placeholder: "Message to the session" });
   const alias = InputState.new({ placeholder: "alias (optional)" });
   const beadTitle = InputState.new({ placeholder: "title (required)" });
@@ -8474,7 +8690,7 @@ function inputsFor(copy) {
   const beadLabels = InputState.new({ placeholder: "labels, comma-separated (optional)" });
   const closeReason = InputState.new({ placeholder: "close reason (optional)" });
   message.on("submit", (_, cx) => {
-    if (copy.sendInput(message.value(), "default")) message.set_value("");
+    if (copy.sendInputTo(box.session, message.value(), "default")) message.set_value("");
     cx.notify();
   });
   alias.on("submit", (_, cx) => {
@@ -8502,7 +8718,8 @@ function uiFor(state, inputs, cx) {
     retry: () => {
       cx.spawn((task) => state.copy.retry(taskOf(task)));
     },
-    closeReason: (reason) => inputs?.closeReason.set_value(reason)
+    closeReason: (reason) => inputs?.closeReason.set_value(reason),
+    beadTitle: (title) => inputs?.beadTitle.set_value(title)
   };
 }
 function actionsFor(state, inputs) {
@@ -8552,8 +8769,8 @@ function actionsFor(state, inputs) {
       copy.requestKill(sessionId);
       cx.notify();
     },
-    send: (mode, cx) => {
-      if (inputs !== null && copy.sendInput(inputs.message.value(), mode)) inputs.message.set_value("");
+    send: (sessionId, mode, cx) => {
+      if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode)) inputs.message.set_value("");
       cx.notify();
     },
     answer: (requestId, option, cx) => {
@@ -8621,7 +8838,7 @@ var GasCity = class extends View {
     this.state = setUp();
     const state = this.state;
     if (state.kind !== "ready") return;
-    const inputs = inputsFor(state.copy);
+    const inputs = inputsFor(state.copy, state.box);
     this.inputs = inputs;
     if (typeof cx.focus_handle === "function") state.focus.handle = cx.focus_handle();
     if (state.overlay !== null) {
@@ -8629,13 +8846,22 @@ var GasCity = class extends View {
       visibility().invalidate();
     }
     cx.spawn((task) => state.copy.discover(taskOf(task)));
+    let flagged = systemClock.now();
     cx.timer.every(TICK_MS, (tcx) => {
+      if (state.overlay !== null && systemClock.now() - flagged >= WINDOW_REFRESH_MS) {
+        flagged = systemClock.now();
+        setWindowOpen(true);
+      }
       if (state.copy.tick((body) => tcx.spawn((task) => body(taskOf(task))))) tcx.notify();
     });
     cx.spawn(async (task) => {
       for (; ; ) {
         const command = await nextCommand2();
-        state.copy.runCommand(command, uiFor(state, inputs, task));
+        try {
+          state.copy.runCommand(command, uiFor(state, inputs, task));
+        } catch (cause) {
+          logError(`gascity: command ${JSON.stringify(command.slice(0, 80))} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+        }
         task.notify();
       }
     });
@@ -8656,6 +8882,7 @@ var GasCity = class extends View {
     return {
       handle,
       onKey: (event, cx) => {
+        if (!handle.is_focused()) return;
         const action = keyAction(event.keystroke);
         if (action !== null && state.copy.key(action, uiFor(state, inputs, cx))) cx.notify();
       }
@@ -8667,10 +8894,12 @@ var GasCity = class extends View {
     if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme2 = readTheme();
     if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme: theme2, error: state.error });
+    const view = state.copy.view(systemClock.now());
+    state.box.session = view.detail.kind === "session" ? view.detail.ref : null;
     return renderPanel({
       kind: "city",
       theme: theme2,
-      view: state.copy.view(systemClock.now()),
+      view,
       actions: actionsFor(state, this.inputs),
       inputs: this.inputs,
       keyboard: this.keyboard(state)

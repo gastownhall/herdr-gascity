@@ -259,7 +259,7 @@ describe("a copy", () => {
     await open();
     await host.advance(3000);
     const doc = JSON.parse(files.get("/app/data/gascity-probe/probe.json") ?? "{}");
-    expect(doc).toMatchObject({ schema: "gascity-herdr-probe/3", connection: { text: "connected" }, city: "scratch", visibility: { on_screen: true } });
+    expect(doc).toMatchObject({ schema: "gascity-herdr-probe/4", connection: { text: "connected" }, city: "scratch", visibility: { on_screen: true } });
     expect(doc.sessions.length).toBe(3);
     expect(doc.board.ready.cards.map((c: { id: string }) => c.id)).toEqual(["sc-18", "fe-1", "sc-58", "sc-74"]);
     expect(doc.board.closed.earlier[0]).toEqual({ id: "sc-73", title: "order:gate-sweep", close_reason: "order dispatch completed: tracking bead lifecycle finished", assignee: null });

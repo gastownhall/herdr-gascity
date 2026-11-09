@@ -414,12 +414,19 @@ export function fakeHerdr(options: FakeHostOptions = {}, router = new CommandRou
     },
     updates: () => ({ app: { version: "0.1.14" } }),
   };
+  /** Host calls that throw (the test sets and clears them): export name → message. */
+  const failing = new Map<string, string>();
   const module: Record<string, unknown> = {};
   for (const [name, fn] of Object.entries(all)) {
     if (options.omit?.includes(name)) continue;
-    module[name] = (...args: unknown[]) => { calls.push({ name, args }); return fn(...args); };
+    module[name] = (...args: unknown[]) => {
+      calls.push({ name, args });
+      const fail = failing.get(name);
+      if (fail !== undefined) throw new Error(fail);
+      return fn(...args);
+    };
   }
-  return { module, calls, shared, toasts, router };
+  return { module, calls, shared, toasts, router, failing };
 }
 
 export const BUNDLE_PATH = new URL("../gascity/main.js", import.meta.url);
@@ -560,6 +567,8 @@ export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { 
     shared: herdr.shared,
     /** Toasts posted with notify(), in order. */
     toasts: herdr.toasts,
+    /** herdr calls that throw while listed: export name → message. */
+    hostFails: herdr.failing,
     fetched: host.fetched,
     storage: host.storage,
     /** Every InputState the copies created, in creation order. */

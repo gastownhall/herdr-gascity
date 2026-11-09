@@ -21,8 +21,8 @@ export interface DetailActions {
   act(spec: ActionSpec, cx: GpuiContext): void;
   /** Kill asks first, offering a plain and a forced kill. */
   requestKill(sessionId: string, cx: GpuiContext): void;
-  /** Sends the send box's text to the open session. */
-  send(mode: InputMode, cx: GpuiContext): void;
+  /** Sends the send box's text to `sessionId`, the session whose detail drew the box. */
+  send(sessionId: string, mode: InputMode, cx: GpuiContext): void;
   /** Answers the open session's pending prompt `requestId` with `option`, exactly as the button was drawn. */
   answer(requestId: string, option: string, cx: GpuiContext): void;
 }
@@ -81,12 +81,12 @@ function answers(p: PendingView, actions: DetailActions): GpuiElement | null {
     .children(options.map((raw, i) => button(`gascity-answer-${i}`, p.options[i] ?? "", (cx) => actions.answer(requestId, raw, cx))));
 }
 
-function sendBox(canInterrupt: boolean, ctx: DetailContext, actions: DetailActions): GpuiElement {
+function sendBox(sessionId: string, canInterrupt: boolean, ctx: DetailContext, actions: DetailActions): GpuiElement {
   let row = h_flex().id("gascity-send").gap(8);
   if (ctx.message !== null) row = row.child(Input.new(ctx.message));
-  row = row.child(button("gascity-send-default", "Send", (cx) => actions.send("default", cx)));
-  if (canInterrupt) row = row.child(button("gascity-send-interrupt", "Interrupt and send", (cx) => actions.send("interrupt_now", cx)));
-  return row.child(button("gascity-send-message", "Send as message", (cx) => actions.send("message", cx)));
+  row = row.child(button("gascity-send-default", "Send", (cx) => actions.send(sessionId, "default", cx)));
+  if (canInterrupt) row = row.child(button("gascity-send-interrupt", "Interrupt and send", (cx) => actions.send(sessionId, "interrupt_now", cx)));
+  return row.child(button("gascity-send-message", "Send as message", (cx) => actions.send(sessionId, "message", cx)));
 }
 
 /** The detail pane, or null when no session is selected. */
@@ -105,7 +105,7 @@ export function renderDetail(m: DetailModel, theme: ThemeRead, actions: DetailAc
   });
   const answer = answers(m.pending, actions);
   if (answer !== null) el = el.child(answer);
-  el = el.child(sendBox(m.canInterrupt, ctx, actions));
+  el = el.child(sendBox(m.ref, m.canInterrupt, ctx, actions));
   const out = m.output;
   let output = v_flex().id("gascity-detail-output").gap(0);
   if (out.region.age !== null) output = output.child(muted(label("gascity-detail-output-age", `output, ${out.region.age}`), theme));

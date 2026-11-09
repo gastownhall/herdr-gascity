@@ -171,7 +171,7 @@ describe("diagnostics and the probe", () => {
     const mod = await running({ shared: { "gascity.probe": true }, written });
     const doc = JSON.parse(written.get("/home/person/.config/herdr-app/data/gascity-probe/probe.json") ?? "null");
     expect(doc).toMatchObject({
-      schema: "gascity-herdr-probe/3", herdr_version: "0.1.14", connection: { text: "connected" }, city: "scratch",
+      schema: "gascity-herdr-probe/4", herdr_version: "0.1.14", connection: { text: "connected" }, city: "scratch",
       discovery: { source: "default", url: BASE }, visibility: { on_screen: true },
     });
     expect(doc.sessions.map((s: { id: string }) => s.id).sort()).toEqual(["sc-20", "sc-5", "sc-6"]);

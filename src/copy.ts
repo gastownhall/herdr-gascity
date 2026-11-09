@@ -45,7 +45,8 @@ import {
   sessionClose, sessionKill, sessionMessage, sessionNew, sessionPin, sessionRespond, sessionStop, sessionSubmit, sessionSuspend, sessionUnpin,
   sessionWake,
 } from "./actions/session.ts";
-import { parseCommand, shownCommand, type Command } from "./commands.ts";
+import { CommandBook, type CommandEntry } from "./commandBook.ts";
+import { isMutating, parseCommand, shownCommand, type Command } from "./commands.ts";
 import { moveIn, type KeyAction } from "./keys.ts";
 import { focusToApply } from "./notify/focus.ts";
 import { SLING_MAY_ROUTE_TWICE, beadClose, beadCreate, beadReopen, beadSling } from "./actions/work.ts";
@@ -94,6 +95,8 @@ export interface CopyDeps {
   probe: ProbeWriter;
   /** This copy is the "needs you" window (herdr opened it as an overlay): it follows the shared focus target. */
   window?: boolean;
+  /** The app's command book (commandBook.ts), shared by every copy; default: one of this copy's own. */
+  commands?: CommandBook;
 }
 
 /** What only the view around a copy can do for a command (main.ts). */
@@ -104,14 +107,8 @@ export interface CommandUi {
   retry(): void;
   /** Types `reason` into the close form's reason box. */
   closeReason(reason: string): void;
-}
-
-/** One command this copy ran, for the probe: the command as shown, and what became of it. */
-export interface CommandRecord {
-  at: number;
-  command: string;
-  result: "done" | "asked" | "refused";
-  detail: string;
+  /** Types `title` into the new-bead form's title box. */
+  beadTitle(title: string): void;
 }
 
 /** The "needs you" window's model. */
@@ -170,11 +167,9 @@ export interface CopyView {
   /** The "needs you" window's part; null for a copy that is not the window. */
   window: WindowModel | null;
   /** Commands this copy ran, newest last. */
-  commands: readonly CommandRecord[];
+  commands: readonly CommandEntry[];
 }
 
-/** Commands kept for the probe. */
-const COMMAND_LOG_LIMIT = 20;
 /** How long a focus waits for its city to run and list its sessions. */
 export const FOCUS_WAIT_MS = 60_000;
 
@@ -252,7 +247,9 @@ export class CopyController {
   private focusApplied = 0;
   private focusShown: { city: string; session: string } | null = null;
   private gascityTabs: string[] = [];
-  private commandLog: CommandRecord[] = [];
+  /** The Idempotency-Key a command's nonce gives the action it sends (only while that command runs). */
+  private commandKey: string | null = null;
+  private ownBook: CommandBook | null = null;
 
   constructor(private readonly deps: CopyDeps) {}
 
@@ -370,7 +367,7 @@ export class CopyController {
       refreshCount: this.refreshCount,
       onScreen: this.onScreen,
       window: this.deps.window ? this.windowModel() : null,
-      commands: this.commandLog,
+      commands: this.commands().entries(),
     };
   }
 
@@ -468,15 +465,14 @@ export class CopyController {
     this.city?.refreshAction(id);
   }
 
-  /** Sends text to the open session; returns whether it was sent (the caller then clears its input). */
-  sendInput(text: string, mode: InputMode): boolean {
-    const id = this.selectedRef();
+  /**
+   * Sends text to a session gc lists: the send box (for the session whose
+   * detail drew it, never the selection at send time) and the
+   * submit/interrupt/message commands. Returns whether it was sent (the
+   * caller then clears its input).
+   */
+  sendInputTo(id: string | null, text: string, mode: InputMode): boolean {
     if (id === null) return this.refuse("open a session first");
-    return this.sendInputTo(id, text, mode);
-  }
-
-  /** Sends text to a session gc lists (the send box, and the submit/interrupt/message commands). */
-  sendInputTo(id: string, text: string, mode: InputMode): boolean {
     if (!this.listed(id)) return this.refuse(`session ${cleanLine(id)} is not listed by gc`);
     if (text.trim() === "") return this.refuse("type a message first");
     const spec = mode === "message" ? sessionMessage(id, text) : sessionSubmit(id, text, mode);
@@ -640,30 +636,66 @@ export class CopyController {
 
   /**
    * Runs one command herdr delivered (commands.ts), in this copy's turn,
-   * through the methods the buttons call. A command the grammar or the
-   * copy refuses changes nothing and says why in the notice.
+   * through the methods the buttons call. herdr delivers it to every shown
+   * copy: one that changes gc state runs only in a copy showing the city it
+   * names, and only once per app (commandBook.ts). A command the grammar or
+   * the copy refuses changes nothing and says why in the notice. Every
+   * outcome goes to the app's command log.
    */
-  runCommand(raw: string, ui: CommandUi): CommandRecord {
+  runCommand(raw: string, ui: CommandUi): CommandEntry {
+    const now = this.deps.clock.now();
     const parsed = parseCommand(raw);
     this.notice = null;
     const hadDialog = this.dialog() !== null;
-    let record: CommandRecord;
+    const entry = (result: CommandEntry["result"], detail: string): CommandEntry =>
+      ({ at: now, command: shownCommand(raw), copy: this.copyName(), result, detail: cleanLine(detail) });
+    let record: CommandEntry;
     if (!parsed.ok) {
-      record = this.commandRecord(raw, "refused", parsed.error);
+      record = entry("refused", parsed.error);
     } else {
-      const done = this.perform(parsed.value, ui);
-      // A refused command leaves no form or question of its own behind.
-      if (this.notice !== null && !hadDialog) this.clearDialogs();
-      if (this.notice !== null) record = this.commandRecord(raw, "refused", this.notice);
-      else record = this.commandRecord(raw, done === "asked" ? "asked" : "done", done === "asked" ? "asked first: add :confirm to answer" : done);
+      const { command: c, nonce } = parsed.value;
+      const shows = this.city?.key.city ?? null;
+      if (isMutating(c) && shows !== c.city) {
+        record = entry("skipped", `it names city ${c.city}; this copy shows ${shows ?? "no running city"}`);
+      } else if (isMutating(c) && !this.commands().claim(raw, nonce !== null, now)) {
+        record = entry("duplicate", "another copy ran this delivery");
+      } else {
+        let done = "";
+        this.commandKey = nonce;
+        try {
+          done = this.perform(c, ui);
+        } catch (cause) {
+          this.refuse(`the command failed: ${messageOf(cause)}`);
+          this.recordFailure("command", { kind: "listener-failed", message: messageOf(cause) });
+        } finally {
+          this.commandKey = null;
+        }
+        // A refused command leaves no form or question of its own behind.
+        if (this.notice !== null && !hadDialog) this.clearDialogs();
+        if (this.notice !== null) {
+          record = entry("refused", this.notice);
+          // Refused here (a list not loaded yet, an unknown id): another copy, or the same text again, may run it.
+          if (isMutating(c)) this.commands().release(raw);
+        }
+        else record = entry(done === "asked" ? "asked" : "done", done === "asked" ? "asked first: add :confirm to answer" : done);
+      }
     }
     if (record.result === "refused") this.notice = cleanLine(`gascity.${record.command}: refused: ${record.detail}`);
-    this.commandLog = [...this.commandLog, record].slice(-COMMAND_LOG_LIMIT);
+    if (record.result === "skipped") this.notice = cleanLine(`gascity.${record.command}: not run here: ${record.detail}`);
+    this.commands().record(record);
     return record;
   }
 
-  private commandRecord(raw: string, result: CommandRecord["result"], detail: string): CommandRecord {
-    return { at: this.deps.clock.now(), command: shownCommand(raw), result, detail: cleanLine(detail) };
+  private commands(): CommandBook {
+    this.ownBook ??= this.deps.commands ?? new CommandBook();
+    return this.ownBook;
+  }
+
+  /** This copy, as the command log names it. */
+  private copyName(): string {
+    if (this.deps.window) return "window";
+    const pinned = this.deps.discovery.machine.copy.pinned;
+    return pinned === null ? "panel" : `panel ${cleanLine(pinned)}`;
   }
 
   /** Does what a parsed command says; "asked" when it only opened its button's question. Refusals set the notice. */
@@ -675,9 +707,12 @@ export class CopyController {
       case "focus-session":
         this.focusSession(c.city, c.session);
         return "focusing";
-      case "city":
-        if (this.checkCity(c.city)) this.selectCity(c.city);
+      case "city": {
+        const pinned = this.deps.discovery.machine.copy.pinned;
+        if (pinned !== null) this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
+        else if (this.checkCity(c.city)) this.selectCity(c.city);
         return "selected";
+      }
       case "session": {
         const id = this.resolveSession(c.session);
         if (id !== null) this.selectSession(id);
@@ -754,6 +789,11 @@ export class CopyController {
             return "";
           }
           this.chooseSlingTarget(index);
+          // A sling cannot be deduplicated: like the form's Create and sling, it needs a confirmation.
+          if (!c.confirm) {
+            ui.beadTitle(c.title);
+            return "asked";
+          }
         }
         this.createBead({ title: c.title, description: "", priority: "", labels: "" });
         return "sent";
@@ -891,7 +931,7 @@ export class CopyController {
     const activity = this.city ? activityModel(this.city.activity(), null, this.deps.clock.now()) : null;
     if (isBusy(activity, spec)) return this.refuse(`${spec.verb} is already under way`);
     this.notice = null;
-    this.city.act(spec);
+    this.city.act(spec, this.commandKey ?? undefined);
     return true;
   }
 

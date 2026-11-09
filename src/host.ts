@@ -11,7 +11,8 @@ import { GC_STATUS_ARGS } from "./discovery/gcStatus.ts";
 import { SETTINGS_KEY, gcBinIssue } from "./discovery/settings.ts";
 import { decodeFocused, decodePanes, layoutModNames, type HostDecodeError } from "./host.schemas.ts";
 import { FOCUS_KEY, nextFocus } from "./notify/focus.ts";
-import { toastText, type NeedsYou } from "./notify/needsYou.ts";
+import { summaryText, toastText, type NeedsYou, type NeedsYouBatch } from "./notify/needsYou.ts";
+import { windowFlag, windowOpenAt } from "./notify/window.ts";
 import type { ProbeIo } from "./probe.ts";
 import { MOD_NAME, type VisibilityInput } from "./sync/visibility.ts";
 import type { ExecRecord } from "./vm/probe.ts";
@@ -117,7 +118,7 @@ export function readVisibility(): Result<VisibilityInput, HostDecodeError> {
   if (!focus.ok) return focus;
   const first = panes.value.errors[0];
   if (first) return err(first);
-  return ok({ windowOpen: herdr.shared(WINDOW_KEY) === true, layoutMods: layoutModNames(herdr.layout()), panes: panes.value.items, focus: focus.value });
+  return ok({ windowOpen: readWindowOpen(), layoutMods: layoutModNames(herdr.layout()), panes: panes.value.items, focus: focus.value });
 }
 
 /** Whether the probe file is on. */
@@ -130,14 +131,14 @@ export function setProbeEnabled(on: boolean): void {
   herdr.setShared(PROBE_KEY, on);
 }
 
-/** Whether the "needs you" window is open (its copy sets this in init and clears it in close). */
+/** Whether the "needs you" window is open: its copy keeps a fresh timestamp while it is (notify/window.ts). */
 export function readWindowOpen(): boolean {
-  return herdr.shared(WINDOW_KEY) === true;
+  return windowOpenAt(herdr.shared(WINDOW_KEY), Date.now());
 }
 
-/** The "needs you" window's copy says it opened (true) or closed (false). */
+/** The "needs you" window's copy says it is open (in init, then every WINDOW_REFRESH_MS) or closed. */
 export function setWindowOpen(open: boolean): void {
-  herdr.setShared(WINDOW_KEY, open);
+  herdr.setShared(WINDOW_KEY, open ? windowFlag(Date.now()) : false);
 }
 
 /** The raw shared focus target (decoded by notify/focus.ts). */
@@ -145,28 +146,46 @@ export function readFocusTarget(): unknown {
   return herdr.shared(FOCUS_KEY);
 }
 
+/** The toast action that opens the "needs you" window; none while it is open (mod.open toggles). */
+function postToast(title: string, body: string): void {
+  if (readWindowOpen()) {
+    herdr.notify({ title, body, level: "warning" });
+    logRecord("notify", []);
+  } else {
+    herdr.notify({ title, body, level: "warning", action: { name: "mod.open", args: { name: "gascity" } } });
+    logRecord("notify", ["mod.open", MOD_NAME]);
+  }
+}
+
 /**
- * Posts one "needs you" toast per item. Each first writes the shared focus
+ * Posts a city's "needs you" toasts. Each first writes the shared focus
  * target, so the window the toast opens (or the one already open) shows that
- * session. While the window is open the toast has no action: mod.open
- * toggles, and a click must never close the window.
+ * session; a summary toast stands for the rest of a burst. Returns the
+ * toasts herdr refused (tried again later) and why.
  */
-export function postNeedsYou(items: readonly NeedsYou[]): void {
-  for (const n of items) {
-    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), n.city, n.session, Date.now()));
-    const { title, body } = toastText(n);
+export function postNeedsYou(batch: NeedsYouBatch): { failed: NeedsYou[]; errors: string[] } {
+  const failed: NeedsYou[] = [];
+  const errors: string[] = [];
+  for (const n of batch.toasts) {
     try {
-      if (readWindowOpen()) {
-        herdr.notify({ title, body, level: "warning" });
-        logRecord("notify", []);
-      } else {
-        herdr.notify({ title, body, level: "warning", action: { name: "mod.open", args: { name: "gascity" } } });
-        logRecord("notify", ["mod.open", MOD_NAME]);
-      }
+      herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), n.city, n.session, Date.now()));
+      const { title, body } = toastText(n);
+      postToast(title, body);
     } catch (cause) {
-      logError(`gascity: notify failed: ${messageOf(cause)}`);
+      failed.push(n);
+      errors.push(`toast for session ${n.session} not posted: ${messageOf(cause)}`);
     }
   }
+  if (batch.more > 0) {
+    try {
+      const { title, body } = summaryText(batch.city, batch.more);
+      postToast(title, body);
+    } catch (cause) {
+      errors.push(`summary toast for ${batch.more} sessions not posted: ${messageOf(cause)}`);
+    }
+  }
+  for (const e of errors) logError(`gascity: ${e}`);
+  return { failed, errors };
 }
 
 /** Shows a tab holding a Gas City pane (the window's "Show Gas City tab"). */

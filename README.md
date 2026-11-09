@@ -324,13 +324,13 @@ it unsubscribes and starts nothing; the other copies keep updating.
   or links. Lines written to herdr's log are cleaned the same way.
 - **Probe.** While the shared value `gascity.probe` is `true`, the copy's
   tick writes `<app home>/data/gascity-probe/probe.json`
-  (`gascity-herdr-probe/3`; `probe:on` / `probe:off` set it): connection, discovery, city, visibility,
+  (`gascity-herdr-probe/4`; `probe:on` / `probe:off` set it; /4 added the toasts in the exec/run log and the `window`, `notice` and `commands` fields): connection, discovery, city, visibility,
   sessions with their status, the board (each column's cards, the closes
   seen in events with their seq and `close_reason`, the seed, the filter and
   the columns' errors), the selected bead, the session detail, actions with their state and
   request id, the exec/run log (with each toast and the command its action
   runs), whether the copy holds the keyboard and is the "needs you" window,
-  the notice line, the commands it ran with their result, the refresh count,
+  the notice line, the app's commands with the copy and result, the refresh count,
   errors and the budget high-water mark. It serializes the same view-models the panel draws. Writes
   are herdr's compare-and-swap, at most one in flight, on change or every
   5 s. One copy owns the file (the first to write it, until it closes), so
@@ -453,11 +453,24 @@ and never ends or types into a terminal itself.
 
 **Commands.** `herdr-app do gascity.<command>` and keys.json bindings
 `"<key>": "gascity.<command>"` deliver a command to every Gas City copy on
-screen (herdr delivers mod commands to shown copies only, and refuses one
-with no shown copy). A command is a verb and its arguments separated by `:`;
-each argument is percent-encoded (`encodeURIComponent`), so text may hold
-`:` and `%`, e.g. `submit:sc-20:close%20fe-1%3A%20done`.
+screen: the tab, the "needs you" window, a split pane, pinned copies
+(herdr refuses a command when no copy is shown). A command is a verb and its
+arguments separated by `:`; each argument is percent-encoded
+(`encodeURIComponent`), so text may hold `:`, `%` and `=`, e.g.
+`submit:scratch:sc-20:close%20fe-1%3A%20done`.
 
+- **Once per app, in the right city.** Every command that changes gc state
+  names its city first, and only a copy showing that city acts on it; any
+  other copy logs it as `skipped` and says so in its notice line. Copies
+  share the mod's module, so the first copy of that city to get a delivery
+  claims it and the others log a `duplicate`: the same text within 2 s is one
+  delivery. An optional last raw argument `nonce=<id>` (letters, digits,
+  `.`, `_`, `-`; at most 64) makes a delivery distinct from an earlier one
+  with the same text, keeps it claimed for 10 minutes, and becomes the
+  Idempotency-Key where gc declares one. A copy that refuses a delivery gives
+  its claim up. Commands that only change what a copy shows (`focus`,
+  `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) run in each copy
+  that gets them.
 - **Same path as the buttons.** Each command calls the same copy method its
   button calls, so it sends the same gc request and leaves the same entry in
   the activity log (the tests compare them pairwise).
@@ -466,81 +479,96 @@ each argument is percent-encoded (`encodeURIComponent`), so text may hold
   it), never by "the current selection". An agent, rig or city must be one gc
   lists; a bead must be on the board or known to gc.
 - **Confirmation.** A command whose button asks first (close, kill, force
-  kill, agent and rig suspend, sling, bead close) takes an explicit trailing
-  `confirm`. Without it, the command opens the same question its button
-  opens and sends nothing (a person can still answer it; `cancel` closes it);
-  with it, the command also answers the question as clicking its button
-  would. `confirm` is told apart by position only, so text arguments never
-  turn into a confirmation.
+  kill, agent and rig suspend, sling, bead close, and a new bead slung to an
+  agent) takes an explicit trailing `confirm`. Without it, the command opens
+  the same question or form its button opens (filled in) and sends nothing (a
+  person can still answer it; `cancel` closes it); with it, the command also
+  answers the question as clicking its button would. `confirm` is told apart
+  by position only, so text arguments never turn into a confirmation.
 - **Strict.** An unknown verb, a wrong number of arguments, an empty id, a
   bad percent escape or a `confirm` where none fits is refused; so is a
   command the copy cannot carry out (an unknown or ambiguous id, a list not
-  loaded yet, an action already under way). A refusal changes nothing and is
-  shown, cleaned, in the panel's notice line; the probe lists each command
-  with `done`, `asked` or `refused` and why.
+  loaded yet, an action already under way, `city` on a pinned copy). A
+  refusal changes nothing and is shown, cleaned, in the panel's notice line.
+  A command that throws is refused with the error and kept in the
+  diagnostics; the copy keeps taking commands.
+- **The log is the app's.** The probe's `commands` lists the last 20
+  commands any copy got, with the copy (`panel`, `panel <city>` for a pinned
+  copy, `window`) and the result: `done`, `asked`, `refused`, `skipped` or
+  `duplicate`, and why.
 
 | Command | What it does (the button it stands for) |
 |---|---|
 | `focus[:<city>:<session>]` | bare: take the keyboard; with a city and a session: select the city and open the session's detail |
-| `city:<city>` | select a city (as the header's city list does) |
+| `city:<city>` | select a city (as the header's city list does; refused by a pinned copy) |
 | `session:<session>` | open a session's detail (as clicking its row does) |
 | `bead:<bead>` | open a bead's detail (as clicking its card does) |
 | `refresh` | refetch everything now (Retry now; the r key) |
 | `probe:<on-or-off>` | turn the probe file on or off (shared for every copy) |
 | `cancel` | close the open question or form without acting (Cancel) |
-| `session-new:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
-| `wake:<session>` | wake a session (Wake) |
-| `suspend:<session>` | suspend a session (Suspend) |
-| `stop:<session>` | stop a session's current turn (Stop turn) |
-| `pin:<session>` | pin a session awake (Pin) |
-| `unpin:<session>` | clear a session's pin (Unpin) |
-| `close:<session>[:confirm]` | close a session (Close…, then Close) |
-| `kill:<session>[:confirm]` | kill a session's runtime (Kill…, then Kill) |
-| `kill-force:<session>[:confirm]` | force-kill a session's runtime (Kill…, then Force kill) |
-| `submit:<session>:<text>` | send input to a session (Send) |
-| `interrupt:<session>:<text>` | interrupt the turn and send input (Interrupt and send) |
-| `message:<session>:<text>` | send a queued message to a session (Send as message) |
-| `answer:<session>:<request>:<option>` | answer a session's pending prompt with one of gc's options (its answer button); the session's detail must show that prompt |
-| `agent-suspend:<agent>[:confirm]` | suspend an agent (Suspend agent…, then Suspend agent) |
-| `agent-resume:<agent>` | resume an agent (Resume agent) |
-| `rig-suspend:<rig>[:confirm]` | suspend a rig (Suspend rig…, then Suspend rig) |
-| `rig-resume:<rig>` | resume a rig (Resume rig) |
-| `bead-new:<title>[:<agent>]` | create a bead, and sling it to an agent if one is given (+ New bead, then Create / Create and sling) |
-| `sling:<bead>:<agent>[:confirm]` | sling a bead to an agent (Sling…, then the agent) |
-| `bead-close:<bead>:<reason>[:confirm]` | close a bead with a reason, which may be empty (Close…, then Close bead) |
-| `bead-reopen:<bead>` | reopen a closed bead (Reopen) |
+| `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
+| `wake:<city>:<session>` | wake a session (Wake) |
+| `suspend:<city>:<session>` | suspend a session (Suspend) |
+| `stop:<city>:<session>` | stop a session's current turn (Stop turn) |
+| `pin:<city>:<session>` | pin a session awake (Pin) |
+| `unpin:<city>:<session>` | clear a session's pin (Unpin) |
+| `close:<city>:<session>[:confirm]` | close a session (Close…, then Close) |
+| `kill:<city>:<session>[:confirm]` | kill a session's runtime (Kill…, then Kill) |
+| `kill-force:<city>:<session>[:confirm]` | force-kill a session's runtime (Kill…, then Force kill) |
+| `submit:<city>:<session>:<text>` | send input to a session (Send) |
+| `interrupt:<city>:<session>:<text>` | interrupt the turn and send input (Interrupt and send) |
+| `message:<city>:<session>:<text>` | send a queued message to a session (Send as message) |
+| `answer:<city>:<session>:<request>:<option>` | answer a session's pending prompt with one of gc's options (its answer button); the session's detail must show that prompt |
+| `agent-suspend:<city>:<agent>[:confirm]` | suspend an agent (Suspend agent…, then Suspend agent) |
+| `agent-resume:<city>:<agent>` | resume an agent (Resume agent) |
+| `rig-suspend:<city>:<rig>[:confirm]` | suspend a rig (Suspend rig…, then Suspend rig) |
+| `rig-resume:<city>:<rig>` | resume a rig (Resume rig) |
+| `bead-new:<city>:<title>[:<agent>[:confirm]]` | create a bead (+ New bead, then Create); with an agent it is also slung there, which needs confirm (else the form opens filled in) |
+| `sling:<city>:<bead>:<agent>[:confirm]` | sling a bead to an agent (Sling…, then the agent) |
+| `bead-close:<city>:<bead>:<reason>[:confirm]` | close a bead with a reason, which may be empty (Close…, then Close bead) |
+| `bead-reopen:<city>:<bead>` | reopen a closed bead (Reopen) |
 
 **Keys.** `mod.json` is `focusable`: `pane.go` onto a Gas City pane hands it
 the keyboard and sends the bare `focus` command, and the copy focuses its
 root. Then `j`/`down` and `k`/`up` open the next or previous session (as
 clicking its row), `r` is Retry now, and `escape` closes the open question
-or form, else the session's detail. The probe's `keyboard` says whether the
+or form, else the session's detail. Keys act only while the root itself
+holds the keyboard: typing in a text box (the send box, a form) is the box's
+alone. The send box sends to the session whose detail drew it, never to
+whatever is selected at the time. The probe's `keyboard` says whether the
 copy holds the keyboard. `gascity/keys.json` is an optional fragment for
 herdr's keys.json, `{"global": {"ctrl-alt-g": "mod.open:gascity"}}`: an app
 command, so it works while every Gas City copy is hidden.
 
 **"Needs you" toasts.** When a city's pending list (gc's `/pending`, in the
-shared store) gains a prompt, the mod posts one toast, "<session> needs you",
+shared store) gains a prompt, the mod posts a toast, "<session> needs you",
 naming its kind, session and city. The store is shared, so several copies of
-a city post each toast once. Every (session, request id) pair seen is
+a city post each toast once. Every (session, request id) pair posted is
 remembered, so a refetch, a resync after missed events or a reconnect after
 an outage posts nothing again; what was already pending when the city was
 opened is the baseline, shown by the header's "N need you" rather than
-toasted; a session gets at most one toast per 30 s.
+toasted. A session gets at most one toast per 30 s: a newer prompt inside
+that window waits and is toasted once it has passed, if gc still lists it.
+A burst posts at most 3 toasts and one "N more sessions need you" summary.
+A toast herdr refuses is recorded in the city's diagnostics and tried again
+after its session's window.
 
 Clicking a toast must bring Gas City on screen, and a command cannot reach a
 hidden copy. So before posting, the mod writes the session to the shared
 value `gascity.focus` (`{city, session, seq, at}`, `seq` growing), and the
 toast's action is the app command `mod.open {name: "gascity"}`, which opens
 the **"needs you" window**: a copy herdr opens from `mod.json`'s `overlay`
-spec. That copy marks `gascity.window` true while it is open, applies the
-newest target written in the last 10 minutes on its next tick (selects the
-city, then opens the session: its pending prompt with gc's options, the send
-box, its actions), and lists the city's other sessions that need you, a
-"Show Gas City tab" button per tab holding a Gas City pane (`tab.select`)
-and Close. `mod.open` toggles, so while the window is open toasts carry no
+spec. That copy applies the newest target written in the last 10 minutes on
+its next tick (selects the city, then opens the session: its pending prompt
+with gc's options, the send box, its actions), and lists the city's other
+sessions that need you, a "Show Gas City tab" button per tab holding a Gas
+City pane (`tab.select`) and Close. While it is open it keeps the shared
+flag `gascity.window` (`{open: true, at}`) fresh every 5 s and clears it on
+close; a flag older than 15 s is stale (a window that died with herdr) and
+ignored. `mod.open` toggles, so while the window is open toasts carry no
 action; the open window follows each newer target by itself. Commands reach
-the window like any shown copy.
+the window like any shown copy. Known limit: the authority lint checks a
+toast action's `name`, not its `args`.
 
 ## Develop
 

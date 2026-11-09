@@ -12,7 +12,7 @@
 //     brings the session on screen even with the Gas City tab hidden.
 
 import { describe, expect, test } from "bun:test";
-import { findById, textOf, type FakeReply } from "../harness.ts";
+import { findById, textOf, type FakeReply, type RecordedNode } from "../harness.ts";
 import { gc, running, text } from "./panel-fixture.ts";
 import { fixtureBody } from "./sync/fakes.ts";
 
@@ -100,17 +100,17 @@ describe("command/button parity: the same request and the same ledger entry", ()
       const { sent } = await parity(async (m) => {
         await openSession(m);
         m.click(`gascity-action-${key}`);
-      }, `${verb}:sc-6`);
+      }, `${verb}:scratch:sc-6`);
       expect(sent.map((s) => s.path)).toEqual([`/v0/city/scratch/session/sc-6/${verb}`]);
     });
   }
 
-  test("close:<session>:confirm = Close…, then Close", async () => {
+  test("close:scratch:<session>:confirm = Close…, then Close", async () => {
     const { sent } = await parity(async (m) => {
       await openSession(m);
       m.click("gascity-action-close");
       m.click("gascity-dialog-confirm-0");
-    }, "close:sc-6:confirm");
+    }, "close:scratch:sc-6:confirm");
     expect(sent).toEqual([{ path: "/v0/city/scratch/session/sc-6/close", query: "", body: null, key: "uuid" }]);
   });
 
@@ -119,12 +119,12 @@ describe("command/button parity: the same request and the same ledger entry", ()
       await openSession(m);
       m.click("gascity-action-kill");
       m.click("gascity-dialog-confirm-0");
-    }, "kill:sc-6:confirm");
+    }, "kill:scratch:sc-6:confirm");
     const { sent } = await parity(async (m) => {
       await openSession(m);
       m.click("gascity-action-kill");
       m.click("gascity-dialog-confirm-1");
-    }, "kill-force:sc-6:confirm");
+    }, "kill-force:scratch:sc-6:confirm");
     expect(sent.map((s) => s.query)).toEqual(["?force=true"]);
   });
 
@@ -134,24 +134,24 @@ describe("command/button parity: the same request and the same ledger entry", ()
         await openSession(m);
         m.inputs[0]!.type("close fe-1: now");
         m.click(`gascity-send-${button}`);
-      }, `${verb}:sc-6:close%20fe-1%3A%20now`);
+      }, `${verb}:scratch:sc-6:close%20fe-1%3A%20now`);
     });
   }
 
-  test("answer:<session>:<request>:<option> = the prompt's answer button (once the detail shows the prompt)", async () => {
+  test("answer:scratch:<session>:<request>:<option> = the prompt's answer button (once the detail shows the prompt)", async () => {
     const { sent } = await parity(async (m) => {
       await openSession(m);
       m.click("gascity-answer-1");
-    }, ["focus:scratch:sc-6", "answer:sc-6:perm-1:deny"]);
+    }, ["focus:scratch:sc-6", "answer:scratch:sc-6:perm-1:deny"]);
     expect(sent.map((x) => x.body)).toEqual([{ action: "deny", request_id: "perm-1" }]);
   });
 
-  test("session-new:<agent>:<alias> = New session…, typing the alias, Start session", async () => {
+  test("session-new:scratch:<agent>:<alias> = New session…, typing the alias, Start session", async () => {
     const { sent } = await parity(async (m) => {
       m.click("gascity-agent-0-1-new");
       m.inputs[1]!.type("canary-n1");
       m.click("gascity-dialog-create");
-    }, "session-new:frontend/builder:canary-n1");
+    }, "session-new:scratch:frontend/builder:canary-n1");
     expect(sent[0]?.body).toEqual({ kind: "agent", name: "frontend/builder", alias: "canary-n1" });
   });
 
@@ -159,50 +159,50 @@ describe("command/button parity: the same request and the same ledger entry", ()
     await parity(async (m) => {
       m.click("gascity-agent-0-1-suspend");
       m.click("gascity-dialog-confirm-0");
-    }, "agent-suspend:frontend/builder:confirm");
+    }, "agent-suspend:scratch:frontend/builder:confirm");
     await parity(async (m) => {
       m.click("gascity-group-0-suspend");
       m.click("gascity-dialog-confirm-0");
-    }, "rig-suspend:frontend:confirm");
+    }, "rig-suspend:scratch:frontend:confirm");
   });
 
-  test("bead-new:<title>[:<agent>] = + New bead, the title, the sling target, Create", async () => {
+  test("bead-new:scratch:<title>[:<agent>] = + New bead, the title, the sling target, Create", async () => {
     await parity(async (m) => {
       m.click("gascity-work-new");
       m.inputs[2]!.type("canary n1");
       m.click("gascity-dialog-create-bead");
-    }, "bead-new:canary%20n1");
+    }, "bead-new:scratch:canary%20n1");
     const { sent } = await parity(async (m) => {
       m.click("gascity-work-new");
       m.inputs[2]!.type("canary n1");
       m.click("gascity-dialog-sling-2");
       m.click("gascity-dialog-create-bead");
       await ticks(m);
-    }, "bead-new:canary%20n1:worker");
+    }, "bead-new:scratch:canary%20n1:worker:confirm");
     expect(sent.map((s) => s.path)).toEqual(["/v0/city/scratch/beads", "/v0/city/scratch/sling"]);
   });
 
-  test("sling:<bead>:<agent>:confirm = Sling…, then the agent", async () => {
+  test("sling:scratch:<bead>:<agent>:confirm = Sling…, then the agent", async () => {
     await parity(async (m) => {
       await openBead(m, "gascity-card-ready-3");
       m.click("gascity-bead-action-sling");
       m.click("gascity-dialog-pick-2");
-    }, "sling:sc-74:worker:confirm");
+    }, "sling:scratch:sc-74:worker:confirm");
   });
 
-  test("bead-close:<bead>:<reason>:confirm = Close…, the reason, Close bead; bead-reopen = Reopen", async () => {
+  test("bead-close:scratch:<bead>:<reason>:confirm = Close…, the reason, Close bead; bead-reopen = Reopen", async () => {
     await parity(async (m) => {
       await openBead(m, "gascity-card-ready-3");
       m.click("gascity-bead-action-close");
       m.inputs[6]!.type("done: shipped");
       m.click("gascity-dialog-close-bead");
-    }, "bead-close:sc-74:done%3A%20shipped:confirm");
+    }, "bead-close:scratch:sc-74:done%3A%20shipped:confirm");
     const probe = await running({ route: world().route });
     const closedId = /^(sc-\d+)/.exec(text(probe.render(), "gascity-card-earlier-0") ?? "")?.[1] ?? "";
     await parity(async (m) => {
       await openBead(m, "gascity-card-earlier-0");
       m.click("gascity-bead-action-reopen");
-    }, `bead-reopen:${closedId}`);
+    }, `bead-reopen:scratch:${closedId}`);
   });
 });
 
@@ -213,25 +213,25 @@ describe("answering by command", () => {
     await openSession(viaButton);
     viaButton.click("gascity-answer-1");
     const mod = await running({ route: world().route });
-    await mod.command("answer:sc-6:perm-1:deny");
-    expect(text(mod.render(), "gascity-notice")).toBe("gascity.answer:sc-6:perm-1:deny: refused: that prompt is no longer pending");
+    await mod.command("answer:scratch:sc-6:perm-1:deny");
+    expect(text(mod.render(), "gascity-notice")).toBe("gascity.answer:scratch:sc-6:perm-1:deny: refused: that prompt is no longer pending");
     expect(mutations(mod)).toEqual([]);
     await mod.command("focus:scratch:sc-6");
     await ticks(mod);
-    await mod.command("answer:sc-6:perm-1:maybe");
-    expect(text(mod.render(), "gascity-notice")).toBe("gascity.answer:sc-6:perm-1:maybe: refused: the prompt changed: review it before answering");
-    await mod.command("answer:sc-6:perm-1:deny");
+    await mod.command("answer:scratch:sc-6:perm-1:maybe");
+    expect(text(mod.render(), "gascity-notice")).toBe("gascity.answer:scratch:sc-6:perm-1:maybe: refused: the prompt changed: review it before answering");
+    await mod.command("answer:scratch:sc-6:perm-1:deny");
     expect(mutations(mod)).toEqual(mutations(viaButton));
   });
 });
 
 describe("destructive commands ask first unless confirmed", () => {
-  test("close:<session> opens the button's question and sends nothing; cancel closes it", async () => {
+  test("close:scratch:<session> opens the button's question and sends nothing; cancel closes it", async () => {
     const viaButton = await running({ route: world().route });
     await openSession(viaButton);
     viaButton.click("gascity-action-close");
     const mod = await running({ route: world().route });
-    await mod.command("close:sc-6");
+    await mod.command("close:scratch:sc-6");
     expect(text(mod.render(), "gascity-dialog")).toBe(text(viaButton.render(), "gascity-dialog"));
     expect(mutations(mod)).toEqual([]);
     await mod.command("cancel");
@@ -239,9 +239,19 @@ describe("destructive commands ask first unless confirmed", () => {
     expect(mutations(mod)).toEqual([]);
   });
 
+  test("bead-new with an agent but without confirm opens the form filled in and sends nothing", async () => {
+    const mod = await running({ route: world().route });
+    await mod.command("bead-new:scratch:canary%20n1:worker");
+    expect(text(mod.render(), "gascity-dialog-question")).toBe("New bead");
+    expect(mod.inputs[2]!.value()).toBe("canary n1");
+    expect(text(mod.render(), "gascity-dialog-sling")).toContain("▸ [worker]");
+    expect(mutations(mod)).toEqual([]);
+    expect(text(mod.render(), "gascity-notice")).toBeUndefined();
+  });
+
   test("bead-close without confirm opens the close form with the reason typed", async () => {
     const mod = await running({ route: world().route });
-    await mod.command("bead-close:sc-74:not%20needed");
+    await mod.command("bead-close:scratch:sc-74:not%20needed");
     expect(text(mod.render(), "gascity-dialog-question")).toBe("Close bead sc-74?");
     expect(mod.inputs[6]!.value()).toBe("not needed");
     expect(mutations(mod)).toEqual([]);
@@ -251,28 +261,29 @@ describe("destructive commands ask first unless confirmed", () => {
 
   test("a command never sends an action already under way", async () => {
     const mod = await running({ route: (url, req) => (req.method === "POST" ? "hang" as unknown as FakeReply : world().route(url, req)) });
-    await mod.command("wake:sc-6");
-    await mod.command("wake:sc-6");
+    await mod.command("wake:scratch:sc-6:nonce=a");
+    await mod.command("wake:scratch:sc-6:nonce=b");
     expect(mutations(mod)).toHaveLength(1);
-    expect(text(mod.render(), "gascity-notice")).toBe("gascity.wake:sc-6: refused: Wake is already under way");
+    expect(text(mod.render(), "gascity-notice")).toBe("gascity.wake:scratch:sc-6:nonce=b: refused: Wake is already under way");
   });
 });
 
 describe("refusals: visible, cleaned, and nothing changes", () => {
   const cases: [string, string][] = [
     ["explode", 'gascity.explode: refused: unknown command "explode"'],
-    ["wake", "gascity.wake: refused: wake: expected wake:<session>"],
-    ["wake:sc-404", 'gascity.wake:sc-404: refused: no session "sc-404" in city scratch'],
-    ["close:sc-6:yes", 'gascity.close:sc-6:yes: refused: close: the argument after <session> can only be "confirm"'],
-    ["session-new:nobody", "gascity.session-new:nobody: refused: no agent nobody in this city"],
-    ["rig-suspend:backend:confirm", "gascity.rig-suspend:backend:confirm: refused: no rig backend in this city"],
-    ["sling:sc-74:nobody:confirm", "gascity.sling:sc-74:nobody:confirm: refused: no agent nobody in this city"],
-    ["bead-new:t:nobody", "gascity.bead-new:t:nobody: refused: no agent nobody in this city"],
-    ["bead-new:%20", "gascity.bead-new:%20: refused: a new bead needs a title"],
-    ["submit:sc-6:", "gascity.submit:sc-6:: refused: type a message first"],
+    ["wake", "gascity.wake: refused: wake: expected wake:<city>:<session>"],
+    ["wake:sc-6", "gascity.wake:sc-6: refused: wake: expected wake:<city>:<session>"],
+    ["wake:scratch:sc-404", 'gascity.wake:scratch:sc-404: refused: no session "sc-404" in city scratch'],
+    ["close:scratch:sc-6:yes", 'gascity.close:scratch:sc-6:yes: refused: close: the argument after <city>:<session> can only be "confirm"'],
+    ["session-new:scratch:nobody", "gascity.session-new:scratch:nobody: refused: no agent nobody in this city"],
+    ["rig-suspend:scratch:backend:confirm", "gascity.rig-suspend:scratch:backend:confirm: refused: no rig backend in this city"],
+    ["sling:scratch:sc-74:nobody:confirm", "gascity.sling:scratch:sc-74:nobody:confirm: refused: no agent nobody in this city"],
+    ["bead-new:scratch:t:nobody", "gascity.bead-new:scratch:t:nobody: refused: no agent nobody in this city"],
+    ["bead-new:scratch:%20", "gascity.bead-new:scratch:%20: refused: a new bead needs a title"],
+    ["submit:scratch:sc-6:", "gascity.submit:scratch:sc-6:: refused: type a message first"],
     ["city:atlantis", "gascity.city:atlantis: refused: gc lists no city atlantis"],
     ["focus:atlantis:sc-6", "gascity.focus:atlantis:sc-6: refused: gc lists no city atlantis"],
-    ["wake:\u001b[31mx\u0007", 'gascity.wake:x: refused: no session "x" in city scratch'],
+    ["wake:scratch:\u001b[31mx\u0007", 'gascity.wake:scratch:x: refused: no session "x" in city scratch'],
   ];
   for (const [command, notice] of cases) {
     test(JSON.stringify(command), async () => {
@@ -289,10 +300,10 @@ describe("refusals: visible, cleaned, and nothing changes", () => {
     const list = fixtureBody("get-v0-city-by-city-name-sessions", "ok") as { items: Record<string, unknown>[] };
     w.state.sessions = { ...list, items: list.items.map((s) => (s["id"] === "sc-20" || s["id"] === "sc-5" ? { ...s, alias: "twin" } : s)) };
     const mod = await running({ route: w.route });
-    await mod.command("wake:twin");
-    expect(text(mod.render(), "gascity-notice")).toBe('gascity.wake:twin: refused: "twin" names sessions sc-20, sc-5: use the session id');
+    await mod.command("wake:scratch:twin");
+    expect(text(mod.render(), "gascity-notice")).toBe('gascity.wake:scratch:twin: refused: "twin" names sessions sc-20, sc-5: use the session id');
     expect(mutations(mod)).toEqual([]);
-    await mod.command("wake:frontend/builder");
+    await mod.command("wake:scratch:frontend/builder");
     expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/wake"]);
   });
 });
@@ -337,8 +348,8 @@ describe("focus, keys and the probe", () => {
     await mod.command("probe:on");
     expect(mod.shared.get("gascity.probe")).toBe(true);
     await ticks(mod, 2);
-    const doc = JSON.parse([...written.values()][0] ?? "{}") as { commands: { at: number; command: string; result: string; detail: string }[] };
-    expect(doc.commands).toEqual([{ at: expect.any(Number), command: "probe:on", result: "done", detail: "probe on" }]);
+    const doc = JSON.parse([...written.values()][0] ?? "{}") as { commands: { at: number; command: string; copy: string; result: string; detail: string }[] };
+    expect(doc.commands).toEqual([{ at: expect.any(Number), command: "probe:on", copy: "panel", result: "done", detail: "probe on" }]);
     await mod.command("probe:off");
     expect(mod.shared.get("gascity.probe")).toBe(false);
   });
@@ -397,7 +408,7 @@ describe("needs-you toasts and the window, with the Gas City tab hidden", () => 
     w.state.cityPending = [{ session_id: "sc-6", request_id: "perm-1", kind: "permission" }];
     await ticks(mod, 40, 1000);
     const win = await openWindow(mod);
-    expect(mod.shared.get("gascity.window")).toBe(true);
+    expect(mod.shared.get("gascity.window")).toEqual({ open: true, at: expect.any(Number) });
     for (let i = 0; i < 4; i++) await win.tick();
     const root = win.render();
     expect(text(root, "gascity-window-target")).toBe("Needs you: session sc-6 in city scratch");
@@ -448,7 +459,7 @@ describe("needs-you toasts and the window, with the Gas City tab hidden", () => 
     await win.tick();
     await win.tick();
     expect(text(win.render(), "gascity-detail-title")).toBe("Detail: frontend/builder / frontend/builder");
-    await win.command("wake:sc-6");
+    await win.command("wake:scratch:sc-6");
     expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/wake"]);
   });
 
@@ -472,5 +483,178 @@ describe("needs-you toasts and the window, with the Gas City tab hidden", () => 
       await other.tick(0);
     }
     expect(mod.toasts).toHaveLength(1);
+  });
+});
+
+/** gc listing two running cities, `scratch` and `other`, each served from the recorded fixtures. */
+function twoCities() {
+  const w = world();
+  const cities = fixtureBody("get-v0-cities", "ok") as { items: Record<string, unknown>[]; total: number };
+  const listed = { items: [...cities.items, { ...cities.items[0], name: "other", path: "/other/city" }], total: 2 };
+  const route = (url: string, req: Req): FakeReply | undefined => (new URL(url).pathname === "/v0/cities" ? { status: 200, body: listed } : w.route(url, req));
+  return { ...w, route };
+}
+
+/** Every element id under a node, depth first. */
+const ids = (n: RecordedNode | string): string[] => (typeof n === "string" ? [] : [n.id, ...n.children.flatMap(ids)]);
+
+/** herdr delivers one `herdr-app do` command to every shown copy, each in its own turn. */
+async function doCommand(command: string, copies: { command(c: string): Promise<void> }[]) {
+  for (const c of copies) await c.command(command);
+}
+
+/** A second copy of the same module (and app), set going. */
+async function another(mod: Mod, props?: unknown): Promise<Copy> {
+  const c = props === undefined ? mod.copy() : mod.copy({ props });
+  c.init();
+  await c.settle();
+  for (let i = 0; i < 4; i++) await c.tick();
+  return c;
+}
+
+/** The probe file the app wrote. */
+const probeOf = (written: Map<string, string>) =>
+  JSON.parse([...written.values()][0] ?? "{}") as { schema: string; commands: { at: number; command: string; copy: string; result: string; detail: string }[] };
+
+describe("one delivery, several shown copies: it runs once, in the copy showing its city", () => {
+  test("two copies of a city: submit and message reach gc once; the other copy logs a duplicate", async () => {
+    const written = new Map<string, string>();
+    const mod = await running({ route: world().route, written, shared: { "gascity.probe": true } });
+    const two = await another(mod);
+    await doCommand("submit:scratch:sc-6:hello", [mod, two]);
+    await doCommand("message:scratch:sc-6:later", [mod, two]);
+    await ticks(mod, 2);
+    expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/submit", "/v0/city/scratch/session/sc-6/messages"]);
+    expect(probeOf(written).commands.map((c) => [c.command, c.result])).toEqual([
+      ["submit:scratch:sc-6:hello", "done"], ["submit:scratch:sc-6:hello", "duplicate"],
+      ["message:scratch:sc-6:later", "done"], ["message:scratch:sc-6:later", "duplicate"],
+    ]);
+    expect(text(two.render(), "gascity-notice")).toBeUndefined();
+  });
+
+  test("a confirmed close goes once even when the first copy's request finished before the second copy ran", async () => {
+    const mod = await running({ route: world().route });
+    const two = await another(mod);
+    await mod.command("close:scratch:sc-6:confirm");
+    await ticks(mod, 4);
+    await two.command("close:scratch:sc-6:confirm");
+    expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/close"]);
+  });
+
+  test("an unpinned copy on scratch and a copy pinned to other: kill acts in scratch only", async () => {
+    const w = twoCities();
+    const written = new Map<string, string>();
+    const mod = await running({ route: w.route, written, shared: { "gascity.probe": true }, storage: { city: "scratch" } });
+    const pinned = await another(mod, { city: "other" });
+    await doCommand("kill:scratch:sc-6:confirm", [pinned, mod]);
+    expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/kill"]);
+    expect(text(pinned.render(), "gascity-notice")).toBe("gascity.kill:scratch:sc-6:confirm: not run here: it names city scratch; this copy shows other");
+    await ticks(mod, 2);
+    expect(probeOf(written).commands.map((c) => [c.result, c.detail])).toEqual([
+      ["skipped", "it names city scratch; this copy shows other"], ["done", "sent"],
+    ]);
+  });
+
+  test("the same text again after the window runs again; a nonce keeps a delivery distinct and is its Idempotency-Key", async () => {
+    const mod = await running({ route: world().route });
+    const two = await another(mod);
+    await doCommand("wake:scratch:sc-6", [mod, two]);
+    await ticks(mod, 12); // 3 s later: a new delivery of the same text
+    await doCommand("wake:scratch:sc-6", [mod, two]);
+    await doCommand("pin:scratch:sc-6:nonce=p1", [mod, two]);
+    await doCommand("pin:scratch:sc-6:nonce=p2", [two, mod]);
+    await ticks(mod, 12);
+    await doCommand("pin:scratch:sc-6:nonce=p1", [mod]);
+    await doCommand("submit:scratch:sc-6:hi:nonce=canary-7", [two, mod]);
+    expect(mutations(mod).map((m) => [m.path, m.key])).toEqual([
+      ["/v0/city/scratch/session/sc-6/wake", "uuid"],
+      ["/v0/city/scratch/session/sc-6/wake", "uuid"],
+      ["/v0/city/scratch/session/sc-6/pin", "none"],
+      ["/v0/city/scratch/session/sc-6/pin", "none"],
+      ["/v0/city/scratch/session/sc-6/submit", "canary-7"],
+    ]);
+  });
+
+  test("a command run in the needs-you window is in the app's probe", async () => {
+    const written = new Map<string, string>();
+    const mod = await running({ route: world().route, written, shared: { "gascity.probe": true } });
+    const win = await another(mod, { overlay: "mod-gascity" });
+    await win.command("wake:scratch:sc-6");
+    await ticks(mod, 2);
+    expect(probeOf(written).commands).toEqual([{ at: expect.any(Number), command: "wake:scratch:sc-6", copy: "window", result: "done", detail: "sent" }]);
+    expect(probeOf(written).schema).toBe("gascity-herdr-probe/4");
+  });
+
+  test("a command whose host call throws is recorded, and the copy keeps taking commands", async () => {
+    const written = new Map<string, string>();
+    const mod = await running({ route: world().route, written, shared: { "gascity.probe": true } });
+    mod.hostFails.set("setShared", "shared.json is read-only");
+    await mod.command("probe:off");
+    mod.hostFails.clear();
+    expect(text(mod.render(), "gascity-notice")).toBe("gascity.probe:off: refused: the command failed: shared.json is read-only");
+    await mod.command("wake:scratch:sc-6");
+    expect(mutations(mod)).toHaveLength(1);
+    expect(text(mod.render(), "gascity-diag-0") ?? "").toBe("");
+    mod.click("gascity-diagnostics-toggle");
+    expect(textOf(findById(mod.render(), "gascity-diagnostics-drawer")!)).toContain("command: an app-wide listener failed: shared.json is read-only");
+  });
+
+  test("city on a pinned copy is refused, not reported as selected", async () => {
+    const mod = await running({ route: twoCities().route, props: { city: "scratch" } });
+    await mod.command("city:other");
+    expect(text(mod.render(), "gascity-notice")).toBe("gascity.city:other: refused: this copy shows city scratch only");
+  });
+});
+
+describe("keys never fire while a text box holds the keyboard; Send goes to the session the box belongs to", () => {
+  test("j, k, r and escape typed into the send box change nothing but the box", async () => {
+    const mod = await running({ route: world().route });
+    await openSession(mod);
+    await mod.command("focus");
+    const before = text(mod.render(), "gascity-detail-title");
+    // The send box takes the keyboard (GPUI moves focus onto the input, inside the root).
+    mod.cx.focusHandles[0]!.focused = false;
+    const fetchedBefore = mod.fetched.length;
+    for (const k of ["f", "i", "x", " ", "t", "h", "e", " ", "j", "o", "b", "k", "r", "escape"]) mod.key(k);
+    await ticks(mod, 1);
+    expect(text(mod.render(), "gascity-detail-title")).toBe(before);
+    expect(findById(mod.render(), "gascity-detail")).toBeDefined();
+    expect(mod.fetched.slice(fetchedBefore).filter((f) => new URL(f.url).pathname.endsWith("/health"))).toEqual([]);
+  });
+
+  test("Send posts to the session whose detail drew the box, even if the selection changed since", async () => {
+    const mod = await running({ route: world().route });
+    await openSession(mod);
+    const drawn = findById(mod.render(), "gascity-send-default")!;
+    mod.inputs[0]!.type("fix the job");
+    const other = ids(mod.render()).find((id) => /^gascity-agent-\d+-\d+-session-\d+$/.test(id) && id !== "gascity-agent-0-1-session-0");
+    mod.click(other!); // another session's row
+    await ticks(mod);
+    expect(text(mod.render(), "gascity-detail-title")).not.toBe("Detail: frontend/builder / frontend/builder");
+    await ticks(mod);
+    drawn.handlers.on_click!({}, mod.cx);
+    expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/submit"]);
+  });
+});
+
+describe("a stale window flag", () => {
+  test("a flag left by a crashed window is ignored: toasts keep their action and a hidden app polls slowly", async () => {
+    const w = world();
+    const stale = { open: true, at: Date.UTC(2026, 10, 9, 11, 0, 0) };
+    const written = new Map<string, string>();
+    const mod = await running({ route: w.route, ...HIDDEN, written, shared: { "gascity.window": stale, "gascity.probe": true } });
+    await ticks(mod, 2);
+    expect((JSON.parse([...written.values()][0] ?? "{}") as { visibility: unknown }).visibility).toEqual({ on_screen: false });
+    w.state.cityPending = [{ session_id: "sc-6", request_id: "perm-1", kind: "permission" }];
+    await ticks(mod, 40, 1000);
+    expect(mod.toasts.at(-1)?.action).toEqual({ name: "mod.open", args: { name: "gascity" } });
+  });
+
+  test("an open window keeps its flag fresh", async () => {
+    const mod = await running({ route: world().route, ...HIDDEN });
+    const win = await openWindow(mod);
+    const first = (mod.shared.get("gascity.window") as { at: number }).at;
+    for (let i = 0; i < 30; i++) await win.tick(1000);
+    expect((mod.shared.get("gascity.window") as { at: number }).at).toBeGreaterThan(first + 20_000);
   });
 });

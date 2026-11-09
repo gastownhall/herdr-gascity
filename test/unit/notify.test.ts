@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { FOCUS_MAX_AGE_MS, decodeFocus, focusToApply, nextFocus } from "../../src/notify/focus.ts";
-import { NeedsYouNotifier, TOAST_INTERVAL_MS, toastText, type NeedsYou } from "../../src/notify/needsYou.ts";
+import { NeedsYouNotifier, summaryText, toastText, type NeedsYou, type NeedsYouBatch } from "../../src/notify/needsYou.ts";
 import { overlayOf } from "../../src/notify/window.ts";
 import { SyncRegistry, TICK_MS, type Subscription } from "../../src/sync/registry.ts";
 import { FakeGc, FakeHost, fixtureBody } from "./sync/fakes.ts";
@@ -15,52 +15,93 @@ const entry = (session: string, request: string, kind = "permission"): T.CityPen
 const list = (...items: T.CityPendingEntry[]) => ({ items });
 const sessions = { items: (fixtureBody("get-v0-city-by-city-name-sessions", "ok") as { items: T.SessionResponse[] }).items };
 
+/** What the notifier says to post now: "session/request" per toast, and how many more the summary covers. */
+const post = (n: NeedsYouNotifier, pending: Parameters<NeedsYouNotifier["observe"]>[0], now: number, s: typeof sessions | null = sessions) => {
+  const b = n.observe(pending, s, now);
+  return { toasts: b.toasts.map((x) => `${x.session}/${x.requestId}`), more: b.more };
+};
+const none = { toasts: [], more: 0 };
+
 describe("the notifier", () => {
   test("the first list is the baseline; each new pair is toasted once", () => {
     const n = new NeedsYouNotifier("scratch");
-    expect(n.observe(list(entry("sc-20", "r1")), sessions, 0)).toEqual([]);
-    const added = n.observe(list(entry("sc-20", "r1"), entry("sc-6", "r2", "question")), sessions, 1000);
-    expect(added).toEqual([{ city: "scratch", session: "sc-6", requestId: "r2", label: "frontend/builder", kind: "question" }]);
+    expect(post(n, list(entry("sc-20", "r1")), 0)).toEqual(none);
+    const b = n.observe(list(entry("sc-20", "r1"), entry("sc-6", "r2", "question")), sessions, 1000);
+    expect(b).toEqual({ city: "scratch", toasts: [{ city: "scratch", session: "sc-6", requestId: "r2", label: "frontend/builder", kind: "question" }], more: 0 });
     // The same pairs again (a refetch, a resync after missed events, a reconnect): nothing.
-    expect(n.observe(list(entry("sc-20", "r1"), entry("sc-6", "r2")), sessions, 2000)).toEqual([]);
+    expect(post(n, list(entry("sc-20", "r1"), entry("sc-6", "r2")), 2000)).toEqual(none);
     // Resolved, then back with the same request id (a list that was briefly partial): still nothing.
-    expect(n.observe(list(), sessions, 3000)).toEqual([]);
-    expect(n.observe(list(entry("sc-6", "r2")), sessions, 4000)).toEqual([]);
+    expect(post(n, list(), 3000)).toEqual(none);
+    expect(post(n, list(entry("sc-6", "r2")), 4000)).toEqual(none);
   });
 
-  test("an unchanged list object is not looked at again; a list not fetched yet is not the baseline", () => {
+  test("a list not fetched yet is not the baseline", () => {
     const n = new NeedsYouNotifier("scratch");
-    expect(n.observe(null, null, 0)).toEqual([]);
-    const first = list();
-    expect(n.observe(first, null, 0)).toEqual([]);
+    expect(post(n, null, 0, null)).toEqual(none);
+    expect(post(n, list(), 0, null)).toEqual(none);
     const second = list(entry("sc-5", "r1"));
-    expect(n.observe(second, null, 0).map((x) => x.session)).toEqual(["sc-5"]);
-    expect(n.observe(second, null, 0)).toEqual([]);
+    expect(post(n, second, 0, null).toasts).toEqual(["sc-5/r1"]);
+    expect(post(n, second, 0, null)).toEqual(none);
   });
 
-  test("one toast per session per 30 s; a new request inside that window is remembered, not toasted later", () => {
+  test("a session's next prompt within 30 s is deferred, not dropped: toasted once the window passes, if still pending", () => {
     const n = new NeedsYouNotifier("scratch");
-    n.observe(list(), sessions, 0);
-    expect(n.observe(list(entry("sc-5", "a")), sessions, 1000)).toHaveLength(1);
-    expect(n.observe(list(entry("sc-5", "a"), entry("sc-5", "b")), sessions, 2000)).toEqual([]);
-    expect(n.observe(list(entry("sc-5", "a"), entry("sc-5", "b")), sessions, 1000 + TOAST_INTERVAL_MS)).toEqual([]);
-    expect(n.observe(list(entry("sc-5", "c")), sessions, 1000 + TOAST_INTERVAL_MS).map((x) => x.requestId)).toEqual(["c"]);
+    post(n, list(), 0);
+    expect(post(n, list(entry("sc-5", "perm-1")), 5_000).toasts).toEqual(["sc-5/perm-1"]);
+    // perm-1 answered; perm-2 arrives 10 s later.
+    const next = list(entry("sc-5", "perm-2"));
+    expect(post(n, next, 15_000)).toEqual(none);
+    expect(post(n, next, 34_999)).toEqual(none);
+    expect(post(n, next, 35_000).toasts).toEqual(["sc-5/perm-2"]);
+    expect(post(n, next, 600_000)).toEqual(none);
   });
 
-  test("a storm of new prompts on many sessions toasts each session once", () => {
+  test("a deferred prompt that was answered meanwhile is not toasted", () => {
     const n = new NeedsYouNotifier("scratch");
-    n.observe(list(), null, 0);
-    const many = list(...Array.from({ length: 5 }, (_, i) => entry(`s-${i}`, `r-${i}`)), entry("s-0", "r-x"));
-    expect(n.observe(many, null, 10).map((x) => x.session)).toEqual(["s-0", "s-1", "s-2", "s-3", "s-4"]);
+    post(n, list(), 0);
+    post(n, list(entry("sc-5", "a")), 1000);
+    post(n, list(entry("sc-5", "a"), entry("sc-5", "b")), 2000);
+    expect(post(n, list(entry("sc-5", "a")), 3000)).toEqual(none);
+    expect(post(n, list(entry("sc-5", "a")), 60_000)).toEqual(none);
+  });
+
+  test("a partial list does not resolve a deferred prompt", () => {
+    const n = new NeedsYouNotifier("scratch");
+    post(n, list(), 0);
+    post(n, list(entry("sc-5", "a")), 1000);
+    post(n, list(entry("sc-5", "a"), entry("sc-5", "b")), 2000);
+    expect(post(n, { items: [], partial: true }, 3000)).toEqual(none);
+    expect(post(n, { items: [], partial: true }, 31_000).toasts).toEqual(["sc-5/b"]);
+  });
+
+  test("a burst: at most 3 toasts, then one summary for the rest; one per session", () => {
+    const n = new NeedsYouNotifier("scratch");
+    post(n, list(), 0);
+    const many = list(...Array.from({ length: 20 }, (_, i) => entry(`s-${i}`, `r-${i}`)), entry("s-0", "r-x"));
+    expect(post(n, many, 10, null)).toEqual({ toasts: ["s-0/r-0", "s-1/r-1", "s-2/r-2"], more: 17 });
+    // Covered by the summary: not toasted one by one later. s-0's second prompt waits for its session's window.
+    expect(post(n, many, 20, null)).toEqual(none);
+    expect(post(n, many, 30_010, null)).toEqual({ toasts: ["s-0/r-x"], more: 0 });
+    expect(summaryText("scratch", 17)).toEqual({ title: "17 more sessions need you", body: "city scratch" });
+  });
+
+  test("a toast that could not be posted is tried again after the session's window, not dropped", () => {
+    const n = new NeedsYouNotifier("scratch");
+    post(n, list(), 0);
+    const one = list(entry("sc-5", "a"));
+    const b = n.observe(one, sessions, 1000);
+    n.failed(b.toasts, 1000);
+    expect(post(n, one, 2000)).toEqual(none);
+    expect(post(n, one, 31_000).toasts).toEqual(["sc-5/a"]);
   });
 
   test("gc's text is cleaned; the label falls back to the template, then the id", () => {
     const n = new NeedsYouNotifier("scr\u001b[2Jatch");
     n.observe(list(), null, 0);
-    const [x] = n.observe(list(entry("sc-\u0007zz", "r", "perm‮ission")), { items: [] }, 1);
+    const [x] = n.observe(list(entry("sc-\u0007zz", "r", "perm‮ission")), { items: [] }, 1).toasts;
     expect(x?.label).toBe("sc-zz");
     expect(x?.kind).toBe("permission");
-    expect(toastText(x as NeedsYou)).toEqual({ title: "sc-zz needs you", body: "permission · session sc-\u0007zz · city scr\u001b[2Jatch".replace(/\u0007|\u001b\[2J/g, "") });
+    expect(toastText(x as NeedsYou)).toEqual({ title: "sc-zz needs you", body: "permission · session sc-zz · city scratch" });
   });
 });
 
@@ -113,11 +154,20 @@ describe("toasts from the shared store, under herdr's ownership rule", () => {
     const pending = { items: [] as T.CityPendingEntry[] };
     gc.override = (req) => (req.path.endsWith("/v0/city/scratch/pending") ? { status: 200, body: { items: pending.items, total: pending.items.length } } : undefined);
     const toasts: { owner: string | null; items: readonly NeedsYou[] }[] = [];
+    const fail = { next: null as string | null };
     const registry = new SyncRegistry({
       fetch: host.wrap(gc.fetch),
       clock: host,
       random: () => 0.5,
-      onNeedsYou: (items) => toasts.push({ owner: host.current, items }),
+      onNeedsYou: (batch: NeedsYouBatch) => {
+        if (fail.next !== null) {
+          const message = fail.next;
+          fail.next = null;
+          return { failed: batch.toasts, errors: [message] };
+        }
+        toasts.push({ owner: host.current, items: batch.toasts });
+        return { failed: [], errors: [] };
+      },
     });
     registry.setOnScreen(true);
     const open = async (owner: string) => {
@@ -132,7 +182,7 @@ describe("toasts from the shared store, under herdr's ownership rule", () => {
       return sub as unknown as Subscription;
     };
     const posted = () => toasts.flatMap((t) => t.items.map((i) => `${i.session}/${i.requestId}`));
-    return { host, gc, pending, toasts, open, posted };
+    return { host, gc, pending, toasts, open, posted, fail };
   }
 
   test("two copies of a city: each new prompt is toasted once, in a copy's own turn", async () => {
@@ -183,5 +233,19 @@ describe("toasts from the shared store, under herdr's ownership rule", () => {
     await open("copy-2");
     await host.advance(6000);
     expect(posted()).toEqual([]);
+  });
+
+  test("a toast that could not be posted is in the store's diagnostics and is posted after the session's window", async () => {
+    const { host, gc, pending, open, posted, fail } = setup();
+    const a = await open("copy-1");
+    await host.advance(6000);
+    fail.next = "the toast mod is gone";
+    pending.items = [entry("sc-20", "perm-1")];
+    gc.emit({ type: "session.pending", subject: "sc-20" });
+    await host.advance(6000);
+    expect(posted()).toEqual([]);
+    expect(a.snapshot().errors.map((e) => [e.source, e.error])).toContainEqual(["toasts", { kind: "listener-failed", message: "the toast mod is gone" }]);
+    await host.advance(30_000);
+    expect(posted()).toEqual(["sc-20/perm-1"]);
   });
 });

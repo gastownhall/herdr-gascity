@@ -45,7 +45,7 @@ describe("probeDocument", () => {
       diagnostics: [{ at: "2026-11-09T12:00:00Z", source: "events", text: "x" }],
       execLog: [{ at: 1, kind: "exec", argv: ["gc", "supervisor", "status", "--json"] }],
       refreshCount: 2, fetchInFlightMax: 2, window: true, notice: "gascity.wake:x: refused: no session",
-      commands: [{ at: 5, command: "wake:x", result: "refused", detail: "no session" }],
+      commands: [{ at: 5, command: "wake:x", copy: "panel", result: "refused", detail: "no session" }],
     });
     expect(JSON.parse(JSON.stringify(doc))).toEqual({
       schema: PROBE_SCHEMA,
@@ -87,7 +87,7 @@ describe("probeDocument", () => {
       fetch_in_flight_max: 2,
       window: true,
       notice: "gascity.wake:x: refused: no session",
-      commands: [{ at: 5, command: "wake:x", result: "refused", detail: "no session" }],
+      commands: [{ at: 5, command: "wake:x", copy: "panel", result: "refused", detail: "no session" }],
     });
   });
 
