@@ -175,6 +175,28 @@ function sessionRow(appHome: string): string {
   return JSON.stringify({ ts: p?.ts ?? null, connection: p?.connection ?? null, row: p?.sessions.find((s) => s.id === sessionId) ?? null, sessions: p?.sessions.length ?? null });
 }
 
+/** gc's lifecycle states and the chip the mod draws for each (src/vm/status.ts). */
+const LIFECYCLE_LABEL: Readonly<Record<string, string>> = { creating: "starting" };
+
+/**
+ * Waits until the copy's row for the session shows it not running: a
+ * lifecycle chip whose label is the state gc's own session list reports at
+ * that moment. Not the word "suspended": gc reports a suspended session
+ * "suspended" at first and "asleep" (still user-hold) from its next
+ * background tick on.
+ */
+async function waitShownNotRunning(appHome: string, who: string): Promise<void> {
+  let gcState = "";
+  await waitFor(`${who} to show the session not running, as gc lists it`, 15_000, async () => {
+    const r = await city.api("GET", city.cityPath("/sessions?limit=100"));
+    const item = ((r.body as { items?: { id: string; state: string; running: boolean }[] }).items ?? []).find((x) => x.id === sessionId);
+    if (!item || item.running) return null;
+    gcState = item.state;
+    const row = readProbe(appHome)?.sessions.find((x) => x.id === sessionId);
+    return row && row.status_kind === "lifecycle" && row.status === (LIFECYCLE_LABEL[gcState] ?? gcState) ? row : null;
+  }, 200, () => `gc lists it ${gcState || "(not yet read)"}; ${sessionRow(appHome)}`);
+}
+
 function newestAction(p: ProbeDoc | null, kind: string): ProbeDoc["actions"][number] | undefined {
   return p?.actions.filter((a) => a.action === kind).sort((a, b) => b.id - a.id)[0];
 }
@@ -401,7 +423,7 @@ describe("the mod against a scratch gc city", () => {
   test("Open terminal on a suspended session wakes it through gc, then attaches; the HC_SCOPE audit finds no leak", async () => {
     await suspendAndWait(sessionId);
     const suspendedAt = Date.now();
-    await waitFor("the mod to show the session suspended", 30_000, () => readProbe(main())?.sessions.find((s) => s.id === sessionId && s.status === "suspended"), 200, () => sessionRow(main()));
+    await waitShownNotRunning(main(), "the mod");
     steps.push({ step: "suspended in the view", ms: Date.now() - suspendedAt });
     lastTab = null;
     send(app, `attach:${CITY}:${sessionId}`);
@@ -501,7 +523,7 @@ describe("the mod against a scratch gc city", () => {
     await waitConnected(appHome);
     await waitFor("the broken copy to list the session", 15_000, () => readProbe(appHome)?.sessions.some((s) => s.id === sessionId), 200);
     await suspendAndWait(sessionId);
-    await waitFor("the broken copy to show the session suspended", 30_000, () => readProbe(appHome)?.sessions.find((s) => s.id === sessionId && s.status === "suspended"), 200, () => sessionRow(appHome));
+    await waitShownNotRunning(appHome, "the broken copy");
     lastTab = null;
     send(broken, `attach:${CITY}:${sessionId}`);
     const tab = await waitFor("the broken mod to open a tab", 30_000, () => lastTab, 100);
