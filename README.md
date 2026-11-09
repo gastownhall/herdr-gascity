@@ -385,7 +385,10 @@ and never ends or types into a terminal itself.
   in memory for 30 minutes and forgets them on restart, so the button
   promises deduplication only within that; where gc declares no key the
   button says the action may happen twice. Only a definite refusal (a 4xx, or
-  501) is failed, and its retry uses a new key. A destructive action asks
+  501) is failed, and its retry uses a new key, unless an earlier attempt of
+  the same action ended unknown: from then on every retry keeps that key
+  (a later refusal or an unsent retry does not prove the earlier attempt
+  failed), and the log says so. A destructive action asks
   again on retry. An action already under way is not sent twice.
 - **herdr ownership.** An action is sent in the turn of the copy whose
   button was clicked, and its outcome is polled from that copy's own timer.

@@ -110,6 +110,12 @@ export interface ActionEntry {
   readonly attempt: number;
   readonly startedAt: number;
   readonly state: ActionState;
+  /**
+   * Some attempt ended with an unknown outcome, so it may have landed: every
+   * retry keeps `key` from then on, whatever later attempts end as (a later
+   * refusal or an unsent retry does not prove the earlier attempt failed).
+   */
+  readonly keyPinned: boolean;
 }
 
 /** The activity log of one city, oldest first; a new object (and rev) per change. */

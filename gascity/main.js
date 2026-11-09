@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:66440fa3281df65845f02714ca546a40a1e906145aa8b6c5a496f0669530e1dc over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:0b82c0e687d688e451291701a89c9419fc6fd497a476c5820c3ff0d5507ea174 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -3577,7 +3577,8 @@ var ActionLedger = class {
       state: { kind: "sending", since: now },
       owner,
       group: {},
-      token: 0
+      token: 0,
+      keyPinned: false
     };
     this.records.push(rec);
     this.trim();
@@ -3594,7 +3595,7 @@ var ActionLedger = class {
     if (!rec) return err("the action is no longer in the activity log");
     const gate = retryGate(this.entry(rec), snapshot);
     if (!gate.allowed) return err(gate.reason);
-    if (!(rec.state.kind === "unknown" && rec.spec.idempotent)) rec.key = this.deps.newKey();
+    if (!(rec.keyPinned && rec.spec.idempotent)) rec.key = this.deps.newKey();
     rec.attempt++;
     rec.startedAt = this.deps.clock.now();
     this.send(rec, owner);
@@ -3750,6 +3751,7 @@ var ActionLedger = class {
   resolve(rec, state) {
     rec.token = ++this.tokens;
     rec.state = state;
+    if (state.kind === "unknown") rec.keyPinned = true;
     this.refreshAfter(rec);
     this.trim();
     this.commit();
@@ -3771,7 +3773,7 @@ var ActionLedger = class {
     }
   }
   entry(rec) {
-    return { id: rec.id, spec: rec.spec, key: rec.key, attempt: rec.attempt, startedAt: rec.startedAt, state: rec.state };
+    return { id: rec.id, spec: rec.spec, key: rec.key, attempt: rec.attempt, startedAt: rec.startedAt, state: rec.state, keyPinned: rec.keyPinned };
   }
   commit() {
     this.snap = { rev: ++this.rev, entries: this.records.map((r) => this.entry(r)) };
@@ -3793,6 +3795,14 @@ function isBusy(model, spec2) {
 }
 function seconds2(ms) {
   return `${Math.max(0, Math.round(ms / 1e3))} s`;
+}
+function pinnedNote(e) {
+  if (!e.keyPinned) return "";
+  return e.spec.idempotent ? ". An earlier attempt may have landed, so a retry keeps its key." : ". An earlier attempt may have landed, and gc cannot deduplicate this: a retry may make it happen twice.";
+}
+function retryLabel(e) {
+  if (!e.keyPinned) return "Retry";
+  return e.spec.idempotent ? SAME_KEY_RETRY : MAY_REPEAT_RETRY;
 }
 function row(e, city, now) {
   const s = e.state;
@@ -3823,9 +3833,9 @@ function row(e, city, now) {
       return {
         ...base,
         tone: "failed",
-        detail: `${errorText(s.error)}${hint}`,
+        detail: `${errorText(s.error)}${hint}${pinnedNote(e)}`,
         requestId: s.error.kind === "outcome-failed" ? cleanLine(s.error.requestId) : null,
-        retry: { kind: "retry", label: "Retry" }
+        retry: { kind: "retry", label: retryLabel(e) }
       };
     }
     case "unknown": {
@@ -3841,7 +3851,7 @@ function row(e, city, now) {
       };
     }
     case "not-sent":
-      return { ...base, tone: "not-sent", detail: cleanLine(`not sent: ${s.reason}`), requestId: null, retry: { kind: "retry", label: "Retry" } };
+      return { ...base, tone: "not-sent", detail: cleanLine(`not sent: ${s.reason}${pinnedNote(e)}`), requestId: null, retry: { kind: "retry", label: retryLabel(e) } };
   }
 }
 function activityModel(activity, city, now) {

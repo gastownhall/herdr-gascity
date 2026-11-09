@@ -6,12 +6,12 @@ import { describe, expect, test } from "bun:test";
 import type { ActionEntry, ActionState } from "../../../src/actions/activity.ts";
 import { agentSuspend } from "../../../src/actions/agent.ts";
 import * as session from "../../../src/actions/session.ts";
-import { activityModel, isBusy } from "../../../src/vm/activity.ts";
+import { SAME_KEY_RETRY, activityModel, isBusy } from "../../../src/vm/activity.ts";
 import { NOW, sessions, slot, snapshot } from "./snap.ts";
 
 let ids = 0;
 function entry(spec: ReturnType<typeof session.sessionWake>, state: ActionState, attempt = 1): ActionEntry {
-  return { id: ++ids, spec, key: "k", attempt, startedAt: NOW - 5000, state };
+  return { id: ++ids, spec, key: "k", attempt, startedAt: NOW - 5000, state, keyPinned: false };
 }
 const city = snapshot();
 
@@ -76,6 +76,13 @@ describe("activity rows", () => {
     const e = entry(session.sessionPin("sc-20"), { kind: "not-sent", at: NOW, reason: "no answer from the fetch queue within 70 s" });
     const [r] = activityModel({ rev: 1, entries: [e] }, city, NOW).rows;
     expect(r).toMatchObject({ tone: "not-sent", detail: "not sent: no answer from the fetch queue within 70 s", retry: { kind: "retry", label: "Retry" } });
+  });
+
+  test("after an attempt that may have landed, a later failed or unsent attempt says the retry keeps its key", () => {
+    const e = { ...entry(session.sessionWake("sc-20"), { kind: "not-sent", at: NOW, reason: "the view closed" }, 2), keyPinned: true };
+    const [r] = activityModel({ rev: 1, entries: [e] }, city, NOW).rows;
+    expect(r?.detail).toBe("not sent: the view closed. An earlier attempt may have landed, so a retry keeps its key.");
+    expect(r?.retry).toEqual({ kind: "retry", label: SAME_KEY_RETRY });
   });
 
   test("gc text is cleaned", () => {
