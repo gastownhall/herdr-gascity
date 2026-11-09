@@ -16,7 +16,41 @@ every action's outcome. Every action can also be driven by a command
 (`herdr-app do gascity.<command>`), and a toast tells you when a session
 needs you, opening a "needs you" window on the session. Open terminal shows
 a session's terminal in a herdr tab running `gc session attach`, after
-waking the session through gc's API.
+waking the session through gc's API. `install.sh` installs a release (see
+Install), and a tag publishes one.
+
+## Install
+
+With the [Herdr app](https://herdr.dev) installed and gc running on this
+computer (started outside Herdr; `gascity/RECIPE.md` says why):
+
+```sh
+curl -fsSL https://github.com/gastownhall/herdr-gascity/releases/latest/download/install.sh | sh
+```
+
+A release's `install.sh` carries its version and the sha256 of its
+`gascity-mod-<version>.tar.gz`; it downloads that tarball, refuses any other
+bytes. It refuses a tarball holding anything but plain files and folders
+inside its own tree (links, devices, absolute paths, `..`), unpacks it
+without the archive's owners, and runs `herdr-app check` on it before it
+replaces anything. An earlier install is moved to
+`<app home>/mod-backups/gascity-<time>/` (outside `mods/`, where herdr
+would load it as a second mod), and moved back if the new build cannot be
+put in place. The whole script runs from `main "$@"` on its last line, so
+a download cut short runs nothing. With Herdr open it shows the Gas City
+tab already open in a local space (reused only if the mod in it answers:
+herdr's listing does not say which mod a tab holds), or opens one in a
+space on this computer (`space.new`
+first when there is none, or when herdr answers "no space yet"; retried
+while herdr has not yet noticed the new folder), shows it,
+and sends `gascity.set-gc-bin:<gc>` until the new copy answers (15 s), so a
+Herdr started from the desktop runs the gc on your PATH. Every failed step
+prints herdr's message and exits non-zero. Options: `--gc-bin <gc or
+absolute path to gc>`, `--from <tarball>` (checked against
+`<tarball>.sha256` when that file is next to it). The recipe, the preview
+and `keys.json` stay out of `mods/`, as in herdr's own install flow; add
+`"ctrl-alt-g": "mod.open:gascity"` to your keys.json yourself if you want
+it. `compat.json` names the herdr-app and gc versions a release supports.
 
 ## Layout
 
@@ -36,6 +70,11 @@ waking the session through gc's API.
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
 | `compat/host-aliases.ts` | Maps the global names in `types/` onto the declarations herdr-app generates, for the types-drift check. |
 | `gascity/` | The mod folder as herdr-app loads it: the built, committed, readable `main.js`, `mod.json` (with the "needs you" window's `overlay` spec), and `keys.json`, an optional key-map fragment. |
+| `gascity/RECIPE.md`, `gascity/preview.png` | herdr's recipe for the mod (what it shows, what it runs and reads, and why gc must not be started from a herdr terminal) and its screenshot, for herdr.dev/mods. |
+| `install.sh` | The installer (see Install). The repository's copy is unstamped and needs `--from`; a release attaches the stamped one. |
+| `compat.json` | The herdr-app and gc versions this build supports; a test keeps its gc minimum equal to `api/PIN` and RECIPE.md in step. |
+| `scripts/package.ts` | `bun run package [--out dist]`: the reproducible release tarball (`gascity/`, `LICENSE`, `compat.json`), its `.sha256`, and the stamped `install.sh`. |
+| `.github/workflows/release.yml` | On a `v<version>` tag: `bun run ci`, shellcheck, package (twice, compared), and a GitHub release with the three files. Dispatched, or pushed with a packaging change, it is a dry run that uploads them as an artifact. |
 | `build.ts` | esbuild bundle of `src/` into `gascity/main.js`. Deterministic; the header names the version and a sha256 digest of the build inputs. |
 | `scripts/authority.ts` | The authority lint (see below). |
 | `scripts/bundle-fresh.ts` | Fails when the committed `gascity/main.js` differs from a clean rebuild. |
@@ -43,6 +82,7 @@ waking the session through gc's API.
 | `test/harness.ts` | Loads the built bundle under bun with fake `herdr`/`gpui-kit` modules and a Proxy element recorder, after herdr-app's own mod tests. |
 | `test/unit/` | Unit and render tests. |
 | `test/contract/` | Responses recorded from a scratch city at the pinned gc (`record.ts`), validated with ajv against the pin and decoded by the client. |
+| `test/install/` | `install.sh` against a stub `herdr-app` and `curl` (`test/install/stub/`) that record every call and answer from scripted replies. |
 | `test/engine/` | Engine parity: the client bundled like the mod, run in QuickJS (quickjs-ng, wasm) with `Function`/`eval` trapped, compared with bun. |
 
 ## Rules the build enforces
@@ -542,8 +582,9 @@ arguments separated by `:`; each argument is percent-encoded
   with the same text, keeps it claimed for 10 minutes, and becomes the
   Idempotency-Key where gc declares one. A copy that refuses a delivery gives
   its claim up. Commands that only change what a copy shows (`focus`,
-  `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) run in each copy
-  that gets them.
+  `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) and `set-gc-bin`
+  (which stores the same value whichever copy runs it) run in each copy that
+  gets them.
 - **Retrying a scripted command.** Sending the same nonce again within 10
   minutes is the same delivery: the command book logs it as a `duplicate`
   and nothing reaches gc (unless the first delivery was refused, which gives
@@ -592,6 +633,7 @@ arguments separated by `:`; each argument is percent-encoded
 | `refresh` | refetch everything now (Retry now; the r key) |
 | `probe:<on-or-off>` | turn the probe file on or off (shared for every copy) |
 | `cancel` | close the open question or form without acting (Cancel) |
+| `set-gc-bin:<gc-bin>` | store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it) |
 | `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
 | `wake:<city>:<session>` | wake a session (Wake) |
 | `suspend:<city>:<session>` | suspend a session (Suspend) |
@@ -677,7 +719,21 @@ bun run check:bundle    # or: bun run scripts/bundle-fresh.ts --bundle <path>
 bun run ci              # all of the above, as CI runs them
 bun run gen:gc          # regenerate src/gc/*.gen.ts from api/
 bun run notices         # regenerate gascity/THIRD_PARTY_NOTICES.md
+bun run package         # dist/: the release tarball, its .sha256 and the stamped install.sh (GNU tar)
 ```
+
+## Release
+
+1. Bump `version` in `package.json` and `src/version.ts`, `bun run build`,
+   and update `compat.json` (and RECIPE.md's "Needs") to what this release
+   was tested with; merge that.
+2. Push the tag `v<version>` on that commit. The release workflow checks the
+   tag names the version, runs CI, packages, and publishes the release with
+   `gascity-mod-<version>.tar.gz`, its `.sha256` and the stamped
+   `install.sh`. A version with a `-` suffix is a prerelease.
+3. The repository topic `herdr-mod` lists the mod at herdr.dev/mods
+   (herdr reads `gascity/RECIPE.md` and `gascity/preview.png`); it is set
+   once, by hand.
 
 ## License
 

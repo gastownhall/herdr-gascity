@@ -57,6 +57,7 @@ import { focusToApply } from "./notify/focus.ts";
 import { SLING_MAY_ROUTE_TWICE, beadClose, beadCreate, beadReopen, beadSling } from "./actions/work.ts";
 import type { CityScopedError } from "./discovery/city.ts";
 import { selectedCity } from "./discovery/city.ts";
+import { decodeSettings } from "./discovery/settings.ts";
 import type { DiscoveryController, DiscoveryTask } from "./discovery/controller.ts";
 import type { GcError } from "./gc/errors.ts";
 import type { HostDecodeError } from "./host.schemas.ts";
@@ -86,6 +87,10 @@ export interface CopyHost {
   probeEnabled(): boolean;
   /** Turns the probe file on or off for every copy. */
   setProbe(on: boolean): void;
+  /** The raw machine-wide settings (discovery/settings.ts decodes them). */
+  settings(): unknown;
+  /** Stores the gc program in the machine-wide settings; refused when it is not gc or the stored value is unreadable. */
+  setGcBin(gcBin: string): Result<void, GcError>;
   /** herdr-app's version (null when it reports none), or why it could not be read. */
   herdrVersion(): Result<string | null, GcError>;
   execLog(): readonly ExecRecord[];
@@ -642,7 +647,10 @@ export class CopyController {
     const session = this.city?.snapshot().sessions.value?.items.find((x) => x.id === id);
     if (state.phase !== "city-running" || !this.city || this.city.key.city !== state.city.name) return this.refuse("no running city to act on");
     if (!session) return this.refuse(`session ${cleanLine(id)} is not listed by gc`);
-    const binding = resolveBinding({ session, cityPath: state.city.path, gcBin: state.endpoint.gcBin, gcVersion: state.endpoint.version });
+    // The gc program as stored now: the installer may set it after this copy's discovery ran.
+    const settings = decodeSettings(this.deps.host.settings());
+    if (!settings.ok) return this.refuse(errorText(settings.error));
+    const binding = resolveBinding({ session, cityPath: state.city.path, gcBin: settings.value.gcBin, gcVersion: state.endpoint.version });
     if (!binding.ok) return this.refuse(binding.error);
     const name = `${session.agent_name ?? session.template}/${session.id}`;
     return this.send(openTerminalSpec(binding.value, name, { host: this.deps.host.terminal, clock: this.deps.clock }));
@@ -780,6 +788,15 @@ export class CopyController {
       case "cancel":
         this.cancelDialog();
         return "cancelled";
+      case "set-gc-bin": {
+        const stored = this.deps.host.setGcBin(c.gcBin);
+        if (!stored.ok) {
+          this.refuse(errorText(stored.error));
+          return "";
+        }
+        ui.retry();
+        return `gcBin ${c.gcBin}`;
+      }
       case "session-new":
         if (!this.checkAgent(c.agent)) return "";
         this.openNewSession(c.agent);

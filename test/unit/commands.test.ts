@@ -32,6 +32,8 @@ const EXAMPLES: Command[] = [
   { verb: "probe", on: true },
   { verb: "probe", on: false },
   { verb: "cancel" },
+  { verb: "set-gc-bin", gcBin: "/opt/my gc:100%/bin/gc" },
+  { verb: "set-gc-bin", gcBin: "gc" },
   { verb: "session-new", city: "scratch", agent: "frontend/builder", alias: null },
   { verb: "session-new", city: "scratch", agent: "worker", alias: "canary-n1" },
   { verb: "wake", city: "scratch", session: "sc-20" },
@@ -81,7 +83,7 @@ describe("round trip", () => {
       if (isMutating(c)) expect(usage(verb)).toStartWith(`${verb}:<city>`);
     }
     expect(Object.entries(GRAMMAR).filter(([, s]) => !s.mutating).map(([v]) => v).sort())
-      .toEqual(["bead", "cancel", "city", "focus", "probe", "refresh", "session"]);
+      .toEqual(["bead", "cancel", "city", "focus", "probe", "refresh", "session", "set-gc-bin"]);
   });
 
   test("the canary's commands read as written", () => {
@@ -151,6 +153,17 @@ describe("refusals", () => {
   test("probe takes on or off", () => {
     expect(refusal("probe:yes")).toBe('probe: expected "on" or "off", got "yes"');
     expect(refusal("probe")).toBe("probe: expected probe:<on-or-off>");
+  });
+
+  test("set-gc-bin takes gc or an absolute path to a program named gc, percent-encoded", () => {
+    expect(command("set-gc-bin:/usr/local/bin/gc")).toEqual({ verb: "set-gc-bin", gcBin: "/usr/local/bin/gc" });
+    expect(command("set-gc-bin:%2Fopt%2Fa%3Ab%2Fgc")).toEqual({ verb: "set-gc-bin", gcBin: "/opt/a:b/gc" });
+    expect(formatCommand({ verb: "set-gc-bin", gcBin: "/opt/a:b/gc" })).toBe("set-gc-bin:%2Fopt%2Fa%3Ab%2Fgc");
+    expect(refusal("set-gc-bin:/usr/bin/tmux")).toBe('set-gc-bin: must be "gc" or an absolute path to a program named gc, not "/usr/bin/tmux"');
+    expect(refusal("set-gc-bin:bin/gc")).toBe('set-gc-bin: must be "gc" or an absolute path to a program named gc, not "bin/gc"');
+    expect(refusal("set-gc-bin:")).toBe("set-gc-bin: <gc-bin> is empty");
+    expect(refusal("set-gc-bin")).toBe("set-gc-bin: expected set-gc-bin:<gc-bin>");
+    expect(refusal("set-gc-bin:/a/gc:/b/gc")).toBe("set-gc-bin: expected set-gc-bin:<gc-bin>");
   });
 
   test("a bad percent escape, a bad nonce, and an over-long command", () => {

@@ -295,6 +295,17 @@ describe("unknown outcomes and the copy that closes", () => {
 });
 
 describe("Open terminal in the built bundle", () => {
+  test("the gc program is read when the tab opens: a gcBin set after discovery is the one that runs", async () => {
+    const mod = await running();
+    await mod.command("set-gc-bin:/opt/gc/bin/gc");
+    await openDetail(mod);
+    mod.click("gascity-action-terminal");
+    await mod.tick();
+    await mod.tick();
+    const tabNew = mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new").map((c) => (c.args[1] as { argv: string[] }).argv);
+    expect(tabNew).toEqual([["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET", "/opt/gc/bin/gc", "--city", "/scratch/city", "session", "attach", "sc-6"]]);
+  });
+
   test("a running session: no wake, one tab.new with the env -u HC_* attach argv in the local space; the log shows it", async () => {
     const mod = await running();
     await openDetail(mod);

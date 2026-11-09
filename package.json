@@ -15,7 +15,8 @@
     "gen:gc": "bun run scripts/gen-gc.ts",
     "pin:gc": "bun run scripts/pin-gc-spec.ts",
     "record:gc": "bun run test/contract/record.ts",
-    "notices": "bun run scripts/notices.ts"
+    "notices": "bun run scripts/notices.ts",
+    "package": "bun run scripts/package.ts"
   },
   "devDependencies": {
     "@jitl/quickjs-ng-wasmfile-release-sync": "0.32.0",
