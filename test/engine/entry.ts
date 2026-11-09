@@ -1,4 +1,4 @@
-// The engine-parity probe (design §13.1, risk 3): the gc client, the decoders
+// The engine-parity probe: the gc client, the decoders
 // and the host schemas, bundled exactly as the mod bundles them, run over
 // every recorded fixture. parity.test.ts runs this same bundle in bun and in
 // QuickJS (quickjs-ng) with the Function constructor and eval poisoned, and

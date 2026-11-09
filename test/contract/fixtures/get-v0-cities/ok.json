@@ -9,7 +9,7 @@
     "items": [
       {
         "name": "scratch",
-        "path": "/tmp/m1-city/city",
+        "path": "/scratch/city",
         "running": true
       }
     ],

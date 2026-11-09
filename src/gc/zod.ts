@@ -1,7 +1,7 @@
 // The only module that imports zod (the authority lint enforces it). It turns
 // on `jitless` before any schema exists: every schema module imports zod from
 // here, so this module body runs first, and zod v4 never builds a parser with
-// the Function constructor (design §4, §9). The parity test
+// the Function constructor. The parity test
 // (test/engine/parity.test.ts) proves it at run time in QuickJS with Function
 // and eval trapped.
 //

@@ -9,7 +9,7 @@
     "items": [
       {
         "name": "frontend",
-        "path": "/tmp/m1-city/rig",
+        "path": "/scratch/rig",
         "suspended": false,
         "prefix": "fe",
         "agent_count": 2,

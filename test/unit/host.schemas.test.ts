@@ -1,4 +1,4 @@
-// Host data the mod reads from herdr-app (design §4 host.schemas.ts): the
+// Host data the mod reads from herdr-app: the
 // fields of terminals(), panes(), spaces() and focused() the mod relies on,
 // decoded so a herdr-app change becomes a visible host-decode error instead
 // of `any` flowing into the view-model. Shapes from herdr-app v0.1.14

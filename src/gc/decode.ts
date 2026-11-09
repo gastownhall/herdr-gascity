@@ -1,11 +1,11 @@
-// The decode policy (design §5.2), shared by the generated schemas and the
+// The decode policy, shared by the generated schemas and the
 // client:
 //   - unknown extra fields are ignored (forward compatible);
 //   - a missing required field or a wrong type is a `decode` error naming the
 //     operation, the JSON path and the issues;
 //   - a string enum value this pin does not know decodes to
 //     {kind:"unrecognized", raw}: visible, not fatal;
-//   - gc's ["array","null"] (a Go nil slice) decodes null to [] (and absent
+//   - gc's ["array","null"] (Go writes an empty list as null) decodes null to [] (and absent
 //     to [] when the field is optional);
 //   - list elements are decoded one by one, so one bad element becomes an
 //     `unreadable` entry instead of failing the whole list.
@@ -40,7 +40,7 @@ export function enumOf<const T extends readonly [string, ...string[]]>(values: T
   ]) as unknown as z.ZodMiniType<Drift<T[number]>>;
 }
 
-/** A required gc ["array","null"] (a Go nil slice): null decodes to []; absent is an error. */
+/** A required gc ["array","null"] (Go writes an empty list as null): null decodes to []; absent is an error. */
 export function nullableList<T>(item: z.ZodMiniType<T>): z.ZodMiniType<T[]> {
   return z.pipe(z.nullable(z.array(item)), z.transform((list): T[] => list ?? []));
 }

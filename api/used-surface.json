@@ -1,5 +1,5 @@
 {
-  "$comment": "The part of gc's API this mod uses (design §5.1, §5.2). scripts/pin-gc-spec.ts prunes the pinned spec to these operations; scripts/gen-gc.ts generates types and zod schemas for exactly these models and fields. A model reached from an operation must be listed here; a listed field must exist in the pin. Only object schemas are listed; scalar schemas (enums) are inlined. Response models are decoded at run time; request models are TypeScript types only. payloadModels are decoded at run time from an untyped field (RequestFailedPayload is the payload of a request.failed event inside RequestOutcome.event, design §5.3 outcome-failed).",
+  "$comment": "The part of gc's API this mod uses. scripts/pin-gc-spec.ts prunes the pinned spec to these operations; scripts/gen-gc.ts generates types and zod schemas for exactly these models and fields. A model reached from an operation must be listed here; a listed field must exist in the pin. Only object schemas are listed; scalar schemas (enums) are inlined. Response models are decoded at run time; request models are TypeScript types only. payloadModels are decoded at run time from an untyped field (RequestFailedPayload is the payload of a request.failed event inside RequestOutcome.event).",
   "operations": {
     "get-health": "liveness, version and build id for compatibility checks",
     "get-v0-cities": "city list with running/status",
@@ -50,7 +50,7 @@
     "SessionInfo": { "fields": ["name", "attached", "last_activity"] },
 
     "ListBodySessionResponse": { "fields": ["items", "total", "next_cursor", "partial", "partial_errors"], "itemLevel": "items" },
-    "SessionResponse": { "fields": ["id", "alias", "title", "display_name", "template", "agent_name", "session_name", "rig", "pool", "kind", "provider", "transport", "state", "reason", "running", "attached", "active_bead", "activity", "activity_source", "program_status", "submission_capabilities", "created_at", "last_active", "last_output", "wake_reasons"] },
+    "SessionResponse": { "fields": ["id", "alias", "title", "display_name", "template", "agent_name", "session_name", "rig", "pool", "kind", "provider", "transport", "state", "reason", "running", "attached", "active_bead", "activity", "activity_source", "program_status", "submission_capabilities", "created_at", "last_active", "last_output", "wake_reasons"], "keepAbsent": ["wake_reasons"] },
     "SessionProgramStatus": { "fields": ["state", "kind", "progress", "app", "since", "quiet_since", "working_children"] },
     "SubmissionCapabilities": { "fields": ["supports_follow_up", "supports_interrupt_now", "supports_steer"] },
 

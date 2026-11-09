@@ -80,12 +80,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:06Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "4aee5b022f38e7d438215fdf972c99ba",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -128,7 +128,7 @@
               "usage_model_swept_at": "2026-11-09T06:24:06.900339411Z",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/rec-mw8vlhxl"
+              "work_dir": "/scratch/city/.gc/worktrees/rec-mw8vlhxl"
             },
             "no_history": true
           }
@@ -288,13 +288,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:08Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "3",
               "held_until": "",
-              "instance_token": "20806abb94a9d554c4f649a272498f64",
+              "instance_token": "instance-token",
               "last_woke_at": "2026-11-09T06:24:07Z",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -338,7 +338,7 @@
               "wake_refused_event_at": "",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -404,13 +404,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:08Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "3",
               "held_until": "",
-              "instance_token": "20806abb94a9d554c4f649a272498f64",
+              "instance_token": "instance-token",
               "last_woke_at": "2026-11-09T06:24:07Z",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -454,7 +454,7 @@
               "wake_refused_event_at": "",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -497,13 +497,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:08Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "3",
               "held_until": "",
-              "instance_token": "20806abb94a9d554c4f649a272498f64",
+              "instance_token": "instance-token",
               "last_woke_at": "2026-11-09T06:24:07Z",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -547,7 +547,7 @@
               "wake_refused_event_at": "",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -642,13 +642,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "3",
               "held_until": "",
-              "instance_token": "20806abb94a9d554c4f649a272498f64",
+              "instance_token": "instance-token",
               "last_woke_at": "2026-11-09T06:24:07Z",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -692,7 +692,7 @@
               "wake_refused_event_at": "",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -726,13 +726,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
               "held_until": "",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -776,7 +776,7 @@
               "wake_refused_event_at": "",
               "wake_request": "explicit",
               "wake_requested_at": "2026-11-09T06:24:07Z",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -810,13 +810,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
               "held_until": "",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -860,7 +860,7 @@
               "wake_refused_event_at": "",
               "wake_request": "explicit",
               "wake_requested_at": "2026-11-09T06:24:07Z",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -894,13 +894,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
               "held_until": "",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -943,7 +943,7 @@
               "wake_refused_event_at": "",
               "wake_request": "explicit",
               "wake_requested_at": "2026-11-09T06:24:07Z",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -996,12 +996,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:06Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "4aee5b022f38e7d438215fdf972c99ba",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1042,7 +1042,7 @@
               "usage_closed_session_key": "",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/rec-mw8vlhxl"
+              "work_dir": "/scratch/city/.gc/worktrees/rec-mw8vlhxl"
             },
             "no_history": true
           }
@@ -1074,12 +1074,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:06Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "4aee5b022f38e7d438215fdf972c99ba",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1115,7 +1115,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/rec-mw8vlhxl"
+              "work_dir": "/scratch/city/.gc/worktrees/rec-mw8vlhxl"
             },
             "no_history": true
           }
@@ -1180,12 +1180,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:06Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "4aee5b022f38e7d438215fdf972c99ba",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1221,7 +1221,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/rec-mw8vlhxl"
+              "work_dir": "/scratch/city/.gc/worktrees/rec-mw8vlhxl"
             },
             "no_history": true
           }
@@ -1253,12 +1253,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:06Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "4aee5b022f38e7d438215fdf972c99ba",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1294,7 +1294,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/rec-mw8vlhxl"
+              "work_dir": "/scratch/city/.gc/worktrees/rec-mw8vlhxl"
             },
             "no_history": true
           }
@@ -1326,12 +1326,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:06Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "4aee5b022f38e7d438215fdf972c99ba",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1367,7 +1367,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/rec-mw8vlhxl"
+              "work_dir": "/scratch/city/.gc/worktrees/rec-mw8vlhxl"
             },
             "no_history": true
           }
@@ -1399,12 +1399,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:24:06Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "4aee5b022f38e7d438215fdf972c99ba",
+              "instance_token": "instance-token",
               "last_woke_at": "2026-11-09T06:24:05Z",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1439,7 +1439,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/rec-mw8vlhxl"
+              "work_dir": "/scratch/city/.gc/worktrees/rec-mw8vlhxl"
             },
             "no_history": true
           }
@@ -1473,13 +1473,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
               "held_until": "",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1521,7 +1521,7 @@
               "wake_refused_event_at": "",
               "wake_request": "explicit",
               "wake_requested_at": "2026-11-09T06:24:07Z",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -1554,13 +1554,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
               "held_until": "2126-10-16T06:24:07Z",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1600,7 +1600,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -1633,13 +1633,13 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
               "held_until": "2126-10-16T06:24:07Z",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1679,7 +1679,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -1720,12 +1720,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "2026-11-09T06:18:23Z",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1762,7 +1762,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -1795,12 +1795,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "2026-11-09T06:18:23Z",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1837,7 +1837,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }
@@ -1870,12 +1870,12 @@
               "command": "sh -c 'echo READY; while read l; do echo \"got $l\"; done; sleep 3600'",
               "continuation_epoch": "1",
               "continuation_reset_pending": "",
-              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/tmp/m1-city/city/.gc/settings.json\",\"probed\":false}]}",
+              "core_hash_breakdown": "{\"version\":\"v7\",\"fields\":{\"AcceptStartupDialogs\":\"e3b0c44298fc1c14\",\"Command\":\"8154cdaa3751eac6\",\"CopyFiles\":\"f6b0919a0f67d3e7\",\"Env\":\"aa1b402c71e878ac\",\"FPExtra\":\"e3b0c44298fc1c14\",\"Lifecycle\":\"e3b0c44298fc1c14\",\"MCPServers\":\"e3b0c44298fc1c14\",\"MouseOn\":\"f1e020dfac3290bf\",\"OverlayDir\":\"e3b0c44298fc1c14\",\"OverlayProviders\":\"e3b0c44298fc1c14\",\"PreStart\":\"e3b0c44298fc1c14\",\"SessionSetup\":\"e3b0c44298fc1c14\",\"SessionSetupScript\":\"e3b0c44298fc1c14\"},\"copy_files\":[{\"rel_dst\":\".gc/settings.json\",\"src\":\"/scratch/city/.gc/settings.json\",\"probed\":false}]}",
               "creation_complete_at": "2026-11-09T06:18:24Z",
               "detached_at": "",
               "effective_sleep_after_idle": "off",
               "generation": "2",
-              "instance_token": "6bdc39d980588fa34eefa9dd624c4e0c",
+              "instance_token": "instance-token",
               "last_woke_at": "2026-11-09T06:18:23Z",
               "live_hash": "v7:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
               "pending_create_claim": "",
@@ -1912,7 +1912,7 @@
               "template": "worker",
               "wake_request": "",
               "wake_requested_at": "",
-              "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896"
+              "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896"
             },
             "no_history": true
           }

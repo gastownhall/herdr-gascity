@@ -1,7 +1,7 @@
-// One typed function per gc operation the mod uses (design §4, §5.1): the
+// One typed function per gc operation the mod uses: the
 // "used surface". Each one is a single client call; none retries. Mutations
 // whose pinned spec declares Idempotency-Key take the action's key, which a
-// manual retry reuses (design §7.3).
+// manual retry reuses.
 //
 // List responses come back as `Listed`: readable `items`, `unreadable`
 // elements (item-level decode errors), and gc's `partial`/`partial_errors`.
@@ -85,7 +85,7 @@ export function getBead(c: GcClient, city: string, id: string) {
 
 /**
  * GET the newest events, newest first. Never blocking: without `index` gc
- * answers at once (design §7.0), so `index` and `wait` are not accepted. The
+ * answers at once, so `index` and `wait` are not accepted. The
  * body's `total` is the event cursor (herdr's fetch cannot see X-GC-Index).
  */
 export function pollEvents(c: GcClient, city: string, query: { limit: number }) {
@@ -156,7 +156,7 @@ export function killSession(
   return c.call("post-v0-city-by-city-name-session-by-id-kill", { path: { cityName: city, id }, query, idempotencyKey });
 }
 
-/** POST pin (keep awake). gc declares no Idempotency-Key here (gap GA13). */
+/** POST pin (keep awake). gc declares no Idempotency-Key here. */
 export function pinSession(c: GcClient, city: string, id: string) {
   return c.call("post-v0-city-by-city-name-session-by-id-pin", { path: { cityName: city, id } });
 }
@@ -189,7 +189,7 @@ export function rigAction(c: GcClient, city: string, rig: string, action: "suspe
 
 // ---- work mutations ---------------------------------------------------------
 
-/** POST sling: route a bead to an agent. No Idempotency-Key (gap GA13): a retry may route twice. */
+/** POST sling: route a bead to an agent. gc declares no Idempotency-Key here, so a retry may route twice. */
 export function sling(c: GcClient, city: string, body: T.SlingInputBody) {
   return c.call("post-v0-city-by-city-name-sling", { path: { cityName: city }, body });
 }

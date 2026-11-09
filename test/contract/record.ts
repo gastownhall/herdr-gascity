@@ -1,4 +1,4 @@
-// Records real gc responses for the contract fixtures (design §13.2).
+// Records real gc responses for the contract fixtures.
 //
 // Run it when re-pinning, against a THROWAWAY city started from the pinned gc
 // build for this purpose: the scenario creates, slings, closes and reopens
@@ -12,7 +12,8 @@
 //
 // Usage:
 //   bun run test/contract/record.ts --throwaway-city --api http://127.0.0.1:<port> --city <name> \
-//     --rig <rig> --agent <city agent> --rig-agent <rig>/<agent> --session <a running session id>
+//     --rig <rig> --agent <city agent> --rig-agent <rig>/<agent> --session <a running session id> \
+//     --scratch-root <the directory holding the scratch city, GC_HOME and rig>
 //
 // Writes test/contract/fixtures/<operationId>/<name>.json:
 //   { request: {method, path, query, body?}, status, body }
@@ -35,6 +36,24 @@ export interface Fixture {
   body: unknown;
 }
 
+/** Where the scratch city's absolute paths are rewritten to in fixtures. */
+export const SCRATCH_ROOT = "/scratch";
+/** What a session's instance_token is rewritten to in fixtures. */
+export const INSTANCE_TOKEN = "instance-token";
+
+/**
+ * Makes a recorded body host-independent: the scratch directory prefix becomes
+ * SCRATCH_ROOT and session instance tokens become INSTANCE_TOKEN. Idempotent.
+ */
+export function normalize(value: unknown, scratchRoot: string): unknown {
+  if (typeof value === "string") return scratchRoot && value.includes(scratchRoot) ? value.split(scratchRoot).join(SCRATCH_ROOT) : value;
+  if (Array.isArray(value)) return value.map((v) => normalize(v, scratchRoot));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, k === "instance_token" && typeof v === "string" ? INSTANCE_TOKEN : normalize(v, scratchRoot)]));
+  }
+  return value;
+}
+
 interface Args {
   api: string;
   city: string;
@@ -42,6 +61,8 @@ interface Args {
   agent: string;
   rigAgent: string;
   session: string;
+  /** The scratch city's top directory, rewritten to SCRATCH_ROOT in fixtures. */
+  scratchRoot: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -54,12 +75,12 @@ function parseArgs(argv: string[]): Args {
     if (!v) throw new Error(`missing ${name}`);
     return v;
   };
-  return { api: get("--api"), city: get("--city"), rig: get("--rig"), agent: get("--agent"), rigAgent: get("--rig-agent"), session: get("--session") };
+  return { api: get("--api"), city: get("--city"), rig: get("--rig"), agent: get("--agent"), rigAgent: get("--rig-agent"), session: get("--session"), scratchRoot: get("--scratch-root") };
 }
 
 class Recorder {
   private readonly written: string[] = [];
-  constructor(private readonly api: string) {}
+  constructor(private readonly api: string, private readonly scratchRoot: string) {}
 
   async send(
     operationId: string,
@@ -83,8 +104,8 @@ class Recorder {
     } catch {
       body = text;
     }
-    const fixture: Fixture = { request: { method, path, query }, status: res.status, body };
-    if (opts.body !== undefined) fixture.request.body = opts.body;
+    const fixture: Fixture = { request: { method, path, query }, status: res.status, body: normalize(body, this.scratchRoot) };
+    if (opts.body !== undefined) fixture.request.body = normalize(opts.body, this.scratchRoot);
     const dir = join(FIXTURES, operationId);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, `${name}.json`), JSON.stringify(fixture, null, 2) + "\n");
@@ -118,7 +139,7 @@ async function outcome(r: Recorder, c: string, name: string, accepted: Fixture):
 
 /** The recording scenario. Fixture names say what each one shows. */
 export async function record(a: Args): Promise<string[]> {
-  const r = new Recorder(a.api);
+  const r = new Recorder(a.api, a.scratchRoot);
   const c = `/v0/city/${encodeURIComponent(a.city)}`;
   const nonce = Date.now().toString(36);
   const [dir, base] = [a.rigAgent.slice(0, a.rigAgent.lastIndexOf("/")), a.rigAgent.slice(a.rigAgent.lastIndexOf("/") + 1)];

@@ -7,7 +7,7 @@ import type * as T from "./types.gen.ts";
 
 /**
  * Every gc operation the mod calls, from the pin: `csrf` = gc requires X-GC-Request;
- * `idempotencyKey` = gc declares Idempotency-Key (sent only then, design §7.3);
+ * `idempotencyKey` = gc declares Idempotency-Key (sent only then);
  * `item` = the list elements are decoded one by one.
  */
 export const OPERATIONS = {

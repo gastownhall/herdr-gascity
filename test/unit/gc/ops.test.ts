@@ -1,4 +1,4 @@
-// ops.ts: one typed function per used operation (design §4, §13.2). Every
+// ops.ts: one typed function per used operation. Every
 // function is called against a recording fetch; together they must hit every
 // operation in api/used-surface.json, with X-GC-Request on every mutation and
 // Idempotency-Key exactly where the pinned spec declares it.

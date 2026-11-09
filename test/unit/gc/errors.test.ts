@@ -1,4 +1,4 @@
-// Problem+json and status -> GcError (design §5.3), table-tested against the
+// Problem+json and status -> GcError, table-tested against the
 // exact bodies gc writes at the pin (internal/api/writeauth.go problem
 // bodies, huma_handlers_supervisor.go CSRF/read-only guards, city_scope.go).
 
@@ -31,8 +31,15 @@ describe("401/403: write auth, CSRF and read-only (exact gc bodies)", () => {
     test(name, () => expect(map(status, body)).toEqual(want));
   }
 
-  test("a 401 without a problem body is still write-grant-required, with the raw text", () => {
-    expect(map(401, "unauthorized\n")).toEqual({ kind: "write-grant-required", status: 401, detail: "unauthorized" });
+  test("read-auth (X-GC-City-Read) is read-grant-required, never write-grant-required", () => {
+    expect(map(401, { status: 401, title: "Unauthorized", detail: "missing X-GC-City-Read grant" }))
+      .toEqual({ kind: "read-grant-required", status: 401, detail: "missing X-GC-City-Read grant" });
+    expect(map(403, { status: 403, title: "Forbidden", detail: "read grant rejected" }))
+      .toEqual({ kind: "read-grant-required", status: 403, detail: "read grant rejected" });
+  });
+
+  test("an unrecognized 401 stays http instead of being guessed as a grant problem", () => {
+    expect(map(401, "unauthorized\n")).toEqual({ kind: "http", status: 401, problem: null, raw: "unauthorized" });
   });
 
   test("any other 403 stays http with the problem verbatim", () => {
@@ -42,6 +49,16 @@ describe("401/403: write auth, CSRF and read-only (exact gc bodies)", () => {
 });
 
 describe("404/405", () => {
+  test("gc's machine-readable code wins: code city-not-found -> city-not-running even with another detail", () => {
+    expect(map(404, { status: 404, title: "City Not Found", detail: "city gone", code: "city-not-found" }))
+      .toEqual({ kind: "city-not-running", city: "" });
+  });
+
+  test("a code that says otherwise wins over a look-alike detail prefix", () => {
+    const problem = { status: 404, title: "Not Found", detail: "not_found: city not found or not running: x", code: "session-not-found" };
+    expect(map(404, problem).kind).toBe("http");
+  });
+
   test("city not running (gc's stable 404 detail) -> city-not-running with the name", () => {
     const body = {
       type: "urn:gascity:error:city-not-found", title: "City Not Found", status: 404,
@@ -53,6 +70,10 @@ describe("404/405", () => {
   test("a plain-text 404/405 (the route does not exist: gc too old) -> api-missing", () => {
     expect(map(404, "404 page not found\n")).toEqual({ kind: "api-missing", operationId: OP });
     expect(map(405, "Method Not Allowed\n")).toEqual({ kind: "api-missing", operationId: OP });
+  });
+
+  test("a JSON 404 that is not a problem keeps its body", () => {
+    expect(map(404, { error: "nope" })).toEqual({ kind: "api-missing", operationId: OP, raw: '{"error":"nope"}' });
   });
 
   test("a problem 404 for a missing resource stays http", () => {
@@ -68,6 +89,7 @@ describe("409, 422, 5xx", () => {
     expect(e).toEqual({ kind: "http", status: 409, problem: { ...problem, errors: [] } });
     expect(problemHint(e)).toBe("answer-pending-prompt");
     expect(problemHint(map(409, { ...problem, detail: "session sc-60 is closed" }))).toBeNull();
+    expect(problemHint(map(409, { ...problem, code: "conflict-wrong-state" }))).toBeNull();
     expect(problemHint({ kind: "csrf-rejected" })).toBeNull();
   });
 
@@ -138,7 +160,8 @@ describe("202 outcomes", () => {
     expect(outcomeFailure({ request_id: "r", operation: "session.submit", state: "succeeded" })).toBeNull();
   });
 
-  test("an unrecognized state is not treated as success or failure", () => {
-    expect(outcomeFailure({ request_id: "r", operation: "session.submit", state: { kind: "unrecognized", raw: "parked" } })).toBeNull();
+  test("an unrecognized state is outcome-unknown, not success", () => {
+    expect(outcomeFailure({ request_id: "r", operation: "session.submit", state: { kind: "unrecognized", raw: "parked" } }))
+      .toEqual({ kind: "outcome-unknown", requestId: "r", operationId: "get-request-outcome", cause: "unrecognized-state", issues: ["state: parked"] });
   });
 });

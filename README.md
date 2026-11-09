@@ -64,16 +64,21 @@ fails.
 - **Decode policy.** Extra fields are ignored; a missing required field or a
   wrong type is a `decode` error with the operation, JSON path and issues; an
   unknown enum value decodes to `{kind: "unrecognized", raw}`; gc's
-  `["array","null"]` decodes `null` to `[]`; list elements decode one by one,
+  `["array","null"]` decodes `null` (and, when optional, absent) to `[]`,
+  except fields listed under `keepAbsent` such as `wake_reasons`, where absent
+  means "not asked for"; list elements decode one by one,
   so a bad element is reported as `unreadable` instead of failing the list.
 - **herdr's fetch.** Whole body, no response headers, a fixed 30 s timeout and
-  an 8 MiB cap. Rejections become `unreachable`, `timeout` or `too-large`; a
-  mutation whose transport fails is `outcome-unknown`. Nothing is retried;
+  an 8 MiB cap. Rejections become `unreachable`, `timeout` or `too-large`. An
+  answer from any origin other than the configured loopback one (herdr follows
+  redirects) is refused. A mutation whose transport fails, whose 2xx answer
+  does not decode, or that was redirected is `outcome-unknown`, never a plain
+  error a person could simply retry. Nothing is retried;
   mutations carry `X-GC-Request: herdr-gascity/<version>`, and
   `Idempotency-Key` only where gc declares it. Loopback API URLs only.
 - **Re-pinning.**
-  `git -C <gascity> show <commit>:internal/api/openapi.json > /tmp/openapi.json`,
-  `bun run pin:gc --spec /tmp/openapi.json --commit <sha> --committed <iso date>`,
+  `git -C <gascity> show <commit>:internal/api/openapi.json > openapi-upstream.json`,
+  `bun run pin:gc --spec openapi-upstream.json --commit <sha> --committed <iso date>`,
   `bun run gen:gc`, then re-record the fixtures against a throwaway city started
   from that gc build (`bun run record:gc --throwaway-city …`; see the header of
   `test/contract/record.ts`).

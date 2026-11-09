@@ -1,5 +1,5 @@
-// Engine parity for the gc client and its jitless zod decoders (design §4,
-// §13.1, risk 3). herdr-app runs mods in QuickJS (a quickjs-jit fork), not in
+// Engine parity for the gc client and its jitless zod decoders.
+// herdr-app runs mods in QuickJS (a quickjs-jit fork), not in
 // bun's JavaScriptCore. This test bundles test/engine/entry.ts with the mod's
 // own esbuild options and:
 //   1. lints that bundle with the authority lint and an empty allowlist:
@@ -11,7 +11,7 @@
 //      fixture, and requires: no trap was ever hit, jitless was on, and the
 //      results are identical to the same bundle's results in bun.
 // QuickJS-ng is the same engine family as herdr's, not herdr's engine; the
-// real-app smoke (slice M8) covers the rest.
+// real-app smoke test covers the rest.
 
 import { describe, expect, test } from "bun:test";
 import { build } from "esbuild";
@@ -53,15 +53,30 @@ async function loadFixtures(): Promise<ProbeFixture[]> {
 const probe = await bundleProbe();
 const fixtures = JSON.stringify(await loadFixtures());
 
-/** Replaces Function and eval with traps that count and throw. */
+/**
+ * Replaces every way to compile code at run time with traps that count and
+ * throw: the Function and eval globals, and the `constructor` of the plain,
+ * async, generator and async-generator function prototypes (so an aliased
+ * `(() => {}).constructor(code)` is caught too).
+ */
 const POISON = `
 globalThis.__dynamicCode = 0;
-const RealFunction = Function;
-globalThis.Function = new Proxy(RealFunction, {
-  construct() { globalThis.__dynamicCode++; throw new EvalError("Function constructor is forbidden"); },
-  apply() { globalThis.__dynamicCode++; throw new EvalError("Function constructor is forbidden"); },
+// The target keeps each prototype link real, so instanceof checks behave as before.
+const trap = (what, target) => new Proxy(target, {
+  construct() { globalThis.__dynamicCode++; throw new EvalError(what + " is forbidden"); },
+  apply() { globalThis.__dynamicCode++; throw new EvalError(what + " is forbidden"); },
 });
-globalThis.eval = function () { globalThis.__dynamicCode++; throw new EvalError("eval is forbidden"); };
+const prototypes = [
+  ["Function", Function.prototype],
+  ["AsyncFunction", Object.getPrototypeOf(async function () {})],
+  ["GeneratorFunction", Object.getPrototypeOf(function* () {})],
+  ["AsyncGeneratorFunction", Object.getPrototypeOf(async function* () {})],
+];
+for (const [name, proto] of prototypes) {
+  Object.defineProperty(proto, "constructor", { value: trap(name, proto.constructor), writable: false, configurable: false });
+}
+globalThis.Function = trap("Function", Function);
+globalThis.eval = trap("eval", eval);
 `;
 
 function check(vm: QuickJSContext, result: ReturnType<QuickJSContext["evalCode"]>): void {
@@ -73,14 +88,15 @@ function check(vm: QuickJSContext, result: ReturnType<QuickJSContext["evalCode"]
   result.value.dispose();
 }
 
-async function runInQuickJS(): Promise<{ output: string; dynamicCode: number }> {
+/** Evaluates `module` then awaits `expression` in a poisoned QuickJS context. */
+async function runInQuickJS(module: string, expression: string): Promise<{ output: string; dynamicCode: number }> {
   const QuickJS = await newQuickJSWASMModuleFromVariant(variant);
   const vm = QuickJS.newContext();
   try {
     check(vm, vm.evalCode(POISON, "poison.js"));
-    check(vm, vm.evalCode(probe, "probe.mjs", { type: "module" }));
+    check(vm, vm.evalCode(module, "probe.mjs", { type: "module" }));
     vm.runtime.executePendingJobs();
-    const call = vm.evalCode(`globalThis.__gcEngineProbe.run(${JSON.stringify(fixtures)})`, "run.js");
+    const call = vm.evalCode(expression, "run.js");
     if (call.error) throw new Error(`QuickJS: ${JSON.stringify(vm.dump(call.error))}`);
     const promise = call.value;
     let state = vm.getPromiseState(promise);
@@ -125,7 +141,7 @@ describe("the bundled gc client with zod", () => {
   });
 
   test("runs in QuickJS with Function/eval trapped, jitless, and matches bun exactly", async () => {
-    const quick = await runInQuickJS();
+    const quick = await runInQuickJS(probe, `globalThis.__gcEngineProbe.run(${JSON.stringify(fixtures)})`);
     expect(quick.dynamicCode).toBe(0);
     const parsed = JSON.parse(quick.output) as { jitless: boolean; results: { fixture: string; ok: boolean }[] };
     expect(parsed.jitless).toBe(true);
@@ -133,4 +149,25 @@ describe("the bundled gc client with zod", () => {
     expect(parsed.results.find((r) => r.fixture === "get-health/malformed")?.ok).toBe(false);
     expect(quick.output).toBe(await runInBun());
   }, 60_000);
+
+  test("the traps catch every aliased way to compile code", async () => {
+    const attempts = [
+      "(function () {}).constructor('return 1')",
+      "(() => {}).constructor('return 1')",
+      "(async function () {}).constructor('return 1')",
+      "(function* () {}).constructor('return 1')",
+      "(async function* () {}).constructor('return 1')",
+      "new Function('return 1')",
+      "(0, eval)('1')",
+    ];
+    const module = `globalThis.__attempt = async () => { let caught = 0; for (const code of ${JSON.stringify(attempts)}) {
+      try { (0, globalThis.__run)(code); } catch (_) { caught++; } } return String(caught); };`;
+    // __run evaluates each attempt as an expression without itself compiling code.
+    const runner = `globalThis.__run = (code) => ({
+      ${attempts.map((a, i) => `${JSON.stringify(a)}: () => ${a}`).join(",\n")}
+    })[code]();`;
+    const r = await runInQuickJS(`${runner}\n${module}`, "globalThis.__attempt()");
+    expect(r.output).toBe(String(attempts.length));
+    expect(r.dynamicCode).toBe(attempts.length);
+  });
 });

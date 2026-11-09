@@ -164,7 +164,7 @@ export interface SessionResponse {
   created_at: string;
   last_active?: string | undefined;
   last_output?: string | undefined;
-  wake_reasons: string[];
+  wake_reasons?: string[] | undefined;
 }
 
 /** The fields of ListBodySessionResponse this mod uses, decoded from gc's ListBodySessionResponse. */

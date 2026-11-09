@@ -1,4 +1,4 @@
-// Schemas for the herdr-app host data the mod reads (design §4): only the
+// Schemas for the herdr-app host data the mod reads: only the
 // fields it relies on, so a herdr-app change becomes a visible `host-decode`
 // error instead of `any` flowing into the view-model. Shapes from herdr-app
 // v0.1.14 (defaults/herdr.d.ts; terminals() = `hc ls --json` records plus
@@ -14,7 +14,7 @@ import * as z from "./gc/zod.ts";
 /** A host-data decode failure. */
 export type HostDecodeError = Extract<GcError, { kind: "host-decode" }>;
 
-/** A terminal from terminals(): what open-terminal dedupe reads (design §10.1). */
+/** A terminal from terminals(): what open-terminal dedupe reads. */
 export interface HostTerminal {
   address: string;
   argv: string[];

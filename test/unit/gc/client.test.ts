@@ -1,4 +1,4 @@
-// The gc client against herdr-app's constrained fetch (design §5, §7.3, §9):
+// The gc client against herdr-app's constrained fetch:
 // options {method, headers, body} only; the response has status/ok/url/text()
 // and no headers; a fixed 30 s timeout and an 8 MiB cap surface as rejected
 // promises with herdr's own messages (gpui-kit shell fetch.rs).
@@ -16,7 +16,7 @@ interface Call {
   init: HostRequest;
 }
 
-type Reply = { status: number; body: string } | { throws: unknown } | { rejects: unknown; afterMs?: number };
+type Reply = { status: number; body: string; finalUrl?: string } | { throws: unknown } | { rejects: unknown; afterMs?: number };
 
 /** A herdr-shaped fetch that records calls and plays scripted replies, with a fake clock. */
 function fakeHost(replies: Reply[]) {
@@ -32,7 +32,7 @@ function fakeHost(replies: Reply[]) {
       return Promise.reject(r.rejects);
     }
     clock += 5;
-    return Promise.resolve({ status: r.status, ok: r.status >= 200 && r.status < 300, url, text: () => Promise.resolve(r.body) });
+    return Promise.resolve({ status: r.status, ok: r.status >= 200 && r.status < 300, url: r.finalUrl ?? url, text: () => Promise.resolve(r.body) });
   };
   return { calls, fetch, now: () => clock };
 }
@@ -51,7 +51,7 @@ const SESSION = {
   running: true, attached: false, created_at: "2026-11-09T00:00:00Z",
 };
 
-describe("loopback only (design §9)", () => {
+describe("loopback only", () => {
   const host = fakeHost([]);
   const make = (baseUrl: string) => createGcClient({ baseUrl, fetch: host.fetch });
 
@@ -220,7 +220,7 @@ describe("transport failures (herdr fetch rejections)", () => {
   });
 });
 
-describe("no automatic retries (design §7.3)", () => {
+describe("no automatic retries", () => {
   test("a failed mutation is sent exactly once", async () => {
     for (const reply of [json(503, { status: 503, title: "Service Unavailable" }), { rejects: new Error("reset") } as Reply]) {
       const { c, calls } = client([reply, OK, OK]);
@@ -233,5 +233,63 @@ describe("no automatic retries (design §7.3)", () => {
     const { c, calls } = client([{ rejects: new Error("refused") }, OK]);
     await c.call("get-v0-cities", { path: {} });
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("a mutation gc answered with an unreadable 2xx body is outcome-unknown, never a plain decode error", () => {
+  const cases: [string, () => Promise<unknown>][] = [
+    ["200 sling with a renamed field", () => client([json(200, { status: "slung", target_id: "worker" })]).c
+      .call("post-v0-city-by-city-name-sling", { path: { cityName: "c" }, body: { target: "worker", bead: "fe-1" } })],
+    ["201 create-bead with an empty body", () => client([{ status: 201, body: "" }]).c
+      .call("create-bead", { path: { cityName: "c" }, body: { title: "t" }, idempotencyKey: "k" })],
+    ["202 create-session without request_id", () => client([json(202, { status: "accepted", event_cursor: "9" })]).c
+      .call("create-session", { path: { cityName: "c" }, body: { kind: "agent", name: "worker" }, idempotencyKey: "k" })],
+  ];
+  for (const [name, run] of cases) {
+    test(name, async () => {
+      const r = (await run()) as { ok: boolean; error?: { kind: string; cause?: string; requestId?: unknown; issues?: string[] } };
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatchObject({ kind: "outcome-unknown", cause: "unreadable-response", requestId: null });
+      expect(r.error?.issues?.length).toBeGreaterThan(0);
+    });
+  }
+
+  test("a read with the same body problem stays a decode error", async () => {
+    const r = await client([{ status: 200, body: "" }]).c.call("get-health", { path: {} });
+    expect(r.ok ? null : r.error.kind).toBe("decode");
+  });
+});
+
+describe("responses must come from the same loopback origin (herdr's fetch follows redirects)", () => {
+  test("a read redirected off loopback -> not-loopback with the final URL", async () => {
+    const r = await client([{ ...(json(200, { status: "ok" }) as { status: number; body: string }), finalUrl: "http://10.0.0.9:8372/health" }]).c
+      .call("get-health", { path: {} });
+    expect(r).toEqual({ ok: false, error: { kind: "not-loopback", url: "http://10.0.0.9:8372/health" } });
+  });
+
+  test("a read redirected to another loopback port is refused too", async () => {
+    const r = await client([{ status: 200, body: "{}", finalUrl: "http://127.0.0.1:9999/health" }]).c.call("get-health", { path: {} });
+    expect(r.ok ? null : r.error.kind).toBe("not-loopback");
+  });
+
+  test("a mutation redirected off loopback -> outcome-unknown", async () => {
+    const r = await client([{ status: 200, body: "{}", finalUrl: "http://evil.example:80/x" }]).c
+      .call("post-v0-city-by-city-name-session-by-id-pin", { path: { cityName: "c", id: "s" } });
+    expect(r).toEqual({
+      ok: false,
+      error: { kind: "outcome-unknown", requestId: null, operationId: "post-v0-city-by-city-name-session-by-id-pin", cause: "redirected", issues: ["answered from http://evil.example:80/x"] },
+    });
+  });
+
+  test("an error answer redirected off loopback is refused before its body is trusted", async () => {
+    const r = await client([{ status: 403, body: JSON.stringify({ status: 403, detail: "csrf: x" }), finalUrl: "http://evil.example/x" }]).c
+      .call("get-health", { path: {} });
+    expect(r.ok ? null : r.error.kind).toBe("not-loopback");
+  });
+
+  test("the same origin with a different path is fine", async () => {
+    const r = await client([{ status: 200, body: JSON.stringify({ items: [], total: 0 }), finalUrl: "http://127.0.0.1:8372/v0/cities/" }]).c
+      .call("get-v0-cities", { path: {} });
+    expect(r.ok).toBe(true);
   });
 });

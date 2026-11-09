@@ -2,7 +2,7 @@
 // Do not edit: change the used surface or re-pin, then run `bun run gen:gc`.
 
 // zod comes only from ./zod.ts, which turns on jitless before this module's
-// schemas are built (design §4).
+// schemas are built.
 import * as z from "./zod.ts";
 import { enumOf, nullableList, optionalNullableList } from "./decode.ts";
 import type * as T from "./types.gen.ts";
@@ -150,7 +150,7 @@ export const SessionResponseSchema: z.ZodMiniType<T.SessionResponse> = z.object(
   created_at: z.string(),
   last_active: z.optional(z.string()),
   last_output: z.optional(z.string()),
-  wake_reasons: optionalNullableList(z.string()),
+  wake_reasons: z.optional(nullableList(z.string())),
 });
 
 export const ListBodySessionResponseSchema: z.ZodMiniType<T.ListBodySessionResponse> = z.object({

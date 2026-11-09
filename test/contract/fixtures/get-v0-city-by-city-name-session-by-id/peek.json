@@ -16,7 +16,7 @@
     "provider": "sh",
     "display_name": "Sh",
     "session_name": "worker-adhoc-88210e2896",
-    "work_dir": "/tmp/m1-city/city/.gc/worktrees/worker-adhoc-88210e2896",
+    "work_dir": "/scratch/city/.gc/worktrees/worker-adhoc-88210e2896",
     "created_at": "2026-11-09T06:18:23Z",
     "attached": false,
     "pool": "worker",

@@ -1,4 +1,4 @@
-// The gc API client (design §5, §7.3, §9), written against herdr-app's
+// The gc API client, written against herdr-app's
 // constrained `fetch` (gpui-kit shell, standard/fetch.rs): options are
 // {method, headers, body} only; the whole body is read before the promise
 // resolves; the response has status/ok/url/text() and NO headers; a fixed
@@ -86,7 +86,7 @@ export interface GcClient {
 
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})\/?$/;
 
-/** Creates a client, refusing any API URL that is not a loopback literal with a port (design §9). */
+/** Creates a client, refusing any API URL that is not a loopback literal with a port. */
 export function createGcClient(options: GcClientOptions): Result<GcClient, GcError> {
   const m = LOOPBACK.exec(options.baseUrl);
   if (!m || Number(m[2]) > 65535) return err({ kind: "not-loopback", url: options.baseUrl });
@@ -96,6 +96,15 @@ export function createGcClient(options: GcClientOptions): Result<GcClient, GcErr
     baseUrl,
     call: (op, args) => call(baseUrl, options.fetch, now, op, args),
   });
+}
+
+/** "scheme://host:port" of a URL, lower-cased, with http's default port dropped as reqwest does. */
+function originOf(url: string): string {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/([^/?#]*)/i.exec(url);
+  if (!m) return "";
+  const scheme = m[1]!.toLowerCase();
+  const authority = m[2]!.toLowerCase();
+  return `${scheme}://${scheme === "http" ? authority.replace(/:80$/, "") : authority}`;
 }
 
 type QueryValue = string | number | boolean | readonly string[] | undefined;
@@ -178,9 +187,11 @@ async function call<Op extends OperationId>(
   const started = now();
   let status: number;
   let text: string;
+  let finalUrl: string;
   try {
     const response = await fetch(url, init);
     status = response.status;
+    finalUrl = response.url;
     text = await response.text();
   } catch (cause) {
     const failure = transportFailure(url, cause, now() - started);
@@ -190,16 +201,30 @@ async function call<Op extends OperationId>(
     return err(failure);
   }
 
+  // herdr's fetch follows redirects; an answer from anywhere but this loopback
+  // origin is not gc's, whatever it says.
+  if (originOf(finalUrl) !== originOf(baseUrl)) {
+    if (mutation) {
+      return err({ kind: "outcome-unknown", requestId: null, operationId: op, cause: "redirected", issues: [`answered from ${finalUrl}`] });
+    }
+    return err({ kind: "not-loopback", url: finalUrl });
+  }
+
   if (status < 200 || status > 299) return err(httpError(op, status, text));
 
-  let json: unknown;
+  let decoded: Result<unknown, Extract<GcError, { kind: "decode" }>>;
   try {
-    json = JSON.parse(text);
+    const json: unknown = JSON.parse(text);
+    decoded = meta.item
+      ? decodeListed(meta.response as z.ZodMiniType<{ items: unknown[] }>, meta.item as z.ZodMiniType<unknown>, json, op)
+      : decodeValue(meta.response as z.ZodMiniType<unknown>, json, op);
   } catch (cause) {
-    return err({ kind: "decode", operationId: op, path: "", issues: [`(root): body is not JSON: ${messageOf(cause)}`] });
+    decoded = err({ kind: "decode", operationId: op, path: "", issues: [`(root): body is not JSON: ${messageOf(cause)}`] });
   }
-  const decoded = meta.item
-    ? decodeListed(meta.response as z.ZodMiniType<{ items: unknown[] }>, meta.item as z.ZodMiniType<unknown>, json, op)
-    : decodeValue(meta.response as z.ZodMiniType<unknown>, json, op);
+  // gc answered 2xx, so a mutation most likely took effect: an unreadable
+  // answer must not look like a failure the person could simply retry.
+  if (!decoded.ok && mutation) {
+    return err({ kind: "outcome-unknown", requestId: null, operationId: op, cause: "unreadable-response", issues: decoded.error.issues });
+  }
   return decoded as Result<Types<Op>["decoded"], GcError>;
 }

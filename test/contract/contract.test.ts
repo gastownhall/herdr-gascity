@@ -1,4 +1,4 @@
-// Recorded-API contract test (design §13.2). Every fixture under
+// Recorded-API contract test. Every fixture under
 // test/contract/fixtures/<operationId>/ was recorded from a scratch city at the
 // pinned gc commit (test/contract/record.ts). Each one must
 //   (a) validate against the pinned OpenAPI schema with ajv (OpenAPI 3.1 =
@@ -22,7 +22,7 @@ import {
   type Spec, type UsedSurface,
 } from "../../scripts/gc-spec.ts";
 import { formatSpec, pruneSpec } from "../../scripts/pin-gc-spec.ts";
-import { FIXTURES, type Fixture } from "./record.ts";
+import { FIXTURES, SCRATCH_ROOT, normalize, type Fixture } from "./record.ts";
 
 const spec = await readJson<Spec>(ROOT, PINNED_SPEC);
 const used = await readJson<UsedSurface>(ROOT, USED_SURFACE);
@@ -48,6 +48,14 @@ addFormats(ajv);
 for (const f of ["int32", "int64"]) ajv.addFormat(f, { type: "number", validate: (n: number) => Number.isInteger(n) });
 for (const f of ["float", "double"]) ajv.addFormat(f, { type: "number", validate: () => true });
 ajv.addSchema(spec as object, "pinned");
+
+/** Every string in a body that looks like an absolute filesystem or URL path. */
+function absolutePaths(value: unknown): string[] {
+  if (typeof value === "string") return value.startsWith("/") ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap(absolutePaths);
+  if (value !== null && typeof value === "object") return Object.values(value).flatMap(absolutePaths);
+  return [];
+}
 
 /** The pinned schema for a fixture's status: the success model or the declared error body. */
 function schemaFor(op: OperationId, status: number): string {
@@ -124,7 +132,7 @@ describe("pin", () => {
     }
   });
 
-  test("gc declares Idempotency-Key on the operations design §7.3 lists, and not on the others", () => {
+  test("gc declares Idempotency-Key on the session and create operations, and not on the others", () => {
     const declaring = usedIds.filter((id) => OPERATIONS[id].idempotencyKey).sort();
     expect(declaring).toEqual([
       "create-bead", "create-session",
@@ -142,6 +150,14 @@ describe("fixtures", () => {
     expect([...dirs].sort()).toEqual([...usedIds].sort());
     for (const id of usedIds) {
       expect([id, loaded.some((l) => l.op === id && l.fixture.status === OPERATIONS[id].success)]).toEqual([id, true]);
+    }
+  });
+
+  test("fixtures are host-independent: no scratch paths, no session instance tokens", () => {
+    for (const l of loaded) {
+      const outside = absolutePaths(l.fixture.body).filter((p) => !p.startsWith(`${SCRATCH_ROOT}/`) && !p.startsWith("/v0/"));
+      expect([l.op, l.name, outside]).toEqual([l.op, l.name, []]);
+      expect([l.op, l.name, normalize(l.fixture.body, "")]).toEqual([l.op, l.name, l.fixture.body]);
     }
   });
 
@@ -183,6 +199,22 @@ describe("fixtures", () => {
 describe("malformed variants of the recorded bodies are rejected", () => {
   const successes = loaded.filter((l) => l.fixture.status === OPERATIONS[l.op].success);
 
+  /**
+   * A read whose body does not decode is a decode error at the field; a
+   * mutation's is outcome-unknown (gc answered 2xx, so the change most likely
+   * happened) carrying the same issues.
+   */
+  function expectRejected(op: OperationId, field: string, r: { ok: boolean; error?: GcError }): void {
+    if (r.ok || !r.error) throw new Error("a malformed body decoded");
+    if (OPERATIONS[op].method === "GET") {
+      expect(r.error).toMatchObject({ kind: "decode", operationId: op, path: field });
+    } else {
+      expect(r.error).toMatchObject({ kind: "outcome-unknown", operationId: op, cause: "unreadable-response", requestId: null });
+      const issues = r.error.kind === "outcome-unknown" ? r.error.issues ?? [] : [];
+      expect(issues.some((i) => i.startsWith(`${field}:`))).toBe(true);
+    }
+  }
+
   /** The first required field of the response model that this mod reads. */
   function requiredField(op: OperationId): string | undefined {
     const model = spec.components.schemas[schemaFor(op, OPERATIONS[op].success)]!;
@@ -193,17 +225,15 @@ describe("malformed variants of the recorded bodies are rejected", () => {
   for (const { op, name, fixture } of successes) {
     const field = requiredField(op);
     if (!field) continue;
-    test(`${op}/${name}: missing "${field}" -> decode error at that path`, async () => {
+    test(`${op}/${name}: missing "${field}" -> rejected at that path`, async () => {
       const body = { ...(fixture.body as Record<string, unknown>) };
       delete body[field];
-      const r = await play(op, fixture.status, body);
-      expect(r.ok ? null : r.error).toMatchObject({ kind: "decode", operationId: op, path: field });
+      expectRejected(op, field, await play(op, fixture.status, body));
     });
 
-    test(`${op}/${name}: "${field}" of the wrong type -> decode error at that path`, async () => {
+    test(`${op}/${name}: "${field}" of the wrong type -> rejected at that path`, async () => {
       const body = { ...(fixture.body as Record<string, unknown>), [field]: { wrong: true } };
-      const r = await play(op, fixture.status, body);
-      expect(r.ok ? null : r.error).toMatchObject({ kind: "decode", operationId: op, path: field });
+      expectRejected(op, field, await play(op, fixture.status, body));
     });
 
     const items = (fixture.body as { items?: unknown }).items;

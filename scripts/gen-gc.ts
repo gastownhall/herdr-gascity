@@ -1,4 +1,4 @@
-// Generates the mod's typed gc models from the pinned spec (design §4, §5.2):
+// Generates the mod's typed gc models from the pinned spec:
 //
 //   src/gc/types.gen.ts       TypeScript types of the decoded models
 //   src/gc/schemas.gen.ts     zod/mini schemas that decode them (imported via src/gc/zod.ts)
@@ -6,7 +6,7 @@
 //                             success status, response schema) and typed path/query/body
 //
 // Only the operations and model fields in api/used-surface.json are generated.
-// Decode policy (design §5.2):
+// Decode policy:
 //   - unknown extra fields are ignored (zod objects strip them);
 //   - a missing required field or a wrong type is a decode error;
 //   - a string enum in a response decodes an unknown value to {kind:"unrecognized", raw};
@@ -44,6 +44,8 @@ interface Field {
   required: boolean;
   /** Decoded element by element by the client: emitted as unknown[]. */
   itemLevel: boolean;
+  /** An optional ["array","null"] whose absence means "not asked for": absent stays undefined. */
+  keepAbsent: boolean;
 }
 
 interface Model {
@@ -88,7 +90,11 @@ class Generator {
     const fields: Field[] = entry.fields.map((field) => {
       const p = props.get(field);
       if (!p) throw new Error(`${name}.${field} is listed in ${USED_SURFACE} but not in the pin`);
-      return { name: field, schema: p.schema, required: p.required, itemLevel: entry.itemLevel === field };
+      const keepAbsent = entry.keepAbsent?.includes(field) ?? false;
+      if (keepAbsent && (p.required || !isNullableList(p.schema))) {
+        throw new Error(`${name}.${field}: keepAbsent applies only to optional ["array","null"] fields`);
+      }
+      return { name: field, schema: p.schema, required: p.required, itemLevel: entry.itemLevel === field, keepAbsent };
     });
     let item: string | null = null;
     if (entry.itemLevel) {
@@ -209,6 +215,8 @@ class Generator {
         if (f.itemLevel) {
           out.push(`  /** Raw elements; the client decodes each one (item-level decode errors). */`);
           out.push(`  ${f.name}: unknown[];`);
+        } else if (f.keepAbsent && m.side === "response") {
+          out.push(`  ${f.name}?: ${this.tsType(f.schema, m.side)} | undefined;`);
         } else if (isNullableList(f.schema) && m.side === "response") {
           out.push(`  ${f.name}: ${this.tsType(f.schema, m.side)};`);
         } else if (f.required) {
@@ -261,7 +269,7 @@ class Generator {
     const out = [
       HEADER,
       "// zod comes only from ./zod.ts, which turns on jitless before this module's",
-      "// schemas are built (design §4).",
+      "// schemas are built.",
       'import * as z from "./zod.ts";',
       'import { enumOf, nullableList, optionalNullableList } from "./decode.ts";',
       'import type * as T from "./types.gen.ts";',
@@ -274,6 +282,7 @@ class Generator {
         let expr: string;
         const list = f.required ? "nullableList" : "optionalNullableList";
         if (f.itemLevel) expr = `${list}(z.unknown())`;
+        else if (f.keepAbsent) expr = `z.optional(nullableList(${this.zod(f.schema.items ?? {})}))`;
         else if (isNullableList(f.schema)) expr = `${list}(${this.zod(f.schema.items ?? {})})`;
         else expr = f.required ? this.zod(f.schema) : `z.optional(${this.zod(f.schema)})`;
         out.push(`  ${f.name}: ${expr},`);
@@ -337,7 +346,7 @@ class Generator {
       "",
       "/**",
       " * Every gc operation the mod calls, from the pin: `csrf` = gc requires X-GC-Request;",
-      " * `idempotencyKey` = gc declares Idempotency-Key (sent only then, design §7.3);",
+      " * `idempotencyKey` = gc declares Idempotency-Key (sent only then);",
       " * `item` = the list elements are decoded one by one.",
       " */",
       "export const OPERATIONS = {",
@@ -364,7 +373,7 @@ class Generator {
   }
 }
 
-/** gc's Go nil slice: ["array","null"]. */
+/** gc's nullable list: ["array","null"] (Go writes an empty list as null). */
 function isNullableList(schema: Schema): boolean {
   return Array.isArray(schema.type) && schema.type.length === 2 && schema.type.includes("array") && schema.type.includes("null");
 }

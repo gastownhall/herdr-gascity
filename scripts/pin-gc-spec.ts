@@ -1,4 +1,4 @@
-// Pins gc's OpenAPI spec for the mod's used surface (design §5.2, §12).
+// Pins gc's OpenAPI spec for the mod's used surface.
 //
 // Reads gc's full internal/api/openapi.json at one commit and writes
 // api/openapi.pinned.json: the operations listed in api/used-surface.json
@@ -8,8 +8,8 @@
 // upstream file, so anyone can re-derive the pin.
 //
 // Usage:
-//   git -C <gascity> show <commit>:internal/api/openapi.json > /tmp/openapi.json
-//   bun run scripts/pin-gc-spec.ts --spec /tmp/openapi.json --commit <sha> --committed <iso date>
+//   git -C <gascity> show <commit>:internal/api/openapi.json > openapi-upstream.json
+//   bun run scripts/pin-gc-spec.ts --spec openapi-upstream.json --commit <sha> --committed <iso date>
 // then `bun run gen:gc` to regenerate src/gc/*.gen.ts.
 
 import { createHash } from "node:crypto";

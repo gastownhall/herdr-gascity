@@ -1,4 +1,4 @@
-// Third-party license notices for the code the mod bundles (design §9): every
+// Third-party license notices for the code the mod bundles: every
 // runtime dependency in package.json, with its exact LICENSE text. Written to
 // gascity/THIRD_PARTY_NOTICES.md so the notices ship in the mod folder; a unit
 // test keeps the committed file equal to this output.

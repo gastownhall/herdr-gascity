@@ -39,4 +39,9 @@ describe("the generator refuses drift between the used surface and the pin", () 
   test("an operation the pin does not have", () => {
     expect(() => generate(spec, { ...used, operations: { ...used.operations, "get-v0-nope": "x" } })).toThrow("operation get-v0-nope is not in the pin");
   });
+
+  test("keepAbsent on a field that is not an optional nullable list", () => {
+    const models = { ...used.models, Bead: { ...used.models["Bead"]!, keepAbsent: ["title"] } };
+    expect(() => generate(spec, withModels(models))).toThrow('Bead.title: keepAbsent applies only to optional ["array","null"] fields');
+  });
 });

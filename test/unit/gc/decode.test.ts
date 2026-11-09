@@ -1,4 +1,4 @@
-// The decode policy (design §5.2) on the generated schemas.
+// The decode policy on the generated schemas.
 
 import { describe, expect, test } from "bun:test";
 import { decodeListed, decodeValue, formatPath, isUnrecognized, unrecognizedIn } from "../../../src/gc/decode.ts";
@@ -55,10 +55,19 @@ describe("decodeValue", () => {
   });
 
   test("gc's [\"array\",\"null\"] decodes null and absent to []", () => {
-    const withNull = decodeValue(S.SessionResponseSchema, { ...SESSION, wake_reasons: null }, OP);
+    const r = decodeValue(S.ListBodyRigResponseSchema, { items: [], total: 0 }, "x");
+    expect(r.ok && r.value.partial_errors).toEqual([]);
+    const n = decodeValue(S.ListBodyRigResponseSchema, { items: null, total: 0, partial_errors: null }, "x");
+    expect(n.ok && [n.value.items, n.value.partial_errors]).toEqual([[], []]);
+  });
+
+  test("wake_reasons keeps 'not requested' (absent) apart from 'none' (null or [])", () => {
     const absent = decodeValue(S.SessionResponseSchema, SESSION, OP);
-    expect(withNull.ok && withNull.value.wake_reasons).toEqual([]);
-    expect(absent.ok && absent.value.wake_reasons).toEqual([]);
+    const none = decodeValue(S.SessionResponseSchema, { ...SESSION, wake_reasons: null }, OP);
+    const some = decodeValue(S.SessionResponseSchema, { ...SESSION, wake_reasons: ["config"] }, OP);
+    expect(absent.ok && "wake_reasons" in absent.value).toBe(false);
+    expect(none.ok && none.value.wake_reasons).toEqual([]);
+    expect(some.ok && some.value.wake_reasons).toEqual(["config"]);
   });
 
   test("issues are capped", () => {

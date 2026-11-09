@@ -1,4 +1,4 @@
-// Shared helpers for the pinned gc OpenAPI spec (design §5.2, §13.2): the
+// Shared helpers for the pinned gc OpenAPI spec: the
 // used-surface list, $ref walking, and the PIN record. Used by
 // scripts/pin-gc-spec.ts, scripts/gen-gc.ts and the contract tests.
 
@@ -53,8 +53,13 @@ export interface Spec {
 
 export interface ModelEntry {
   fields: string[];
-  /** A list field whose elements are decoded one by one (design §5.2 item-level decode errors). */
+  /** A list field whose elements are decoded one by one (item-level decode errors). */
   itemLevel?: string;
+  /**
+   * Optional ["array","null"] fields whose absence carries meaning ("not asked
+   * for"), so absent stays undefined instead of decoding to [].
+   */
+  keepAbsent?: string[];
 }
 
 export interface UsedSurface {
