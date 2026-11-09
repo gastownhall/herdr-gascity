@@ -156,12 +156,24 @@ export function evaluateModule(source: string, modules: HostModules, globals: Re
  * only when the test calls `fireTimers()` (none after `cancelAll()`, as
  * herdr cancels a closed copy's tasks).
  */
-export function asyncContext() {
-  const tasks: Promise<unknown>[] = [];
+export function asyncContext(scope: (body: () => unknown) => unknown = (body) => body(), parked: () => number = () => 0) {
+  const tasks: { done: boolean; failed: { error: unknown } | null }[] = [];
+  const focusHandles: { focused: boolean; focusCalls: number }[] = [];
   let timers: { ms: number; handler: (cx: unknown) => void }[] = [];
   const cx = {
     kind: "async" as const,
     notifies: 0,
+    /** Every focus handle the copy made (gpui-kit cx.focus_handle()). */
+    focusHandles,
+    focus_handle() {
+      const state = { focused: false, focusCalls: 0 };
+      focusHandles.push(state);
+      return {
+        focus() { state.focused = true; state.focusCalls++; },
+        is_focused: () => state.focused,
+        release: () => true,
+      };
+    },
     sleeps: [] as number[],
     timerPeriods: [] as number[],
     notify() { cx.notifies++; },
@@ -181,19 +193,31 @@ export function asyncContext() {
       timers = [];
     },
     spawn(body: (cx: unknown) => unknown) {
-      tasks.push(Promise.resolve().then(() => body(cx)));
+      const task: (typeof tasks)[number] = { done: false, failed: null };
+      tasks.push(task);
+      void Promise.resolve().then(() => scope(() => body(cx))).then(
+        () => { task.done = true; },
+        (error: unknown) => { task.done = true; task.failed = { error }; },
+      );
       return { id: tasks.length };
     },
     sleep(ms?: number): Promise<void> {
       cx.sleeps.push(ms ?? 0);
       return new Promise(() => {});
     },
-    /** Waits until every spawned task (including ones spawned meanwhile) has finished; rethrows a task's rejection. */
+    /**
+     * Waits until every spawned task (including ones spawned meanwhile) has
+     * finished, except the ones parked in nextCommand() (the copy's command
+     * loop never ends); rethrows a task's rejection.
+     */
     async settle(): Promise<void> {
-      for (let seen = -1; seen !== tasks.length;) {
-        seen = tasks.length;
-        await Promise.all(tasks);
+      for (let round = 0; round < 10_000; round++) {
+        const failed = tasks.find((t) => t.failed !== null)?.failed;
+        if (failed) throw failed.error;
+        if (tasks.filter((t) => !t.done).length <= parked()) return;
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
+      throw new Error("harness: a spawned task never finished");
     },
   };
   return cx;
@@ -294,14 +318,83 @@ export interface FakeHostOptions {
 /** By default gc runs and, like today's gc, reports no api_url. */
 const DEFAULT_EXEC = () => Promise.resolve({ code: 0, stdout: '{"running":true}', stderr: "" });
 
+/**
+ * herdr's per-copy command queues: nextCommand() belongs to the copy whose
+ * code is running when it is called (the harness sets `current` around a
+ * copy's init, its spawned tasks' first turn and a delivered command's turn).
+ */
+export class CommandRouter {
+  current: string | null = null;
+  private readonly waiting = new Map<string, ((command: string) => void)[]>();
+
+  /** herdr.nextCommand() for the copy in `current`. */
+  next(): Promise<string> {
+    const owner = this.current;
+    if (owner === null) throw new Error("harness: nextCommand() outside a copy's turn");
+    return new Promise((resolve) => {
+      const list = this.waiting.get(owner) ?? [];
+      list.push(resolve);
+      this.waiting.set(owner, list);
+    });
+  }
+
+  /** Whether copy `owner` waits for a command. */
+  waits(owner: string): boolean {
+    return this.parked(owner) > 0;
+  }
+
+  /** How many of copy `owner`'s tasks wait for a command. */
+  parked(owner: string): number {
+    return this.waiting.get(owner)?.length ?? 0;
+  }
+
+  /** Delivers `command` to copy `owner` and runs its turn; throws when it does not wait for one. */
+  async deliver(owner: string, command: string): Promise<void> {
+    const resolve = this.waiting.get(owner)?.shift();
+    if (!resolve) throw new Error(`harness: copy ${owner} is not waiting for a command`);
+    const prev = this.current;
+    this.current = owner;
+    try {
+      resolve(command);
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+    } finally {
+      this.current = prev;
+    }
+  }
+
+  /** Runs `body` as copy `owner`'s code. */
+  as<T>(owner: string, body: () => T): T {
+    const prev = this.current;
+    this.current = owner;
+    try {
+      return body();
+    } finally {
+      this.current = prev;
+    }
+  }
+}
+
 /** A fake `herdr` module whose every call is recorded. */
-export function fakeHerdr(options: FakeHostOptions = {}) {
+export function fakeHerdr(options: FakeHostOptions = {}, router = new CommandRouter()) {
   const calls: { name: string; args: unknown[] }[] = [];
+  const shared = new Map<string, unknown>(Object.entries(options.shared ?? {}));
+  const toasts: { title: string; body?: string; level?: string; action?: { name: string; args?: Record<string, unknown> } }[] = [];
   const all: Record<string, (...args: unknown[]) => unknown> = {
     theme: () => ({ ...(options.theme ?? FAKE_THEME) }),
     // herdr returns the props a copy was opened with, and null for an unpinned copy.
     props: () => (options.props === undefined ? null : structuredClone(options.props)),
-    shared: (key) => (options.shared && Object.hasOwn(options.shared, key as string) ? structuredClone(options.shared[key as string]) : null),
+    shared: (key) => (shared.has(key as string) ? structuredClone(shared.get(key as string)) : null),
+    setShared: (key, value) => {
+      shared.set(key as string, structuredClone(value));
+      return null;
+    },
+    notify: (n) => {
+      toasts.push(structuredClone(n) as (typeof toasts)[number]);
+      return `toast-${toasts.length}`;
+    },
+    nextCommand: () => router.next(),
+    run: () => null,
+    closeOverlay: () => null,
     home: () => FAKE_HOME,
     readTextFile: (path) => {
       if (options.readTextFileRejects !== undefined) return Promise.reject(new Error(options.readTextFileRejects));
@@ -321,12 +414,19 @@ export function fakeHerdr(options: FakeHostOptions = {}) {
     },
     updates: () => ({ app: { version: "0.1.14" } }),
   };
+  /** Host calls that throw (the test sets and clears them): export name → message. */
+  const failing = new Map<string, string>();
   const module: Record<string, unknown> = {};
   for (const [name, fn] of Object.entries(all)) {
     if (options.omit?.includes(name)) continue;
-    module[name] = (...args: unknown[]) => { calls.push({ name, args }); return fn(...args); };
+    module[name] = (...args: unknown[]) => {
+      calls.push({ name, args });
+      const fail = failing.get(name);
+      if (fail !== undefined) throw new Error(fail);
+      return fn(...args);
+    };
   }
-  return { module, calls };
+  return { module, calls, shared, toasts, router, failing };
 }
 
 export const BUNDLE_PATH = new URL("../gascity/main.js", import.meta.url);
@@ -392,19 +492,43 @@ export function fakeGlobals(options: FakeGlobalsOptions = {}) {
  */
 export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { source?: string } = {}) {
   const source = options.source ?? await readFile(BUNDLE_PATH, "utf8");
-  const herdr = fakeHerdr(options);
+  const router = new CommandRouter();
+  const herdr = fakeHerdr(options, router);
   const host = fakeGlobals(options);
   const inputs: FakeInputState[] = [];
   const Mod = evaluateModule(source, { ...fakeGpui(inputs), herdr: herdr.module }, host.globals);
-  /** One copy of the mod: herdr shares module code by every copy; each has its own instance and tasks. */
-  const copy = () => {
+  let copies = 0;
+  /**
+   * One copy of the mod: herdr shares module code by every copy; each has its
+   * own instance, tasks and command queue. `props` are this copy's (default:
+   * the module options'); herdr opens the overlay window with {overlay: <id>}.
+   */
+  const copy = (copyOptions: { props?: unknown } = {}) => {
+    const name = `copy-${++copies}`;
     const view = new Mod();
-    const cx = asyncContext();
+    const cx = asyncContext((body) => router.as(name, body), () => router.parked(name));
     const render = (): RecordedNode => nodeOf(view.render(renderContext()));
     return {
+      name,
       view,
       cx,
-      init: () => view.init?.(undefined, cx),
+      init: () => {
+        const saved = options.props;
+        if ("props" in copyOptions) options.props = copyOptions.props;
+        try {
+          router.as(name, () => view.init?.(undefined, cx));
+        } finally {
+          options.props = saved;
+        }
+      },
+      /** herdr delivers `command` to this copy's nextCommand() (as `herdr-app do gascity.<command>` does to a shown copy). */
+      command: async (command: string) => {
+        await cx.settle();
+        await router.deliver(name, command);
+        await cx.settle();
+      },
+      /** Whether this copy waits for a command (its nextCommand loop runs). */
+      waitsForCommand: () => router.waits(name),
       render,
       /** Waits for every task the copy spawned. */
       settle: () => cx.settle(),
@@ -424,7 +548,13 @@ export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { 
       click: (id: string) => {
         const node = findById(render(), id);
         if (!node?.handlers.on_click) throw new Error(`harness: no clickable element "${id}"`);
-        node.handlers.on_click({}, cx);
+        router.as(name, () => node.handlers.on_click!({}, cx));
+      },
+      /** A key pressed while the copy's root holds the keyboard. */
+      key: (keystroke: string) => {
+        const root = render();
+        if (!root.handlers.on_key_down) throw new Error("harness: the root takes no keys");
+        router.as(name, () => root.handlers.on_key_down!({ key: keystroke, keystroke }, cx));
       },
     };
   };
@@ -433,6 +563,12 @@ export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { 
     /** Another copy sharing this module (and so its registry). */
     copy,
     herdrCalls: herdr.calls,
+    /** herdr's shared state (shared/setShared). */
+    shared: herdr.shared,
+    /** Toasts posted with notify(), in order. */
+    toasts: herdr.toasts,
+    /** herdr calls that throw while listed: export name → message. */
+    hostFails: herdr.failing,
     fetched: host.fetched,
     storage: host.storage,
     /** Every InputState the copies created, in creation order. */

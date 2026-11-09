@@ -37,6 +37,9 @@ function setup() {
     probeEnabled: () => false,
     herdrVersion: () => ok("0.1.14"),
     execLog: () => [],
+    setProbe: () => {},
+    keyboard: () => false,
+    focusTarget: () => null,
   };
   let n = 0;
   const open = async (): Promise<Opened> => {

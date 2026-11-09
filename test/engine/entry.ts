@@ -21,6 +21,10 @@ import { beadDetailModel, boardModel } from "../../src/vm/board.ts";
 import { detailModel } from "../../src/vm/detail.ts";
 import { errorText } from "../../src/vm/errorText.ts";
 import { cleanLine, cleanText } from "../../src/vm/sanitize.ts";
+import { formatCommand, parseCommand } from "../../src/commands.ts";
+import { CommandBook } from "../../src/commandBook.ts";
+import { focusToApply, nextFocus } from "../../src/notify/focus.ts";
+import { NeedsYouNotifier } from "../../src/notify/needsYou.ts";
 
 /** One fixture as the test passes it in. */
 export interface ProbeFixture {
@@ -225,6 +229,43 @@ async function syncScenario(fixtures: ProbeFixture[]): Promise<unknown> {
   };
 }
 
+/**
+ * The command grammar and the toast bookkeeping: every command parsed,
+ * written back and parsed again; refusals with their reasons; a notifier
+ * over a baseline, a new prompt and a repeat; the newest focus target.
+ */
+function commandScenario(): unknown {
+  const raws = [
+    "focus", "focus:scratch:sc-20", "probe:on", "session-new:scratch:canary-agent:canary-n1:nonce=n1", "bead-new:scratch:canary%20n1:worker:confirm",
+    "submit:scratch:sc-20:close%20fe-1%3A%20%E2%9C%93%20done", "close:scratch:sc-20:confirm", "kill-force:scratch:sc-20", "sling:scratch:fe-1:worker:confirm",
+    "bead-close:scratch:fe-1::confirm", "answer:scratch:sc-20:perm-1:approve",
+  ];
+  const roundTrip = raws.map((raw) => {
+    const first = parseCommand(raw);
+    if (!first.ok) return { raw, error: first.error };
+    const written = formatCommand(first.value.command, first.value.nonce);
+    const again = parseCommand(written);
+    return { raw, command: first.value.command, nonce: first.value.nonce, written, same: again.ok && JSON.stringify(again.value) === JSON.stringify(first.value) };
+  });
+  const refused = ["explode", "wake:sc-20", "wake:scratch:%zz", "close:scratch:sc-20:yes", "probe:maybe", "wake:scratch:\u001b[1mx"].map((raw) => {
+    const r = parseCommand(raw);
+    return r.ok ? { raw, accepted: r.value } : { raw, error: r.error };
+  });
+  const n = new NeedsYouNotifier("scratch");
+  const entry = (s: string, r: string) => ({ session_id: s, request_id: r, kind: "permission" });
+  const toasts = [
+    n.observe({ items: [entry("sc-20", "a")] }, null, 0),
+    n.observe({ items: [entry("sc-20", "a"), entry("sc-6", "b")] }, null, 1000),
+    n.observe({ items: [entry("sc-6", "b"), entry("sc-6", "c")] }, null, 2000),
+    n.observe({ items: [entry("sc-6", "c")] }, null, 31_000),
+  ].map((batch) => batch.toasts.map((x) => `${x.session}/${x.requestId}`));
+  const book = new CommandBook();
+  const claims = [book.claim("wake:scratch:sc-6", false, 0), book.claim("wake:scratch:sc-6", false, 1000), book.claim("wake:scratch:sc-6", false, 2500)];
+  const t1 = nextFocus(null, "scratch", "sc-6", 1000);
+  const t2 = nextFocus(t1, "scratch", "sc-20", 2000);
+  return { roundTrip, refused, toasts, claims, focus: [focusToApply(t2, 0, 2500), focusToApply(t2, 2, 2500)] };
+}
+
 /** Runs every fixture, plus a malformed body and a host-data decode, and reports the results as JSON. */
 export async function run(fixturesJson: string): Promise<string> {
   const fixtures = JSON.parse(fixturesJson) as ProbeFixture[];
@@ -237,7 +278,7 @@ export async function run(fixturesJson: string): Promise<string> {
     summary: decodeTerminals([{ address: "t1", argv: ["sh"], labels: {}, state: "live", program: { shell: true } }, { address: 2 }]),
   });
   const sync = await syncScenario(fixtures);
-  return JSON.stringify({ jitless: jitlessEnabled(), results, sync });
+  return JSON.stringify({ jitless: jitlessEnabled(), results, sync, commands: commandScenario() });
 }
 
 (globalThis as { __gcEngineProbe?: { run: typeof run } }).__gcEngineProbe = { run };

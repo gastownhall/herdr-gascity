@@ -18,6 +18,10 @@
 // - `herdr.run` and `herdr.exec` are called directly with a string literal
 //   first argument from RUN_COMMANDS / EXEC_PROGRAMS (the one exception is
 //   in ALLOWLIST, matched by exact text that must occur exactly once);
+// - `herdr.notify` is called directly with an object literal: a toast's
+//   `action` is a second way to run an app command (the toast runs
+//   run(action.name, action.args) when clicked), so an action must be an
+//   object literal whose `name` is a string literal from NOTIFY_ACTIONS;
 // - modules other than gpui-kit, gpui-base, herdr, zod and relative paths are
 //   not imported (the host's `process` module and global can spawn programs).
 // String literals are also checked for hc/tmux/bd anywhere in a shell command
@@ -38,6 +42,7 @@ export type RuleId =
   | "bd"
   | "terminal-command"
   | "run-command"
+  | "notify-action"
   | "exec-program"
   | "host-import"
   | "host-access"
@@ -125,6 +130,12 @@ export const ZOD_MODULE = "src/gc/zod.ts";
  */
 export const RUN_COMMANDS: readonly string[] = ["tab.new", "tab.select", "mod.open"];
 
+/**
+ * The app commands a toast's action may run when clicked: open the mod's
+ * "needs you" window. Adding one is a deliberate, reviewed change to this list.
+ */
+export const NOTIFY_ACTIONS: readonly string[] = ["mod.open"];
+
 /** The programs the mod may exec: the platform opener for the gc dashboard URL. */
 export const EXEC_PROGRAMS: readonly string[] = ["xdg-open", "open"];
 
@@ -159,6 +170,7 @@ const MESSAGES: Readonly<Record<RuleId, string>> = {
   bd: "the mod must not run bd: every bead change is a gc API call",
   "terminal-command": `terminal commands that end, re-home, pin or type into a terminal are forbidden (${TERMINAL_DENY.join(", ")})`,
   "run-command": `herdr.run takes a string literal first argument from: ${RUN_COMMANDS.join(", ")}`,
+  "notify-action": `herdr.notify takes an object literal; its action, if any, is an object literal whose name is a string literal from: ${NOTIFY_ACTIONS.join(", ")}`,
   "exec-program": `herdr.exec takes a string literal first argument from: ${EXEC_PROGRAMS.join(", ")}`,
   "host-import": `only ${HOST_MODULE} imports herdr, and only as \`import * as herdr from "herdr"\``,
   "host-access": "use the herdr namespace only as herdr.<export>, and call herdr.run/herdr.exec directly",
@@ -302,6 +314,42 @@ function isNamespaceOnlyImport(node: ts.ImportDeclaration): boolean {
   return !!clause && !clause.isTypeOnly && !clause.name && !!clause.namedBindings && ts.isNamespaceImport(clause.namedBindings);
 }
 
+/** The static name of an object-literal member, or null (computed from a non-literal). */
+function memberName(name: ts.PropertyName): string | null {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text;
+  if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) return name.expression.text;
+  return null;
+}
+
+/**
+ * Checks a herdr.notify argument: an object literal with no spread and no
+ * member whose name is computed; an `action` member is an object literal
+ * whose only `name` is a string literal from NOTIFY_ACTIONS (and no spread).
+ */
+function checkNotifyArgument(arg: ts.Expression | undefined, call: ts.Node, add: (rule: RuleId, node: ts.Node) => void): void {
+  const n = arg === undefined ? undefined : unparen(arg);
+  if (!n || !ts.isObjectLiteralExpression(n)) {
+    add("notify-action", arg ?? call);
+    return;
+  }
+  for (const p of n.properties) {
+    if (ts.isSpreadAssignment(p) || !p.name || memberName(p.name) === null) {
+      add("notify-action", p);
+      continue;
+    }
+    if (memberName(p.name) !== "action") continue;
+    const value = ts.isPropertyAssignment(p) ? unparen(p.initializer) : undefined;
+    if (!value || !ts.isObjectLiteralExpression(value)) {
+      add("notify-action", p);
+      continue;
+    }
+    const names = value.properties.filter((q) => ts.isSpreadAssignment(q) || !q.name || memberName(q.name) === null || memberName(q.name) === "name");
+    const [only, ...more] = names;
+    const literal = only && ts.isPropertyAssignment(only) && ts.isStringLiteralLike(only.initializer) ? only.initializer.text : null;
+    if (more.length > 0 || literal === null || !NOTIFY_ACTIONS.includes(literal)) add("notify-action", value);
+  }
+}
+
 /** Checks one use of the herdr namespace binding. */
 function checkHostUse(node: ts.Identifier, add: (rule: RuleId, node: ts.Node) => void): void {
   const parent = node.parent;
@@ -311,12 +359,16 @@ function checkHostUse(node: ts.Identifier, add: (rule: RuleId, node: ts.Node) =>
     return;
   }
   const member = parent.name.text;
-  const rule: RuleId | undefined = member === "run" ? "run-command" : member === "exec" ? "exec-program" : undefined;
+  const rule: RuleId | undefined = member === "run" ? "run-command" : member === "exec" ? "exec-program" : member === "notify" ? "notify-action" : undefined;
   if (!rule) return;
   const user = parent.parent;
   if (ts.isTypeOfExpression(user)) return;
   if (!ts.isCallExpression(user) || user.expression !== parent) {
     add("host-access", parent);
+    return;
+  }
+  if (rule === "notify-action") {
+    checkNotifyArgument(user.arguments[0], user, add);
     return;
   }
   const first = user.arguments[0];

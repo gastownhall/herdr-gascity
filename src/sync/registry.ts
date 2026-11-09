@@ -21,7 +21,10 @@
 //   render: reads the snapshots only;
 //   close: unsubscribe() both — it starts nothing.
 //
-// App-wide side effects (toasts) register once with `onEvents`, not per copy.
+// App-wide side effects register once, not per copy: event listeners with
+// `onEvents`, and the "needs you" toasts through `SyncDeps.onNeedsYou`, fed
+// by one notifier per city store (notify/needsYou.ts) from whichever
+// subscribed copy ticks, so several copies of a city post each toast once.
 // The visibility rule (visibility.ts) is per app: `setOnScreen` applies to
 // every store at their next tick.
 
@@ -35,6 +38,7 @@ import { systemClock, type Clock } from "./clock.ts";
 import { Endpoint, type EndpointListener } from "./endpoint.ts";
 import type { Domain } from "./invalidate.ts";
 import { CitiesPoller, type CitiesSnapshot } from "./cities.ts";
+import { NeedsYouNotifier, type NeedsYou, type NeedsYouBatch } from "../notify/needsYou.ts";
 import { CityStore, type CityKey, type CitySnapshot, type ErrorEntry, type EventBatch } from "./store.ts";
 
 /** How often each copy should call `tick()`: the granularity of the 300 ms debounce and of "retry now". */
@@ -51,6 +55,12 @@ export interface SyncDeps {
   onError?: (key: CityKey, entry: ErrorEntry) => void;
   /** A fresh Idempotency-Key per action; default a random UUID. */
   newKey?: () => string;
+  /**
+   * Posts a city's "needs you" toasts, once per app (called in the turn of
+   * the copy whose tick found them). Returns the toasts it could not post
+   * (tried again later) and why (kept in the store's diagnostics).
+   */
+  onNeedsYou?: (batch: NeedsYouBatch) => { failed: readonly NeedsYou[]; errors: readonly string[] };
 }
 
 /** One copy's subscription to one city store. */
@@ -83,9 +93,11 @@ export interface Subscription {
    * Sends a person's action now, in this copy's turn (call it from a click,
    * key or command of this copy), and follows its outcome from this copy's
    * ticks. Returns the action's id in the city's activity log. If this copy
-   * closes before the outcome is known, the action becomes unknown.
+   * closes before the outcome is known, the action becomes unknown. `key`
+   * is its Idempotency-Key (where gc declares one) when the caller has one
+   * (a command's nonce); default a fresh one.
    */
-  act(spec: ActionSpec): number;
+  act(spec: ActionSpec, key?: string): number;
   /** The person retries an action (see outcome.ts retryGate); in this copy's turn. */
   retryAction(id: number): Result<number, string>;
   /** Refetches what an action changed ("refresh before retry"). */
@@ -132,7 +144,7 @@ export class SyncRegistry {
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly endpoints = new Map<string, Endpoint>();
-  private readonly stores = new Map<string, { store: CityStore; ledger: ActionLedger; subs: number }>();
+  private readonly stores = new Map<string, { store: CityStore; ledger: ActionLedger; notifier: NeedsYouNotifier; subs: number }>();
   private readonly pollers = new Map<string, { poller: CitiesPoller; subs: number }>();
   private readonly listeners = new Set<(batch: EventBatch) => void>();
   private onScreen = false;
@@ -171,11 +183,11 @@ export class SyncRegistry {
         refreshBead: (beadId) => store.refreshBead(beadId),
         newKey: this.deps.newKey ?? (() => newIdempotencyKey()),
       });
-      entry = { store, ledger, subs: 0 };
+      entry = { store, ledger, notifier: new NeedsYouNotifier(key.city), subs: 0 };
       this.stores.set(id, entry);
     }
     entry.subs++;
-    return ok(this.subscription(id, entry.store, entry.ledger, endpoint.value));
+    return ok(this.subscription(id, entry.store, entry.ledger, entry.notifier, endpoint.value));
   }
 
   /** Subscribes a copy to a loopback gc API's shared city list; `not-loopback` otherwise. */
@@ -284,7 +296,7 @@ export class SyncRegistry {
     this.endpoints.delete(endpoint.baseUrl);
   }
 
-  private subscription(id: string, store: CityStore, ledger: ActionLedger, endpoint: Endpoint): Subscription {
+  private subscription(id: string, store: CityStore, ledger: ActionLedger, notifier: NeedsYouNotifier, endpoint: Endpoint): Subscription {
     const owner = {};
     const watches = new Set<() => void>();
     let active = true;
@@ -320,6 +332,14 @@ export class SyncRegistry {
           this.budget.reclaim();
           store.tick(owner);
           ledger.tick(owner);
+          const s = store.snapshot();
+          const now = this.clock.now();
+          const batch = notifier.observe(s.pending.value, s.sessions.value, now);
+          if (this.deps.onNeedsYou && (batch.toasts.length > 0 || batch.more > 0)) {
+            const posted = this.deps.onNeedsYou(batch);
+            notifier.failed(posted.failed, now);
+            for (const message of posted.errors) store.noteError("toasts", { kind: "listener-failed", message });
+          }
         }
         return store.snapshot().rev;
       },
@@ -335,7 +355,7 @@ export class SyncRegistry {
         if (active) store.refresh(domains);
       },
       client: () => endpoint.client("mutation"),
-      act: (spec) => (active ? ledger.start(owner, spec) : -1),
+      act: (spec, key) => (active ? ledger.start(owner, spec, key) : -1),
       retryAction: (actionId) => (active ? ledger.retry(owner, actionId, store.snapshot()) : err("this view has closed")),
       refreshAction: (actionId) => {
         if (active) ledger.refreshFor(actionId);

@@ -37,6 +37,9 @@ function setup() {
     probeEnabled: () => false,
     herdrVersion: () => ok("0.1.14"),
     execLog: () => [],
+    setProbe: () => {},
+    keyboard: () => false,
+    focusTarget: () => null,
   };
   let n = 0;
   const open = async (): Promise<Opened> => {
@@ -130,7 +133,7 @@ describe("a copy's actions", () => {
     gc.override = (req) => (req.method === "POST" ? { status: 202, body: fixtureBody("submit-session", "accepted") } : undefined);
     let sent: boolean[] = [];
     await click(a, (c) => {
-      sent = [c.sendInput("  ", "default"), c.sendInput("close fe-12", "default"), c.sendInput("stop", "interrupt_now"), c.sendInput("later", "message")];
+      sent = [c.sendInputTo("sc-20", "  ", "default"), c.sendInputTo("sc-20", "close fe-12", "default"), c.sendInputTo("sc-20", "stop", "interrupt_now"), c.sendInputTo("sc-20", "later", "message")];
     });
     expect(sent).toEqual([false, true, true, true]);
     await host.runTurns();

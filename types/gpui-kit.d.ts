@@ -24,6 +24,26 @@ interface GpuiElement {
   bg(color: GpuiColor): GpuiElement;
   /** Needs an `id`. Keyboard activation counts as a click. */
   on_click(handler: (event: unknown, cx: GpuiContext) => void): GpuiElement;
+  /** The keyboard means this element while `handle` is focused. */
+  track_focus(handle: GpuiFocusHandle): GpuiElement;
+  /** Delivered while this element or one inside it holds the keyboard. */
+  on_key_down(handler: (event: GpuiKeyEvent, cx: GpuiContext) => void): GpuiElement;
+}
+
+/** A focus target the script owns, created once (in init) and kept on the view. */
+interface GpuiFocusHandle {
+  /** Moves the keyboard onto the element tracking this handle. */
+  focus(): void;
+  /** Whether the element tracking this handle has the keyboard. */
+  is_focused(): boolean;
+}
+
+/** What an `on_key_down` handler receives. */
+interface GpuiKeyEvent {
+  /** The key printed on the key that was pressed, e.g. "j" or "escape". */
+  key: string;
+  /** The whole chord as a key binding spells it, e.g. "cmd-shift-s" or "escape". */
+  keystroke: string;
 }
 
 /** One-shot and repeating callbacks on the foreground executor, owned by the view whose context made them. */
@@ -44,6 +64,8 @@ interface GpuiContext {
   spawn(body: (cx: GpuiAsyncContext) => unknown): unknown;
   /** Resolves after `ms` on GPUI's foreground executor. */
   sleep(ms?: number): Promise<void>;
+  /** A new focus handle: call it in init or an event handler, never in render. */
+  focus_handle(): GpuiFocusHandle;
 }
 
 /** The context `init`, `close` and tasks get: valid across `await`. */

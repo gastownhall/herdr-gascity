@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  ALLOWLIST, EXEC_PROGRAMS, RUN_COMMANDS, TERMINAL_DENY, defaultTargets, lintSource, lintTree, type AllowEntry, type RuleId,
+  ALLOWLIST, EXEC_PROGRAMS, NOTIFY_ACTIONS, RUN_COMMANDS, TERMINAL_DENY, defaultTargets, lintSource, lintTree, type AllowEntry, type RuleId,
 } from "../../scripts/authority.ts";
 import { GC_STATUS_ARGS } from "../../src/discovery/gcStatus.ts";
 
@@ -36,6 +36,7 @@ describe("negative fixtures", () => {
     ["hc-call.ts", ["hc"], 4],
     ["exec-tmux.ts", ["exec-program", "tmux"], 4],
     ["terminal-kill.ts", ["run-command", "terminal-command"], 4],
+    ["notify-action.ts", ["notify-action"], 4],
     ["eval.ts", ["eval"], 2],
     ["new-function.ts", ["function-constructor"], 2],
   ];
@@ -75,6 +76,12 @@ describe("bypass fixtures", () => {
     "constructor-call-bind.ts": ["constructor-read", "constructor-read"],
     "constructor-reflect.ts": ["constructor-read", "constructor-read"],
     "constructor-destructure.ts": ["constructor-read", "constructor-read", "constructor-read"],
+    "notify-computed.ts": ["notify-action"],
+    "notify-spread.ts": ["notify-action"],
+    "notify-action-variable.ts": ["notify-action"],
+    "notify-argument.ts": ["notify-action"],
+    "notify-name-twice.ts": ["notify-action"],
+    "notify-alias.ts": ["host-access"],
   };
 
   test("every bypass fixture has an expectation", async () => {
@@ -160,6 +167,26 @@ describe("rules", () => {
     expect(hostRules("herdr.exec(bin, []);")).toEqual(["exec-program"]);
     expect(hostRules("const run = herdr.run;")).toEqual(["host-access"]);
     expect(hostRules('[herdr.run][0]("tab.new");')).toEqual(["host-access"]);
+  });
+
+  test("a toast's action is a second command channel: its name is a literal from the notify allowlist", () => {
+    expect(NOTIFY_ACTIONS).toEqual(["mod.open"]);
+    expect(hostRules('herdr.notify({ title: "t" });')).toEqual([]);
+    expect(hostRules('herdr.notify({ title: "t", body: b, level: "warning" });')).toEqual([]);
+    expect(hostRules('herdr.notify({ title: "t", action: { name: "mod.open", args: { name: "gascity" } } });')).toEqual([]);
+    expect(hostRules('herdr.notify({ title: "t", action: { name: `mod.open` } });')).toEqual([]);
+    expect(hostRules('typeof herdr.notify === "function";')).toEqual([]);
+    expect(hostRules('herdr.notify({ title: "t", action: { name: "tab.new", args: {} } });')).toEqual(["notify-action"]);
+    expect(hostRules('herdr.notify({ title: "t", action: { name: "gascity.close" } });')).toEqual(["notify-action"]);
+    expect(hostRules('herdr.notify({ title: "t", action: { args: {} } });')).toEqual(["notify-action"]);
+    expect(hostRules('herdr.notify({ title: "t", action: { name: n } });')).toEqual(["notify-action"]);
+    expect(hostRules('herdr.notify({ title: "t", action: { ...a, name: "mod.open" } });')).toEqual(["notify-action"]);
+    expect(hostRules('herdr.notify({ title: "t", action: cond ? { name: "mod.open" } : { name: "app.reset" } });')).toEqual(["notify-action"]);
+    expect(hostRules('herdr.notify({ title: "t", [k]: { name: "app.reset" } });')).toEqual(["notify-action"]);
+    expect(hostRules('herdr.notify({ title: "t", "action": { name: "app.reset" } });')).toEqual(["notify-action"]);
+    expect(hostRules("herdr.notify(spec);")).toEqual(["notify-action"]);
+    expect(hostRules("herdr.notify();")).toEqual(["notify-action"]);
+    expect(hostRules('[herdr.notify][0]({ title: "t" });')).toEqual(["host-access"]);
   });
 
   test("only allowed modules: gpui-kit, gpui-base, herdr, zod and relative paths", () => {

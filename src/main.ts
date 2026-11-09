@@ -12,14 +12,24 @@
 // Every action a click asks for runs in that click, in this copy's own turn,
 // so its request belongs to this copy; the copy's text inputs are created in
 // init (herdr refuses to create them in render).
+//
+// Commands herdr delivers (`herdr-app do gascity.<command>`, keys.json
+// bindings, the bare "focus" of pane.go) arrive in a loop over nextCommand()
+// that this copy spawns in init, and run through the same copy methods as the
+// buttons; keys on the focused root do too. The copy herdr opens as the
+// "needs you" window (mod.open) says so in shared state while it is open.
 
 import { View } from "gpui-kit";
 import { InputState } from "gpui-base";
 import {
-  execGcStatus, hostFetch, logError, missingHostExports, probeIo, readExecLog, readHerdrVersion, readLastCity, readProbeEnabled,
-  readProps, readSharedSettings, readSupervisorConfig, readTheme, readVisibility, rememberCity,
+  closeWindow, execGcStatus, hostFetch, logError, missingHostExports, nextCommand, postNeedsYou, probeIo, readExecLog, readFocusTarget,
+  readHerdrVersion, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTheme, readVisibility, rememberCity,
+  selectTab, setProbeEnabled, setWindowOpen,
 } from "./host.ts";
-import { CopyController } from "./copy.ts";
+import { sharedCommandBook } from "./commandBook.ts";
+import { CopyController, type CommandUi } from "./copy.ts";
+import { keyAction } from "./keys.ts";
+import { WINDOW_REFRESH_MS, overlayOf } from "./notify/window.ts";
 import { decodeCopy } from "./discovery/city.ts";
 import { DiscoveryController, type DiscoveryTask } from "./discovery/controller.ts";
 import { ProbeWriter, sharedProbeWriter } from "./probe.ts";
@@ -28,19 +38,27 @@ import { SyncRegistry, TICK_MS, sharedRegistry } from "./sync/registry.ts";
 import { VisibilityCache, sharedVisibilityCache } from "./sync/visibilityCache.ts";
 import { errorText } from "./vm/errorText.ts";
 import { syncErrorText } from "./vm/diagnostics.ts";
-import { renderPanel, type PanelActions, type PanelInputs } from "./view/panel.ts";
+import { renderPanel, type PanelActions, type PanelInputs, type PanelKeyboard } from "./view/panel.ts";
 
-/** What this copy can do, decided once in init. */
+/** What this copy can do, decided once in init; `overlay` is the window's overlay id (null for a tab or docked copy). */
 type Copy =
   | { kind: "host-incompatible"; missing: readonly string[] }
   | { kind: "copy-invalid"; error: string }
-  | { kind: "ready"; copy: CopyController };
+  | {
+    kind: "ready";
+    copy: CopyController;
+    overlay: string | null;
+    focus: { handle: GpuiFocusHandle | null };
+    /** The session whose detail last drew the send box: Enter in the box sends there. */
+    box: { session: string | null };
+  };
 
 /** The app's registry: one per module run, shared by every copy. */
 function registry(): SyncRegistry {
   return sharedRegistry(() => new SyncRegistry({
     fetch: hostFetch,
     onError: (key, entry) => logError(`gascity: ${key.city}: ${entry.source}: ${syncErrorText(entry.error)}`),
+    onNeedsYou: postNeedsYou,
   }));
 }
 
@@ -59,7 +77,8 @@ function setUp(): Copy {
   if (missing.length > 0) return { kind: "host-incompatible", missing };
   // herdr passes undefined props to a root view; props() is null for a copy opened without props.
   const last = readLastCity();
-  const decoded = decodeCopy(readProps(), last.ok ? last.value : null);
+  const props = readProps();
+  const decoded = decodeCopy(props, last.ok ? last.value : null);
   if (!decoded.ok) return { kind: "copy-invalid", error: errorText(decoded.error) };
   const reg = registry();
   const discovery = new DiscoveryController({
@@ -71,14 +90,26 @@ function setUp(): Copy {
     rememberCity,
   }, decoded.value);
   if (!last.ok) discovery.hostErrors.push(last.error);
+  const overlay = overlayOf(props);
+  const focus: { handle: GpuiFocusHandle | null } = { handle: null };
   const copy = new CopyController({
     registry: reg,
     discovery,
-    host: { visibility: () => visibility().get(systemClock.now()), probeEnabled: readProbeEnabled, herdrVersion: readHerdrVersion, execLog: readExecLog },
+    host: {
+      visibility: () => visibility().get(systemClock.now()),
+      probeEnabled: readProbeEnabled,
+      setProbe: setProbeEnabled,
+      herdrVersion: readHerdrVersion,
+      execLog: readExecLog,
+      keyboard: () => focus.handle?.is_focused() ?? false,
+      focusTarget: readFocusTarget,
+    },
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
+    window: overlay !== null,
+    commands: sharedCommandBook(),
   });
-  return { kind: "ready", copy };
+  return { kind: "ready", copy, overlay, focus, box: { session: null } };
 }
 
 /** The new-bead form's fields as typed. */
@@ -107,7 +138,7 @@ function closeBead(copy: CopyController, inputs: PanelInputs): void {
  * starts the session, Enter in the new bead's title creates it, Enter in the
  * close reason closes the bead.
  */
-function inputsFor(copy: CopyController): PanelInputs {
+function inputsFor(copy: CopyController, box: { session: string | null }): PanelInputs {
   const message = InputState.new({ placeholder: "Message to the session" });
   const alias = InputState.new({ placeholder: "alias (optional)" });
   const beadTitle = InputState.new({ placeholder: "title (required)" });
@@ -116,7 +147,7 @@ function inputsFor(copy: CopyController): PanelInputs {
   const beadLabels = InputState.new({ placeholder: "labels, comma-separated (optional)" });
   const closeReason = InputState.new({ placeholder: "close reason (optional)" });
   message.on("submit", (_, cx) => {
-    if (copy.sendInput(message.value(), "default")) message.set_value("");
+    if (copy.sendInputTo(box.session, message.value(), "default")) message.set_value("");
     cx.notify();
   });
   alias.on("submit", (_, cx) => {
@@ -135,8 +166,33 @@ function inputsFor(copy: CopyController): PanelInputs {
   return inputs;
 }
 
-function actionsFor(copy: CopyController, inputs: PanelInputs | null): PanelActions {
+/** What a command or key needs from the view: the keyboard, a "retry now" task, the close form's reason box. */
+function uiFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs | null, cx: GpuiContext): CommandUi {
   return {
+    focusKeyboard: () => {
+      if (state.focus.handle === null) return false;
+      state.focus.handle.focus();
+      return true;
+    },
+    retry: () => {
+      cx.spawn((task) => state.copy.retry(taskOf(task)));
+    },
+    closeReason: (reason) => inputs?.closeReason.set_value(reason),
+    beadTitle: (title) => inputs?.beadTitle.set_value(title),
+  };
+}
+
+function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs | null): PanelActions {
+  const copy = state.copy;
+  return {
+    showTab: (tab, cx) => {
+      selectTab(tab);
+      cx.notify();
+    },
+    closeWindow: (cx) => {
+      if (state.overlay !== null) closeWindow(state.overlay);
+      cx.notify();
+    },
     retry: (cx) => {
       cx.spawn((task) => copy.retry(taskOf(task)));
       cx.notify();
@@ -173,8 +229,8 @@ function actionsFor(copy: CopyController, inputs: PanelInputs | null): PanelActi
       copy.requestKill(sessionId);
       cx.notify();
     },
-    send: (mode, cx) => {
-      if (inputs !== null && copy.sendInput(inputs.message.value(), mode)) inputs.message.set_value("");
+    send: (sessionId, mode, cx) => {
+      if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode)) inputs.message.set_value("");
       cx.notify();
     },
     answer: (requestId, option, cx) => {
@@ -244,16 +300,62 @@ export default class GasCity extends View {
     this.state = setUp();
     const state = this.state;
     if (state.kind !== "ready") return;
-    this.inputs = inputsFor(state.copy);
+    const inputs = inputsFor(state.copy, state.box);
+    this.inputs = inputs;
+    if (typeof cx.focus_handle === "function") state.focus.handle = cx.focus_handle();
+    if (state.overlay !== null) {
+      setWindowOpen(true);
+      visibility().invalidate();
+    }
     cx.spawn((task) => state.copy.discover(taskOf(task)));
+    let flagged = systemClock.now();
     cx.timer.every(TICK_MS, (tcx) => {
+      // The open window keeps its shared flag fresh: a stale one (a window that died with herdr) expires.
+      if (state.overlay !== null && systemClock.now() - flagged >= WINDOW_REFRESH_MS) {
+        flagged = systemClock.now();
+        setWindowOpen(true);
+      }
       // A rediscovery is spawned from this copy's own timer, so its work belongs to this copy.
       if (state.copy.tick((body) => tcx.spawn((task) => body(taskOf(task))))) tcx.notify();
+    });
+    // herdr delivers commands only to copies on screen; each runs in this copy's turn.
+    cx.spawn(async (task) => {
+      for (;;) {
+        const command = await nextCommand();
+        try {
+          state.copy.runCommand(command, uiFor(state, inputs, task));
+        } catch (cause) {
+          logError(`gascity: command ${JSON.stringify(command.slice(0, 80))} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+        task.notify();
+      }
     });
   }
 
   override close(_cx: GpuiAsyncContext): void {
-    if (this.state.kind === "ready") this.state.copy.close();
+    if (this.state.kind !== "ready") return;
+    this.state.copy.close();
+    if (this.state.overlay !== null) {
+      setWindowOpen(false);
+      visibility().invalidate();
+    }
+  }
+
+  /** The root's keyboard: keys call the same copy methods as the buttons. */
+  private keyboard(state: Extract<Copy, { kind: "ready" }>): PanelKeyboard | null {
+    const handle = state.focus.handle;
+    if (handle === null) return null;
+    const inputs = this.inputs;
+    return {
+      handle,
+      onKey: (event, cx) => {
+        // Keys reach the root while anything inside it holds the keyboard; a
+        // text box's typing is the box's: act only when the root itself is focused.
+        if (!handle.is_focused()) return;
+        const action = keyAction(event.keystroke);
+        if (action !== null && state.copy.key(action, uiFor(state, inputs, cx))) cx.notify();
+      },
+    };
   }
 
   override render(_cx: GpuiContext): GpuiElement {
@@ -263,6 +365,10 @@ export default class GasCity extends View {
     if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme = readTheme();
     if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme, error: state.error });
-    return renderPanel({ kind: "city", theme, view: state.copy.view(systemClock.now()), actions: actionsFor(state.copy, this.inputs), inputs: this.inputs });
+    const view = state.copy.view(systemClock.now());
+    state.box.session = view.detail.kind === "session" ? view.detail.ref : null;
+    return renderPanel({
+      kind: "city", theme, view, actions: actionsFor(state, this.inputs), inputs: this.inputs, keyboard: this.keyboard(state),
+    });
   }
 }

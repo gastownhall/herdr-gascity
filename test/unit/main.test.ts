@@ -207,9 +207,16 @@ describe("the host", () => {
     expect(mod.fetched).toEqual([]);
   });
 
-  test("mod.json is valid (herdr-app silently ignores an invalid one) and is not auto-docked", async () => {
+  test("mod.json is valid (herdr-app silently ignores an invalid one), is not auto-docked, takes the keyboard, and opens the window", async () => {
     const hint = JSON.parse(await Bun.file(new URL("../../gascity/mod.json", import.meta.url)).text());
-    expect(hint).toEqual({ place: "none", title: "Gas City" });
+    expect(hint).toEqual({
+      place: "none", title: "Gas City", focusable: true, overlay: { kind: "window", key: "gascity", width: 0.5, height: 0.6 },
+    });
+  });
+
+  test("the keys.json fragment binds an app command (mod.open), which works while every copy is hidden", async () => {
+    const keys = JSON.parse(await Bun.file(new URL("../../gascity/keys.json", import.meta.url)).text());
+    expect(keys).toEqual({ global: { "ctrl-alt-g": "mod.open:gascity" } });
   });
 });
 

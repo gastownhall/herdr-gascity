@@ -47,7 +47,7 @@ function fakeIo(initial: string | null = null) {
   };
 }
 
-const body = (n: number) => ({ schema: "gascity-herdr-probe/3", n }) as never;
+const body = (n: number) => ({ schema: "gascity-herdr-probe/4", n }) as never;
 /** Two copies, as owners of the file. */
 const A = { copy: "a" };
 const B = { copy: "b" };
@@ -58,6 +58,7 @@ function fullBody(over: Partial<ProbeBody> = {}): ProbeBody {
     schema: PROBE_SCHEMA, mod_version: "0.0.0", herdr_version: "0.1.14", connection: { text: "connected", tone: "ok" }, discovery: null,
     city: "scratch", city_phase: "city-running", visibility: { on_screen: true }, keyboard: false, needs_you: 0, data_age: null,
     sessions: [], board: null, bead_detail: null, detail: null, actions: [], exec_log: [], errors: [], refresh_count: 0, fetch_in_flight_max: 0,
+    window: false, notice: null, commands: [],
     ...over,
   };
 }
@@ -86,7 +87,7 @@ describe("ProbeWriter", () => {
     w.offer(A, body(2), 1100);
     await flush();
     expect(f.calls).toEqual([`read ${PATH}`, `write ${PATH} expected=current`, `write ${PATH} expected=current`]);
-    expect(JSON.parse(f.file()!)).toEqual({ schema: "gascity-herdr-probe/3", n: 2, seq: 2, ts: "1970-01-01T00:00:01.100Z" });
+    expect(JSON.parse(f.file()!)).toEqual({ schema: "gascity-herdr-probe/4", n: 2, seq: 2, ts: "1970-01-01T00:00:01.100Z" });
   });
 
   test("an unchanged document is written again only when the heartbeat is due", async () => {
@@ -178,7 +179,7 @@ describe("ProbeWriter", () => {
   });
 
   test("a probe file left by an earlier run is emptied when the probe is off; an empty file is left alone", async () => {
-    const f = fakeIo('{"schema":"gascity-herdr-probe/3","detail":{"output":"secret"}}\n');
+    const f = fakeIo('{"schema":"gascity-herdr-probe/4","detail":{"output":"secret"}}\n');
     const w = new ProbeWriter(f.io);
     w.off(1000);
     await flush();

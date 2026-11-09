@@ -3,7 +3,7 @@
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
 **Status: scaffold, gc client, discovery, sync engine, agents panel, work
-board, session and work actions.** The mod finds the gc API, lists the cities, and
+board, session and work actions, commands, keys and "needs you" toasts.** The mod finds the gc API, lists the cities, and
 shows the copy's city: its connection state, its rigs, agents and sessions
 with live status, pending prompts and active beads, a detail pane for one
 session, and the work board (ready, in progress, recently closed) with a
@@ -11,7 +11,10 @@ detail pane for one bead. It acts on sessions, agents and rigs through gc's
 API (start, wake, suspend, stop the turn, close, kill, pin, send input,
 answer a prompt, suspend and resume agents and rigs) and on work (create a
 bead and optionally sling it, sling, close and reopen a bead), and shows
-every action's outcome. Opening a terminal comes next.
+every action's outcome. Every action can also be driven by a command
+(`herdr-app do gascity.<command>`), and a toast tells you when a session
+needs you, opening a "needs you" window on the session. Opening a terminal
+comes next.
 
 ## Layout
 
@@ -21,12 +24,14 @@ every action's outcome. Opening a terminal comes next.
 | `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
 | `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `board.ts` (the work board and bead detail), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
+| `src/commands.ts`, `src/keys.ts` | The command grammar (strict; see below) and the key map of a focused copy. |
+| `src/notify/` | "Needs you" toasts: `needsYou.ts` (one toast per new pending prompt, per app), `focus.ts` (the shared `gascity.focus` target), `window.ts` (the overlay window copy). |
 | `src/actions/` | The person's actions: `session.ts`, `agent.ts`, `rig.ts`, `work.ts` (one gc API call each), `activity.ts` (what an action is and the states it goes through), `outcome.ts` (the ledger that sends them and follows their outcomes). |
 | `src/sync/` | The sync engine: one shared store per gc city per app, its poll loop, the event watcher, the fetch budget, backoff, visibility and staleness (see below). |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
 | `compat/host-aliases.ts` | Maps the global names in `types/` onto the declarations herdr-app generates, for the types-drift check. |
-| `gascity/` | The mod folder as herdr-app loads it: the built, committed, readable `main.js` and `mod.json`. |
+| `gascity/` | The mod folder as herdr-app loads it: the built, committed, readable `main.js`, `mod.json` (with the "needs you" window's `overlay` spec), and `keys.json`, an optional key-map fragment. |
 | `build.ts` | esbuild bundle of `src/` into `gascity/main.js`. Deterministic; the header names the version and a sha256 digest of the build inputs. |
 | `scripts/authority.ts` | The authority lint (see below). |
 | `scripts/bundle-fresh.ts` | Fails when the committed `gascity/main.js` differs from a clean rebuild. |
@@ -47,7 +52,11 @@ every action's outcome. Opening a terminal comes next.
   `import * as herdr`. The namespace is used only as `herdr.<export>`.
   `herdr.run` and `herdr.exec` are called directly with a string-literal first
   argument from an allowlist: `tab.new`, `tab.select` and `mod.open`, and
-  the programs `xdg-open` and `open`. The one exception, listed in the lint's
+  the programs `xdg-open` and `open`. A toast's `action` is a second way to
+  run an app command (herdr runs it when the toast is clicked), so
+  `herdr.notify` is called directly with an object literal whose `action`,
+  if any, is an object literal naming a string-literal command from its own
+  allowlist: `mod.open`. The one exception, listed in the lint's
   `ALLOWLIST` by its exact text (which must occur exactly once), is discovery's
   `<gcBin> supervisor status --json` (fixed arguments; `src/host.ts` refuses a
   `gcBin` that does not name `gc` before spawning). The mod imports nothing but `gpui-kit`,
@@ -315,11 +324,13 @@ it unsubscribes and starts nothing; the other copies keep updating.
   or links. Lines written to herdr's log are cleaned the same way.
 - **Probe.** While the shared value `gascity.probe` is `true`, the copy's
   tick writes `<app home>/data/gascity-probe/probe.json`
-  (`gascity-herdr-probe/3`): connection, discovery, city, visibility,
+  (`gascity-herdr-probe/4`; `probe:on` / `probe:off` set it; /4 added the toasts in the exec/run log and the `window`, `notice` and `commands` fields): connection, discovery, city, visibility,
   sessions with their status, the board (each column's cards, the closes
   seen in events with their seq and `close_reason`, the seed, the filter and
   the columns' errors), the selected bead, the session detail, actions with their state and
-  request id, exec log,
+  request id, the exec/run log (with each toast and the command its action
+  runs), whether the copy holds the keyboard and is the "needs you" window,
+  the notice line, the app's commands with the copy and result, the refresh count,
   errors and the budget high-water mark. It serializes the same view-models the panel draws. Writes
   are herdr's compare-and-swap, at most one in flight, on change or every
   5 s. One copy owns the file (the first to write it, until it closes), so
@@ -437,6 +448,127 @@ and never ends or types into a terminal itself.
   Every step has a deadline, so an action never hangs as pending: a request
   still queued 70 s after it was asked for is dropped and shown as not sent,
   so it can never go out after being reported.
+
+## Commands, keys and notifications
+
+**Commands.** `herdr-app do gascity.<command>` and keys.json bindings
+`"<key>": "gascity.<command>"` deliver a command to every Gas City copy on
+screen: the tab, the "needs you" window, a split pane, pinned copies
+(herdr refuses a command when no copy is shown). A command is a verb and its
+arguments separated by `:`; each argument is percent-encoded
+(`encodeURIComponent`), so text may hold `:`, `%` and `=`, e.g.
+`submit:scratch:sc-20:close%20fe-1%3A%20done`.
+
+- **Once per app, in the right city.** Every command that changes gc state
+  names its city first, and only a copy showing that city acts on it; any
+  other copy logs it as `skipped` and says so in its notice line. Copies
+  share the mod's module, so the first copy of that city to get a delivery
+  claims it and the others log a `duplicate`: the same text within 2 s is one
+  delivery. An optional last raw argument `nonce=<id>` (letters, digits,
+  `.`, `_`, `-`; at most 64) makes a delivery distinct from an earlier one
+  with the same text, keeps it claimed for 10 minutes, and becomes the
+  Idempotency-Key where gc declares one. A copy that refuses a delivery gives
+  its claim up. Commands that only change what a copy shows (`focus`,
+  `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) run in each copy
+  that gets them.
+- **Same path as the buttons.** Each command calls the same copy method its
+  button calls, so it sends the same gc request and leaves the same entry in
+  the activity log (the tests compare them pairwise).
+- **Explicit ids.** Commands name what they act on by gc's id (a session also
+  by its exact alias or session name, refused when more than one session has
+  it), never by "the current selection". An agent, rig or city must be one gc
+  lists; a bead must be on the board or known to gc.
+- **Confirmation.** A command whose button asks first (close, kill, force
+  kill, agent and rig suspend, sling, bead close, and a new bead slung to an
+  agent) takes an explicit trailing `confirm`. Without it, the command opens
+  the same question or form its button opens (filled in) and sends nothing (a
+  person can still answer it; `cancel` closes it); with it, the command also
+  answers the question as clicking its button would. `confirm` is told apart
+  by position only, so text arguments never turn into a confirmation.
+- **Strict.** An unknown verb, a wrong number of arguments, an empty id, a
+  bad percent escape or a `confirm` where none fits is refused; so is a
+  command the copy cannot carry out (an unknown or ambiguous id, a list not
+  loaded yet, an action already under way, `city` on a pinned copy). A
+  refusal changes nothing and is shown, cleaned, in the panel's notice line.
+  A command that throws is refused with the error and kept in the
+  diagnostics; the copy keeps taking commands.
+- **The log is the app's.** The probe's `commands` lists the last 20
+  commands any copy got, with the copy (`panel`, `panel <city>` for a pinned
+  copy, `window`) and the result: `done`, `asked`, `refused`, `skipped` or
+  `duplicate`, and why.
+
+| Command | What it does (the button it stands for) |
+|---|---|
+| `focus[:<city>:<session>]` | bare: take the keyboard; with a city and a session: select the city and open the session's detail |
+| `city:<city>` | select a city (as the header's city list does; refused by a pinned copy) |
+| `session:<session>` | open a session's detail (as clicking its row does) |
+| `bead:<bead>` | open a bead's detail (as clicking its card does) |
+| `refresh` | refetch everything now (Retry now; the r key) |
+| `probe:<on-or-off>` | turn the probe file on or off (shared for every copy) |
+| `cancel` | close the open question or form without acting (Cancel) |
+| `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
+| `wake:<city>:<session>` | wake a session (Wake) |
+| `suspend:<city>:<session>` | suspend a session (Suspend) |
+| `stop:<city>:<session>` | stop a session's current turn (Stop turn) |
+| `pin:<city>:<session>` | pin a session awake (Pin) |
+| `unpin:<city>:<session>` | clear a session's pin (Unpin) |
+| `close:<city>:<session>[:confirm]` | close a session (Close…, then Close) |
+| `kill:<city>:<session>[:confirm]` | kill a session's runtime (Kill…, then Kill) |
+| `kill-force:<city>:<session>[:confirm]` | force-kill a session's runtime (Kill…, then Force kill) |
+| `submit:<city>:<session>:<text>` | send input to a session (Send) |
+| `interrupt:<city>:<session>:<text>` | interrupt the turn and send input (Interrupt and send) |
+| `message:<city>:<session>:<text>` | send a queued message to a session (Send as message) |
+| `answer:<city>:<session>:<request>:<option>` | answer a session's pending prompt with one of gc's options (its answer button); the session's detail must show that prompt |
+| `agent-suspend:<city>:<agent>[:confirm]` | suspend an agent (Suspend agent…, then Suspend agent) |
+| `agent-resume:<city>:<agent>` | resume an agent (Resume agent) |
+| `rig-suspend:<city>:<rig>[:confirm]` | suspend a rig (Suspend rig…, then Suspend rig) |
+| `rig-resume:<city>:<rig>` | resume a rig (Resume rig) |
+| `bead-new:<city>:<title>[:<agent>[:confirm]]` | create a bead (+ New bead, then Create); with an agent it is also slung there, which needs confirm (else the form opens filled in) |
+| `sling:<city>:<bead>:<agent>[:confirm]` | sling a bead to an agent (Sling…, then the agent) |
+| `bead-close:<city>:<bead>:<reason>[:confirm]` | close a bead with a reason, which may be empty (Close…, then Close bead) |
+| `bead-reopen:<city>:<bead>` | reopen a closed bead (Reopen) |
+
+**Keys.** `mod.json` is `focusable`: `pane.go` onto a Gas City pane hands it
+the keyboard and sends the bare `focus` command, and the copy focuses its
+root. Then `j`/`down` and `k`/`up` open the next or previous session (as
+clicking its row), `r` is Retry now, and `escape` closes the open question
+or form, else the session's detail. Keys act only while the root itself
+holds the keyboard: typing in a text box (the send box, a form) is the box's
+alone. The send box sends to the session whose detail drew it, never to
+whatever is selected at the time. The probe's `keyboard` says whether the
+copy holds the keyboard. `gascity/keys.json` is an optional fragment for
+herdr's keys.json, `{"global": {"ctrl-alt-g": "mod.open:gascity"}}`: an app
+command, so it works while every Gas City copy is hidden.
+
+**"Needs you" toasts.** When a city's pending list (gc's `/pending`, in the
+shared store) gains a prompt, the mod posts a toast, "<session> needs you",
+naming its kind, session and city. The store is shared, so several copies of
+a city post each toast once. Every (session, request id) pair posted is
+remembered, so a refetch, a resync after missed events or a reconnect after
+an outage posts nothing again; what was already pending when the city was
+opened is the baseline, shown by the header's "N need you" rather than
+toasted. A session gets at most one toast per 30 s: a newer prompt inside
+that window waits and is toasted once it has passed, if gc still lists it.
+A burst posts at most 3 toasts and one "N more sessions need you" summary.
+A toast herdr refuses is recorded in the city's diagnostics and tried again
+after its session's window.
+
+Clicking a toast must bring Gas City on screen, and a command cannot reach a
+hidden copy. So before posting, the mod writes the session to the shared
+value `gascity.focus` (`{city, session, seq, at}`, `seq` growing), and the
+toast's action is the app command `mod.open {name: "gascity"}`, which opens
+the **"needs you" window**: a copy herdr opens from `mod.json`'s `overlay`
+spec. That copy applies the newest target written in the last 10 minutes on
+its next tick (selects the city, then opens the session: its pending prompt
+with gc's options, the send box, its actions), and lists the city's other
+sessions that need you, a "Show Gas City tab" button per tab holding a Gas
+City pane (`tab.select`) and Close. While it is open it keeps the shared
+flag `gascity.window` (`{open: true, at}`) fresh every 5 s and clears it on
+close; a flag older than 15 s is stale (a window that died with herdr) and
+ignored. `mod.open` toggles, so while the window is open toasts carry no
+action; the open window follows each newer target by itself. Commands reach
+the window like any shown copy. Known limit: the authority lint checks a
+toast action's `name`, not its `args`.
 
 ## Develop
 

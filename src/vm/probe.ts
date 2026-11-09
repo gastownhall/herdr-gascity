@@ -13,12 +13,16 @@ import type { DiagnosticLine } from "./diagnostics.ts";
 import type { HeaderModel } from "./header.ts";
 
 /** The probe's schema name; bumped on an incompatible change. */
-export const PROBE_SCHEMA = "gascity-herdr-probe/3";
+export const PROBE_SCHEMA = "gascity-herdr-probe/4";
 
-/** A program the mod ran or an app command it ran, as the exec/run log keeps it. */
+/**
+ * A program the mod ran, an app command it ran, or a toast it posted (argv:
+ * the app command its action runs, empty without an action), as the
+ * exec/run log keeps it.
+ */
 export interface ExecRecord {
   at: number;
-  kind: "exec" | "run";
+  kind: "exec" | "run" | "notify";
   argv: string[];
 }
 
@@ -28,7 +32,7 @@ export interface ProbeInput {
   machine: CityMachine;
   header: HeaderModel;
   onScreen: boolean;
-  /** This copy holds the keyboard (set by the focus command in a later change). */
+  /** This copy holds the keyboard (its root's focus handle is focused). */
   keyboard: boolean;
   agents: AgentsModel | null;
   /** Null until a running city is subscribed. */
@@ -41,6 +45,22 @@ export interface ProbeInput {
   execLog: readonly ExecRecord[];
   refreshCount: number;
   fetchInFlightMax: number;
+  /** This copy is the "needs you" window. */
+  window: boolean;
+  /** Why the last action or command was not done, if it was not (cleaned). */
+  notice: string | null;
+  /** Commands the app's copies got, newest last (cleaned). */
+  commands: readonly ProbeCommand[];
+}
+
+/** One command a copy got (any copy of the app) and what became of it (commandBook.ts). */
+export interface ProbeCommand {
+  at: number;
+  command: string;
+  /** Which copy: "window", "panel", or "panel <city>" for a pinned one. */
+  copy: string;
+  result: "done" | "asked" | "refused" | "skipped" | "duplicate";
+  detail: string;
 }
 
 export interface ProbeSession {
@@ -115,6 +135,9 @@ export interface ProbeBody {
   errors: DiagnosticLine[];
   refresh_count: number;
   fetch_in_flight_max: number;
+  window: boolean;
+  notice: string | null;
+  commands: ProbeCommand[];
 }
 
 function probeSession(r: SessionRow, agent: string | null, group: string | null): ProbeSession {
@@ -200,5 +223,8 @@ export function probeDocument(input: ProbeInput): ProbeBody {
     errors: [...input.diagnostics],
     refresh_count: input.refreshCount,
     fetch_in_flight_max: input.fetchInFlightMax,
+    window: input.window,
+    notice: input.notice,
+    commands: input.commands.map((c) => ({ ...c })),
   };
 }

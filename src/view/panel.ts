@@ -10,11 +10,18 @@ import { renderBoard, type BoardActions } from "./board.ts";
 import { renderDetail, type DetailActions } from "./detail.ts";
 import { renderActivity, renderDialog, renderNotice, type DialogActions, type DialogInputs } from "./dialogs.ts";
 import { renderHeader, type HeaderActions } from "./header.ts";
+import { renderWindowHead, type WindowActions } from "./needsYou.ts";
 import { label, muted, themedRoot } from "./text.ts";
 
 /** What a click may do; main.ts supplies them. */
-export interface PanelActions extends HeaderActions, AgentsActions, BoardActions, DetailActions, DialogActions {
+export interface PanelActions extends HeaderActions, AgentsActions, BoardActions, DetailActions, DialogActions, WindowActions {
   toggleDiagnostics(cx: GpuiContext): void;
+}
+
+/** The copy's keyboard: its root tracks `handle`, and keys go to `onKey`. Null when herdr gives no focus handle. */
+export interface PanelKeyboard {
+  handle: GpuiFocusHandle;
+  onKey(event: GpuiKeyEvent, cx: GpuiContext): void;
 }
 
 /** The copy's retained text inputs, created in init (never in render). */
@@ -25,7 +32,7 @@ export interface PanelInputs extends DialogInputs {
 
 /** What the panel shows. */
 export type PanelModel =
-  | { kind: "city"; theme: ThemeRead; view: CopyView; actions: PanelActions; inputs: PanelInputs | null }
+  | { kind: "city"; theme: ThemeRead; view: CopyView; actions: PanelActions; inputs: PanelInputs | null; keyboard: PanelKeyboard | null }
   | { kind: "copy-invalid"; theme: ThemeRead; error: string }
   | { kind: "host-incompatible"; missing: readonly string[] };
 
@@ -66,12 +73,22 @@ export function renderPanel(model: PanelModel): GpuiElement {
   if (model.kind === "copy-invalid") {
     return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
-  const { view, theme, actions, inputs } = model;
+  const { view, theme, actions, inputs, keyboard } = model;
+  if (keyboard !== null) root = root.track_focus(keyboard.handle).on_key_down((e, cx) => keyboard.onKey(e, cx));
   root = root.children(renderHeader(view.header, theme, actions));
   const dialog = renderDialog(view.dialog, theme, actions, inputs);
   if (dialog !== null) root = root.child(dialog);
   const notice = renderNotice(view.notice);
   if (notice !== null) root = root.child(notice);
+  // The "needs you" window: its own rows, then the session's detail; no agents or board.
+  if (view.window !== null) {
+    root = root.child(renderWindowHead(view.window, theme, actions));
+    const d = renderDetail(view.detail, theme, actions, { activity: view.activity, message: inputs?.message ?? null });
+    if (d !== null) root = root.child(d);
+    const log = renderActivity(view.activity, theme, actions);
+    if (log !== null) root = root.child(log);
+    return themeIssues(root, theme);
+  }
   // Agents beside the work board; the session detail below both.
   const regions: GpuiElement[] = [];
   if (view.agents !== null) regions.push(div().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme, actions, view.activity)));
