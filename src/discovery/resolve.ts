@@ -12,14 +12,17 @@
 //   - a source with nothing to offer (no setting, gc says nothing or cannot be
 //     run, no supervisor.toml) is recorded and skipped;
 //   - a candidate that does not answer /health within 5 s, or answers with
-//     something that is not gc's health, is recorded and the next one tried;
+//     something that is not gc's health, is recorded and the next one tried.
+//     Probes go through the app-wide fetch budget: one that lost its race is
+//     dropped if it is still queued, and otherwise stays counted in flight
+//     until herdr's fetch settles (it holds a pool thread until then);
 //   - a candidate that is not loopback is refused, and a source that exists
 //     but cannot be read for sure (malformed settings or supervisor.toml) is
 //     an error: resolution stops there instead of guessing a later candidate,
 //     because the person configured something and it is not being honoured.
 
 import { err, ok, type Result } from "../result.ts";
-import { createGcClient, type GcClient, type HostFetch } from "../gc/client.ts";
+import { createGcClient, type HostFetch } from "../gc/client.ts";
 import type { GcError } from "../gc/errors.ts";
 import { getHealth } from "../gc/ops.ts";
 import type { SupervisorHealthOutputBody } from "../gc/types.gen.ts";
@@ -76,6 +79,8 @@ export interface ResolveHost {
   /** supervisor.toml's path and text (null when the file does not exist). */
   readSupervisorConfig(): Promise<Result<{ path: string; text: string | null }, GcError>>;
   fetch: HostFetch;
+  /** A fresh budgeted fetch for one /health probe, whose queued request can be dropped. */
+  probeFetch(): { fetch: HostFetch; drop(): void };
   /** Resolves after `ms` (the async context's sleep). */
   sleep(ms: number): Promise<void>;
 }
@@ -94,11 +99,21 @@ const SOURCE_NAMES: Readonly<Record<EndpointSource, string>> = {
   default: "the default",
 };
 
-/** Probes GET /health with a deadline; ok with gc's health, or the failure. */
-async function probe(host: ResolveHost, client: GcClient): Promise<Result<SupervisorHealthOutputBody, GcError>> {
-  const deadline = host.sleep(HEALTH_PROBE_MS).then((): Result<SupervisorHealthOutputBody, GcError> =>
-    err({ kind: "timeout", url: `${client.baseUrl}/health`, ms: HEALTH_PROBE_MS }));
-  return Promise.race([getHealth(client), deadline]);
+/** Probes GET /health with a deadline; ok with gc's health, or the failure. A probe still queued at the deadline is dropped. */
+async function probe(host: ResolveHost, url: string): Promise<Result<SupervisorHealthOutputBody, GcError>> {
+  const pf = host.probeFetch();
+  const client = createGcClient({ baseUrl: url, fetch: pf.fetch });
+  if (!client.ok) return client;
+  let settled = false;
+  const answer = getHealth(client.value).then((r) => {
+    settled = true;
+    return r;
+  });
+  const deadline = host.sleep(HEALTH_PROBE_MS).then((): Result<SupervisorHealthOutputBody, GcError> => {
+    if (!settled) pf.drop();
+    return err({ kind: "timeout", url: `${client.value.baseUrl}/health`, ms: HEALTH_PROBE_MS });
+  });
+  return Promise.race([answer, deadline]);
 }
 
 /** Resolves the gc API endpoint. Never throws. */
@@ -152,7 +167,7 @@ export async function resolveEndpoint(host: ResolveHost): Promise<Result<Endpoin
       continue;
     }
     probed.set(url, source);
-    const health = await probe(host, client.value);
+    const health = await probe(host, url);
     if (!health.ok) {
       attempts.push({ source, outcome: "unreachable", url, error: health.error });
       continue;

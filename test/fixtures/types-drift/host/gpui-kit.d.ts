@@ -7,8 +7,13 @@ declare module "gpui-kit" {
 
   export interface Context {
     notify(): void;
+    readonly timer: Timer;
   }
   export interface AsyncContext extends Context {}
+
+  export interface Timer {
+    every(ms: number, handler: (cx: AsyncContext) => void): unknown;
+  }
 
   export interface NativeElement {
     id(name: string): NativeElement;

@@ -31,6 +31,7 @@ function host(setup: Setup) {
   const execs: string[] = [];
   const sleeps: number[] = [];
   let configReads = 0;
+  let drops = 0;
   const fetch: HostFetch = (url) => {
     fetched.push(url);
     const base = Object.keys(setup.replies ?? {}).find((b) => url.startsWith(`${b}/`));
@@ -52,13 +53,14 @@ function host(setup: Setup) {
       return Promise.resolve(r.ok ? ok({ path: CONFIG_PATH, text: r.value }) : r);
     },
     fetch,
+    probeFetch: () => ({ fetch, drop: () => { drops++; } }),
     sleep: (ms) => {
       sleeps.push(ms);
       // A passing deadline fires after the immediate replies have settled.
       return setup.deadlinesPass ? new Promise((r) => setTimeout(r, 0)) : new Promise(() => {});
     },
   };
-  return { h, fetched, execs, sleeps, configReads: () => configReads };
+  return { h, fetched, execs, sleeps, configReads: () => configReads, drops: () => drops };
 }
 
 const resolve = async (setup: Setup) => {
@@ -152,12 +154,14 @@ describe("/health probing and fallback", () => {
   });
 
   test("a probe that does not answer within 5 s is a timeout, and the next candidate is tried", async () => {
-    const { r, sleeps } = await resolve({
+    const { r, sleeps, drops } = await resolve({
       settings: { apiUrl: "http://127.0.0.1:9443" },
       replies: { "http://127.0.0.1:9443": "hang", "http://127.0.0.1:8372": "health" },
       deadlinesPass: true,
     });
     expect(sleeps[0]).toBe(5_000);
+    // the lost probe's request is dropped from the fetch budget if it is still queued; the answered one's is not
+    expect(drops()).toBe(1);
     expect(r.ok && r.value.attempts[0]).toEqual({
       source: "setting", outcome: "unreachable", url: "http://127.0.0.1:9443",
       error: { kind: "timeout", url: "http://127.0.0.1:9443/health", ms: 5_000 },

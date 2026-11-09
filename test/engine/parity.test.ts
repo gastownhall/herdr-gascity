@@ -60,6 +60,9 @@ interface SyncSummary {
   errors: number;
   budget: { maxInFlight: number };
   stores: number;
+  agents: { groups: { key: string; agents: { name: string; sessions: { id: string; status: { kind: string } }[] }[] }[]; region: { kind: string } };
+  detail: { kind: string; id?: string };
+  sanitized: string[];
 }
 
 const probe = await bundleProbe();
@@ -169,6 +172,16 @@ describe("the bundled gc client with zod, and the sync engine", () => {
     expect(sync.errors).toBeGreaterThan(0);
     expect(sync.budget.maxInFlight).toBeLessThanOrEqual(2);
     expect(sync.stores).toBe(0);
+    // the agents panel's view-models and the sanitiser over the same snapshot
+    expect(sync.agents.region.kind).toBe("ok");
+    expect(sync.agents.groups.map((g) => g.key)).toEqual(["rig:frontend", "city"]);
+    expect(sync.agents.groups.flatMap((g) => g.agents.flatMap((a) => a.sessions.map((x) => x.id))).sort()).toEqual(["sc-20", "sc-5", "sc-6"]);
+    expect(sync.detail).toMatchObject({ kind: "session", id: "sc-20" });
+    expect(sync.sanitized).toEqual([
+      "abcde f",
+      "line\nnext",
+      "request to http://127.0.0.1:8372/health was cancelled: the Gas City view that started it closed",
+    ]);
     expect(quick.output).toBe(await runInBun());
   }, 60_000);
 

@@ -17,7 +17,7 @@
 import { err, ok, type Result } from "../result.ts";
 import { MOD_VERSION } from "../version.ts";
 import { decodeListed, decodeValue } from "./decode.ts";
-import { httpError, type GcError } from "./errors.ts";
+import { httpError, type CancelReason, type GcError } from "./errors.ts";
 import { OPERATIONS, type OperationId, type OperationTypes } from "./operations.gen.ts";
 import type * as z from "./zod.ts";
 
@@ -161,10 +161,19 @@ function hostElapsedMs(cause: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
-type TransportFailure = Extract<GcError, { kind: "unreachable" | "timeout" | "too-large" }>;
+/** The sync engine's fetch budget marks a request it gave up on (see CancelReason). */
+function cancelReason(cause: unknown): CancelReason | null {
+  if (cause === null || typeof cause !== "object") return null;
+  const v = (cause as { cancelled?: unknown }).cancelled;
+  return v === "copy-closed" || v === "abandoned" ? v : null;
+}
 
-/** Classifies a fetch rejection by herdr's messages and the time it took. */
+type TransportFailure = Extract<GcError, { kind: "unreachable" | "timeout" | "too-large" | "cancelled" }>;
+
+/** Classifies a fetch rejection by the budget's mark, herdr's messages and the time it took. */
 function transportFailure(url: string, cause: unknown, elapsedMs: number): TransportFailure {
+  const cancelled = cancelReason(cause);
+  if (cancelled !== null) return { kind: "cancelled", url, reason: cancelled };
   const message = messageOf(cause);
   if (/exceeded the \d+ byte limit/.test(message)) {
     return { kind: "too-large", url, direction: /request body/.test(message) ? "request" : "response", limitBytes: HERDR_FETCH_MAX_BODY_BYTES };
@@ -211,7 +220,11 @@ async function call<Op extends OperationId>(
     text = await response.text();
   } catch (cause) {
     const failure = transportFailure(url, cause, hostElapsedMs(cause) ?? now() - started);
-    if (mutation && !(failure.kind === "too-large" && failure.direction === "request")) {
+    // A request that never left (too large to send, or dropped from the
+    // queue) cannot have been applied; any other failure of a mutation can.
+    const neverSent = (failure.kind === "too-large" && failure.direction === "request")
+      || (failure.kind === "cancelled" && failure.reason === "abandoned");
+    if (mutation && !neverSent) {
       return err({ kind: "outcome-unknown", requestId: null, operationId: op, cause: failure.kind });
     }
     return err(failure);

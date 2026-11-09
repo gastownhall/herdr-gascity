@@ -2,21 +2,22 @@
 // no host calls, no I/O. Clicks call the actions in the model.
 
 import { div } from "gpui-kit";
-import { h_flex, v_flex } from "gpui-base";
+import { v_flex } from "gpui-base";
+import type { CopyView } from "../copy.ts";
 import type { ThemeRead } from "../host.ts";
-import type { HeaderModel } from "../vm/header.ts";
+import { renderAgents, type AgentsActions } from "./agents.ts";
+import { renderDetail, type DetailActions } from "./detail.ts";
+import { renderHeader, type HeaderActions } from "./header.ts";
+import { label, muted, themedRoot } from "./text.ts";
 
 /** What a click may do; main.ts supplies them. */
-export interface PanelActions {
-  /** Rediscover the gc API ("retry now"). */
-  retry(cx: GpuiContext): void;
-  /** Show this city (unpinned copies). */
-  select(city: string, cx: GpuiContext): void;
+export interface PanelActions extends HeaderActions, AgentsActions, DetailActions {
+  toggleDiagnostics(cx: GpuiContext): void;
 }
 
 /** What the panel shows. */
 export type PanelModel =
-  | { kind: "city"; theme: ThemeRead; header: HeaderModel; actions: PanelActions }
+  | { kind: "city"; theme: ThemeRead; view: CopyView; actions: PanelActions }
   | { kind: "copy-invalid"; theme: ThemeRead; error: string }
   | { kind: "host-incompatible"; missing: readonly string[] };
 
@@ -32,47 +33,18 @@ export function copyInvalidText(error: string): string {
   return `This copy of the Gas City mod was opened with props it cannot read: ${error}`;
 }
 
-function tinted(el: GpuiElement, color: GpuiColor | undefined, apply: (el: GpuiElement, color: GpuiColor) => GpuiElement): GpuiElement {
-  return color === undefined ? el : apply(el, color);
-}
-
-function muted(el: GpuiElement, theme: ThemeRead): GpuiElement {
-  return tinted(el, theme.colors.muted, (e, c) => e.text_color(c));
-}
-
-function themedRoot(theme: ThemeRead): GpuiElement {
-  const root = v_flex().id("gascity-root").size_full().p(12).gap(8);
-  const { colors } = theme;
-  return tinted(tinted(root, colors.background, (el, c) => el.bg(c)), colors.foreground, (el, c) => el.text_color(c));
-}
-
 function themeIssues(el: GpuiElement, theme: ThemeRead): GpuiElement {
-  return el.when(theme.issues.length > 0, (e) => e.child(div().id("gascity-host-decode").child(theme.issues.join("; "))));
+  return el.when(theme.issues.length > 0, (e) => e.child(label("gascity-host-decode", theme.issues.join("; "))));
 }
 
-function header(model: Extract<PanelModel, { kind: "city" }>): GpuiElement[] {
-  const { header: h, theme, actions } = model;
-  const out: GpuiElement[] = [];
-  const status = h_flex().id("gascity-status").gap(8).child(div().id("gascity-chip").child(h.chip.text));
-  out.push(h.canRetry ? status.child(div().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now")) : status);
-  if (h.endpoint !== null) out.push(muted(div().id("gascity-endpoint"), theme).child(h.endpoint));
-  if (h.city !== null) out.push(div().id("gascity-city").child(`City: ${h.city}`));
-  h.banners.forEach((text, i) => out.push(div().id(`gascity-banner-${i}`).child(text)));
-  if (h.others.length > 0) {
-    const others = h.others.map((o) => `${o.name} (${o.label})`).join(", ");
-    out.push(muted(div().id("gascity-others"), theme).child(`Other cities: ${others}`));
-  }
-  if (h.choices !== null && h.choices.length > 0) {
-    const heading = h.city === null ? "Choose a city:" : "Switch to:";
-    const list = v_flex().id("gascity-choices").gap(4).child(div().id("gascity-choices-heading").child(heading));
-    out.push(list.children(h.choices.map((c, i) =>
-      div().id(`gascity-choose-${i}`).on_click((_, cx) => actions.select(c.name, cx)).child(`${c.name} (${c.label})`))));
-  }
-  if (h.diagnostics.length > 0) {
-    const lines = h.diagnostics.map((line, i) => muted(div().id(`gascity-diagnostic-${i}`), theme).child(line));
-    out.push(v_flex().id("gascity-diagnostics").gap(2).child(div().id("gascity-diagnostics-heading").child("Discovery:")).children(lines));
-  }
-  return out;
+function diagnostics(model: Extract<PanelModel, { kind: "city" }>): GpuiElement | null {
+  const { view, theme, actions } = model;
+  if (view.diagnostics.length === 0) return null;
+  const toggle = div().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx))
+    .child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
+  if (!view.diagnosticsOpen) return toggle;
+  const lines = view.diagnostics.map((d, i) => muted(label(`gascity-diag-${i}`, `${d.at ?? ""} ${d.source}: ${d.text}`.trim()), theme));
+  return v_flex().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
 }
 
 /** The whole panel for one model. */
@@ -80,11 +52,18 @@ export function renderPanel(model: PanelModel): GpuiElement {
   const title = div().id("gascity-title").text_size(16).font_semibold().child(TITLE);
   if (model.kind === "host-incompatible") {
     const root = v_flex().id("gascity-root").size_full().p(12).gap(8);
-    return root.child(title).child(div().id("gascity-host-incompatible").child(hostIncompatibleText(model.missing)));
+    return root.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  const root = themedRoot(model.theme).child(title);
+  let root = themedRoot(model.theme, v_flex().id("gascity-root").size_full().p(12).gap(8)).child(title);
   if (model.kind === "copy-invalid") {
-    return themeIssues(root.child(div().id("gascity-copy-invalid").child(copyInvalidText(model.error))), model.theme);
+    return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
-  return themeIssues(root.children(header(model)), model.theme);
+  const { view, theme, actions } = model;
+  root = root.children(renderHeader(view.header, theme, actions));
+  if (view.agents !== null) root = root.child(renderAgents(view.agents, theme, actions));
+  const detail = renderDetail(view.detail, theme, actions);
+  if (detail !== null) root = root.child(detail);
+  const diag = diagnostics(model);
+  if (diag !== null) root = root.child(diag);
+  return themeIssues(root, theme);
 }

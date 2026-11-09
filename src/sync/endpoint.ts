@@ -5,7 +5,7 @@
 // then on exactly one read — the probe — may go out per retry time, from one
 // store. The first success clears both and asks every store to resync.
 
-import { createGcClient, type GcClient } from "../gc/client.ts";
+import { createGcClient, type GcClient, type GcClientOptions } from "../gc/client.ts";
 import type { GcError } from "../gc/errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { failBackoff, retryBackoffNow, type BackoffState } from "./backoff.ts";
@@ -62,9 +62,26 @@ export class Endpoint {
     return ok(new Endpoint(baseUrl, clients as Record<FetchPriority, GcClient>, budget, clock, random));
   }
 
-  /** The client whose requests queue at `priority`. */
-  client(priority: FetchPriority): GcClient {
-    return this.clients[priority];
+  /**
+   * The client whose requests queue at `priority`. With a `group` (a sync
+   * step), its queued requests can be dropped together (dropQueued).
+   */
+  client(priority: FetchPriority, group: object | null = null): GcClient {
+    if (group === null) return this.clients[priority];
+    const options: GcClientOptions = {
+      baseUrl: this.baseUrl,
+      fetch: (url, init) => this.budget.fetchFor(this.baseUrl, priority, group)(url, init),
+      now: () => this.clock.now(),
+    };
+    const made = createGcClient(options);
+    // baseUrl came out of createGcClient in create(), so this cannot fail; if
+    // it ever did, every call reports why instead of throwing.
+    return made.ok ? made.value : { baseUrl: this.baseUrl, call: () => Promise.resolve(made) };
+  }
+
+  /** Drops the group's queued requests (they reject as cancelled and are never sent). Starts nothing. */
+  dropQueued(group: object): void {
+    this.budget.dropQueued(group);
   }
 
   addListener(l: EndpointListener): void {
@@ -133,9 +150,9 @@ export class Endpoint {
     this.notify(false);
   }
 
-  /** Leaves degraded mode in the budget when the last store goes. */
+  /** Forgets the endpoint in the budget when the last user goes (from a copy's close: starts nothing). */
   dispose(): void {
-    this.budget.setDegraded(this.baseUrl, false);
+    this.budget.forgetEndpoint(this.baseUrl);
   }
 
   private notify(recovered: boolean): void {

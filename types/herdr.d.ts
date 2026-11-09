@@ -26,4 +26,23 @@ declare module "herdr" {
 
   /** Reads a value every mod can see (persisted). */
   export function shared(key: string): unknown;
+
+  /** The app's folder (`~/.config/herdr-app`, or `$HERDR_APP_HOME`). */
+  export function appHome(): string;
+
+  /** Writes UTF-8 text only if it still matches expected (null creates a new file).
+   * Rejects on a stale snapshot; existing files are replaced atomically. */
+  export function writeTextFile(path: string, text: string, expected: string | null): Promise<null>;
+
+  /** Every pane in every tab (herdr's PaneInfo; decoded by host.schemas.ts). Live. */
+  export function panes(): unknown[];
+
+  /** Actual terminal/pane focus: the window's current space and tab, or null. Live. */
+  export function focused(): unknown;
+
+  /** The shown layout (layouts/<name>.json). */
+  export function layout(): unknown;
+
+  /** Herdr's and herdr-core's versions and what's waiting. */
+  export function updates(): { app: { version: string } };
 }

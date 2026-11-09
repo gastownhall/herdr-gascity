@@ -151,16 +151,35 @@ export function evaluateModule(source: string, modules: HostModules, globals: Re
 /**
  * The context `init`, `close`, click handlers and tasks get (gpui-kit
  * `AsyncContext`): counts notifies, runs `spawn`ed tasks at once and keeps
- * their promises for `settle()`, and records `sleep`s, which never resolve
- * (no fake timer passes on its own).
+ * their promises for `settle()`, records `sleep`s, which never resolve (no
+ * fake timer passes on its own), and keeps `timer.every` handlers, which run
+ * only when the test calls `fireTimers()` (none after `cancelAll()`, as
+ * herdr cancels a closed copy's tasks).
  */
 export function asyncContext() {
   const tasks: Promise<unknown>[] = [];
+  let timers: { ms: number; handler: (cx: unknown) => void }[] = [];
   const cx = {
     kind: "async" as const,
     notifies: 0,
     sleeps: [] as number[],
+    timerPeriods: [] as number[],
     notify() { cx.notifies++; },
+    timer: {
+      every(ms: number, handler: (cx: unknown) => void) {
+        cx.timerPeriods.push(ms);
+        timers.push({ ms, handler });
+        return { cancel() {}, is_done: () => false };
+      },
+    },
+    /** Runs every periodic timer handler once, as one period passing. */
+    fireTimers() {
+      for (const t of [...timers]) t.handler(cx);
+    },
+    /** herdr closed the copy: its timers never fire again. */
+    cancelAll() {
+      timers = [];
+    },
     spawn(body: (cx: unknown) => unknown) {
       tasks.push(Promise.resolve().then(() => body(cx)));
       return { id: tasks.length };
@@ -226,6 +245,11 @@ export interface FakeHostOptions {
   /** readTextFile rejects with this message. */
   readTextFileRejects?: string;
   exec?: (command: string, args: string[], options: unknown) => Promise<FakeExecResult>;
+  /** panes() and focused(): by default one gascity pane in the focused tab (on screen). */
+  panes?: unknown[];
+  focus?: unknown;
+  /** Files writeTextFile writes (compare-and-swap against this map). */
+  written?: Map<string, string>;
 }
 
 /** By default gc runs and, like today's gc, reports no api_url. */
@@ -246,6 +270,17 @@ export function fakeHerdr(options: FakeHostOptions = {}) {
       return Promise.resolve(Object.hasOwn(files, path as string) ? files[path as string] : null);
     },
     exec: (command, args, opts) => (options.exec ?? DEFAULT_EXEC)(command as string, args as string[], opts),
+    panes: () => structuredClone(options.panes ?? [{ pane: "p1", tab: "t1", mod: "gascity", title: "gascity", focused: true }]),
+    focused: () => structuredClone(options.focus === undefined ? { space: "s1", tab: "t1", pane: "p1", terminal: null } : options.focus),
+    layout: () => ({ type: "column", children: [] }),
+    appHome: () => `${FAKE_HOME}/.config/herdr-app`,
+    writeTextFile: (path, text, expected) => {
+      const files = options.written ?? new Map<string, string>();
+      if ((files.get(path as string) ?? null) !== expected) return Promise.reject(new Error("stale snapshot"));
+      files.set(path as string, text as string);
+      return Promise.resolve(null);
+    },
+    updates: () => ({ app: { version: "0.1.14" } }),
   };
   const module: Record<string, unknown> = {};
   for (const [name, fn] of Object.entries(all)) {
@@ -264,25 +299,39 @@ export type FakeReply = { status: number; body: unknown } | { rejects: string } 
 export interface FakeGlobalsOptions {
   /** Reply for each exact URL; any other URL is refused, as by a closed port. */
   replies?: Record<string, FakeReply>;
+  /** Consulted when no exact URL matches. */
+  route?: (url: string) => FakeReply | undefined;
   storage?: Record<string, string>;
   /** localStorage.setItem throws this message. */
   storageThrows?: string;
   omitGlobals?: string[];
 }
 
-/** herdr's script globals the mod uses: a fetch that plays scripted replies, and a localStorage. */
+/** herdr's script globals the mod uses: a fetch that plays scripted replies, a localStorage, and a Date whose clock the test moves. */
 export function fakeGlobals(options: FakeGlobalsOptions = {}) {
+  const clock = { t: Date.UTC(2026, 10, 9, 12, 0, 0) };
+  const RealDate = Date;
+  class FakeDate extends RealDate {
+    constructor(...args: unknown[]) {
+      if (args.length === 0) super(clock.t);
+      else super(...(args as [number]));
+    }
+    static override now(): number {
+      return clock.t;
+    }
+  }
   const fetched: { url: string; init: unknown }[] = [];
   const storage = new Map(Object.entries(options.storage ?? {}));
   const all: Record<string, unknown> = {
     fetch: (url: string, init: unknown) => {
       fetched.push({ url, init });
-      const reply = options.replies?.[url] ?? { rejects: "error sending request: Connection refused (os error 111)" };
+      const reply = options.replies?.[url] ?? options.route?.(url) ?? { rejects: "error sending request: Connection refused (os error 111)" };
       if (reply === "hang") return new Promise(() => {});
       if ("rejects" in reply) return Promise.reject(new Error(reply.rejects));
       const body = typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body);
       return Promise.resolve({ status: reply.status, ok: reply.status >= 200 && reply.status < 300, url, text: () => Promise.resolve(body) });
     },
+    Date: FakeDate,
     localStorage: {
       getItem: (key: string) => storage.get(key) ?? null,
       setItem: (key: string, value: string) => {
@@ -294,7 +343,7 @@ export function fakeGlobals(options: FakeGlobalsOptions = {}) {
   };
   const globals: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(all)) globals[name] = options.omitGlobals?.includes(name) ? undefined : value;
-  return { globals, fetched, storage };
+  return { globals, fetched, storage, clock };
 }
 
 /**
@@ -307,24 +356,44 @@ export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { 
   const herdr = fakeHerdr(options);
   const host = fakeGlobals(options);
   const Mod = evaluateModule(source, { ...fakeGpui(), herdr: herdr.module }, host.globals);
-  const view = new Mod();
-  const cx = asyncContext();
-  const render = (): RecordedNode => nodeOf(view.render(renderContext()));
+  /** One copy of the mod: herdr shares module code by every copy; each has its own instance and tasks. */
+  const copy = () => {
+    const view = new Mod();
+    const cx = asyncContext();
+    const render = (): RecordedNode => nodeOf(view.render(renderContext()));
+    return {
+      view,
+      cx,
+      init: () => view.init?.(undefined, cx),
+      render,
+      /** Waits for every task the copy spawned. */
+      settle: () => cx.settle(),
+      /** One period of the copy's periodic timers (moving the clock by `ms`), then waits for its tasks and their fetches. */
+      tick: async (ms = 250) => {
+        host.clock.t += ms;
+        cx.fireTimers();
+        await cx.settle();
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+      },
+      /** herdr closes the copy: close(cx), then its tasks are cancelled. */
+      close: async () => {
+        await view.close?.(cx);
+        cx.cancelAll();
+      },
+      /** Clicks the element with this id in a fresh render, with the async context as the handler's cx. */
+      click: (id: string) => {
+        const node = findById(render(), id);
+        if (!node?.handlers.on_click) throw new Error(`harness: no clickable element "${id}"`);
+        node.handlers.on_click({}, cx);
+      },
+    };
+  };
   return {
-    view,
-    cx,
+    ...copy(),
+    /** Another copy sharing this module (and so its registry). */
+    copy,
     herdrCalls: herdr.calls,
     fetched: host.fetched,
     storage: host.storage,
-    init: () => view.init?.(undefined, cx),
-    render,
-    /** Waits for every task the copy spawned. */
-    settle: () => cx.settle(),
-    /** Clicks the element with this id in a fresh render, with the async context as the handler's cx. */
-    click: (id: string) => {
-      const node = findById(render(), id);
-      if (!node?.handlers.on_click) throw new Error(`harness: no clickable element "${id}"`);
-      node.handlers.on_click({}, cx);
-    },
   };
 }

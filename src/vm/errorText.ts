@@ -1,8 +1,11 @@
 // One line of text for every GcError, for chips, banners and diagnostics.
 // The switch is exhaustive: a new error kind does not compile until it has a text.
+// Errors carry text gc or a program supplied (problem details, stderr, city
+// names), so the line is cleaned of control characters and escapes.
 
 import { isUnrecognized } from "../gc/decode.ts";
 import type { GcError } from "../gc/errors.ts";
+import { cleanLine } from "./sanitize.ts";
 
 /** Why a non-loopback URL is refused. */
 export const LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
@@ -15,8 +18,12 @@ function drift(value: unknown): string {
   return isUnrecognized(value) ? value.raw : String(value);
 }
 
-/** The person-facing text of an error. */
+/** The person-facing text of an error, one clean line. */
 export function errorText(e: GcError): string {
+  return cleanLine(rawText(e));
+}
+
+function rawText(e: GcError): string {
   switch (e.kind) {
     case "unreachable":
       return `cannot reach ${e.url}: ${e.cause}`;
@@ -39,13 +46,16 @@ export function errorText(e: GcError): string {
     case "city-not-running":
       return `city "${e.city}" is not running`;
     case "api-missing":
-      return `gc too old (needs ${e.operationId})`;
+      return `gc too old (needs ${e.operationId})${e.raw === undefined ? "" : `: ${e.raw}`}`;
     case "decode":
       return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
     case "outcome-failed":
       return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
-    case "outcome-unknown":
-      return `outcome of ${e.operationId} unknown (${e.cause})`;
+    case "outcome-unknown": {
+      const why = e.requestId === null ? e.cause : `${e.cause}, request ${e.requestId}`;
+      const issues = e.issues && e.issues.length > 0 ? `: ${e.issues.join("; ")}` : "";
+      return `outcome of ${e.operationId} unknown (${why})${issues}`;
+    }
     case "exec":
       return e.code === null
         ? `${e.argv.join(" ")} did not run: ${e.stderr}`
@@ -62,5 +72,9 @@ export function errorText(e: GcError): string {
       return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
     case "not-loopback":
       return LOOPBACK_ONLY;
+    case "cancelled":
+      return e.reason === "copy-closed"
+        ? `request to ${e.url} was cancelled: the Gas City view that started it closed`
+        : `request to ${e.url} was dropped before it was sent: nothing waits for its answer any more`;
   }
 }

@@ -31,6 +31,19 @@
 //      per domain; a failing endpoint stops the step), then the beads named
 //      by bead.closed events (at most 10 per step) for the closed list.
 //
+// An open detail (watchPeek) also gets, on demand: the session's wake
+// reasons (gc probes the runtime for each session it lists with them, so they
+// are fetched when the detail opens and on refreshDetail only) and its pending
+// prompt (when the detail opens and whenever the city's pending list changes
+// for that session). Active beads that the board does not carry are fetched
+// by id, at most BEAD_FETCHES_PER_STEP per step, and again on an event about
+// them or at the sweep.
+//
+// A request the step was waiting for may be cancelled under it: dropped from
+// the fetch queue when the step is abandoned, or taken with the copy whose
+// turn started it. That is not gc failing: it neither backs off nor holds the
+// domain; the data is simply still due.
+//
 // Board changes refetch both bounded columns (Ready and In progress), so a
 // bead that moved, changed or left is current in the column it is shown in;
 // there are no per-bead overlays to fall out of step with their column.
@@ -150,6 +163,18 @@ export interface ErrorEntry {
   readonly error: SyncError;
 }
 
+/** What gc says woke (or keeps awake) a session; `listed` is false when gc's list for its template did not include it. */
+export interface WakeReasons {
+  readonly listed: boolean;
+  readonly reasons: readonly string[];
+}
+
+/** The on-demand parts of an open detail (the output is in `peeks`). */
+export interface DetailState {
+  readonly wakeReasons: Slot<WakeReasons>;
+  readonly pending: Slot<T.SessionPendingResponse>;
+}
+
 /** Everything a copy renders from, immutable; a new object (and rev) per change. */
 export interface CitySnapshot {
   readonly rev: number;
@@ -166,6 +191,10 @@ export interface CitySnapshot {
   readonly closed: ClosedState;
   /** Watched sessions with their output (`last_output`). */
   readonly peeks: ReadonlyMap<string, Slot<T.SessionResponse>>;
+  /** Watched sessions' wake reasons and pending prompt. */
+  readonly details: ReadonlyMap<string, DetailState>;
+  /** Active beads that are not on the board, fetched by id. */
+  readonly beads: ReadonlyMap<string, Slot<T.Bead>>;
   /** The last ERROR_RING failures, oldest first. */
   readonly errors: readonly ErrorEntry[];
 }
@@ -220,6 +249,30 @@ function freshSlot<T>(): MutableSlot<T> {
   return { value: null, fetchedAt: null, error: null, held: false };
 }
 
+/** A request the mod gave up on (not gc failing): no backoff, no hold, still due. */
+function isCancelled(error: GcError): boolean {
+  return error.kind === "cancelled";
+}
+
+/** A read error that holds its data until the next sweep or "retry now": neither backoff nor a cancellation. */
+function holds(error: GcError): boolean {
+  return !backsOff(error) && !isCancelled(error);
+}
+
+type OnDemand<V> = MutableSlot<V> & { due: boolean };
+
+function onDemand<V>(): OnDemand<V> {
+  return { ...freshSlot<V>(), due: true };
+}
+
+interface Watch extends MutableSlot<T.SessionResponse> {
+  refs: number;
+  due: boolean;
+  wake: OnDemand<WakeReasons>;
+  /** `key` is the request id the city's pending list showed for the session when it was last fetched. */
+  pending: OnDemand<T.SessionPendingResponse> & { key: string | null };
+}
+
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -249,7 +302,8 @@ export class CityStore implements EndpointListener {
   };
   private readonly due = new Map<Domain, Due>();
   private closedQueue: ClosedRef[] = [];
-  private readonly peeks = new Map<string, MutableSlot<T.SessionResponse> & { refs: number; due: boolean }>();
+  private readonly peeks = new Map<string, Watch>();
+  private readonly lookups = new Map<string, OnDemand<T.Bead>>();
   private seed: MutableSlot<WorkList> & { due: boolean } = { ...freshSlot<WorkList>(), due: true };
   private recent: ClosedBead[] = [];
   private incomplete = false;
@@ -331,11 +385,16 @@ export class CityStore implements EndpointListener {
     this.commit();
   }
 
-  /** Starts (or joins) watching a session's output; returns the release. */
+  /** Starts (or joins) watching a session's detail: output, wake reasons, pending prompt; returns the release. */
   watchPeek(sessionId: string): () => void {
     const p = this.peeks.get(sessionId);
     if (p) p.refs++;
-    else this.peeks.set(sessionId, { ...freshSlot<T.SessionResponse>(), refs: 1, due: true });
+    else {
+      this.peeks.set(sessionId, {
+        ...freshSlot<T.SessionResponse>(), refs: 1, due: true, wake: onDemand(), pending: { ...onDemand(), key: this.pendingKey(sessionId) },
+      });
+      this.commit();
+    }
     let released = false;
     return () => {
       if (released) return;
@@ -348,6 +407,17 @@ export class CityStore implements EndpointListener {
         this.commit();
       }
     };
+  }
+
+  /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
+  refreshDetail(sessionId: string): void {
+    const w = this.peeks.get(sessionId);
+    if (!w) return;
+    for (const part of [w, w.wake, w.pending]) {
+      part.held = false;
+      part.due = true;
+    }
+    this.commit();
   }
 
   /** Ends the store: a running step's late results are dropped. */
@@ -380,6 +450,7 @@ export class CityStore implements EndpointListener {
     this.step = null;
     this.generation++;
     if (step.probe !== null) this.deps.endpoint.endProbe(step.probe);
+    this.deps.endpoint.dropQueued(step);
   }
 
   private endStep(step: Step): void {
@@ -410,6 +481,10 @@ export class CityStore implements EndpointListener {
     for (const d of this.due.values()) if (d.at <= now) return true;
     if (this.closedQueue.length > 0) return true;
     if (this.seed.due && !this.seed.held) return true;
+    if ([...this.lookups.values()].some((b) => b.due && !b.held)) return true;
+    for (const [id, w] of this.peeks) {
+      if ((w.wake.due && !w.wake.held && this.templateOf(id) !== undefined) || (w.pending.due && !w.pending.held)) return true;
+    }
     return this.onScreen && [...this.peeks.values()].some((q) => q.due && !q.held);
   }
 
@@ -447,6 +522,7 @@ export class CityStore implements EndpointListener {
         this.last.sweep = now;
         this.rearmHeld(now, "sweep");
         for (const d of ALL_DOMAINS) this.mark(d, now, "sweep");
+        for (const b of this.lookups.values()) b.due = true;
       } else {
         this.last.peek = now;
         for (const q of this.peeks.values()) q.due = true;
@@ -472,6 +548,17 @@ export class CityStore implements EndpointListener {
       await this.fetchSeed(step);
     }
     await this.fetchClosed(step);
+    await this.fetchLookups(step);
+    for (const [id, w] of [...this.peeks]) {
+      if (w.wake.due && !w.wake.held && this.templateOf(id) !== undefined) {
+        if (!this.gateOpen(step)) return;
+        await this.fetchWake(step, id);
+      }
+      if (w.pending.due && !w.pending.held) {
+        if (!this.gateOpen(step)) return;
+        await this.fetchSessionPending(step, id);
+      }
+    }
     if (this.onScreen) {
       for (const [id, q] of [...this.peeks]) {
         if (!q.due || q.held) continue;
@@ -512,15 +599,33 @@ export class CityStore implements EndpointListener {
     }
     if (this.seed.value === null) this.seed.due = true;
     this.seed.held = false;
+    for (const b of this.lookups.values()) {
+      if (b.held) {
+        b.held = false;
+        b.due = true;
+      }
+    }
+    for (const w of this.peeks.values()) {
+      for (const part of [w.wake, w.pending]) {
+        if (part.held) {
+          part.held = false;
+          part.due = true;
+        }
+      }
+    }
   }
 
-  /** Reports a read's outcome to the endpoint; returns true if it succeeded. */
+  /**
+   * Reports a read's outcome to the endpoint; returns true if it succeeded. A
+   * cancelled request says nothing about gc: it is recorded, nothing more.
+   */
   private settle<V>(r: Result<V, GcError>, source: string): boolean {
     if (r.ok) {
       this.deps.endpoint.succeeded();
       return true;
     }
     this.record(source, r.error);
+    if (isCancelled(r.error)) return false;
     if (backsOff(r.error)) this.deps.endpoint.failed(r.error);
     else this.deps.endpoint.succeeded();
     return false;
@@ -540,14 +645,14 @@ export class CityStore implements EndpointListener {
   // ---- reads --------------------------------------------------------------------
 
   private async pollEvents(step: Step, limit: number): Promise<boolean> {
-    const r = await ops.pollEvents(this.deps.endpoint.client("events"), this.key.city, { limit });
+    const r = await ops.pollEvents(this.deps.endpoint.client("events", step), this.key.city, { limit });
     if (!this.current(step)) return false;
     this.progress(step);
     const now = this.deps.clock.now();
     if (!this.settle(r, "events")) {
-      if (!r.ok) {
+      if (!r.ok && !isCancelled(r.error)) {
         this.events.error = r.error;
-        if (!backsOff(r.error)) this.events.held = true;
+        if (holds(r.error)) this.events.held = true;
       }
       this.commit();
       return false;
@@ -572,6 +677,11 @@ export class CityStore implements EndpointListener {
     }
     const inv = invalidationFor(reading.newer, this.known());
     for (const d of inv.domains) this.mark(d, at, "events");
+    for (const e of reading.newer) {
+      const looked = e.type.startsWith("bead.") && e.subject !== undefined ? this.lookups.get(e.subject) : undefined;
+      if (looked) looked.due = true;
+    }
+    if (reading.resync) for (const b of this.lookups.values()) b.due = true;
     if (inv.closed.length > 0) this.closedQueue = [...this.closedQueue, ...inv.closed];
     if (reading.newer.length > 0 || reading.resync) {
       const batch: EventBatch = { key: this.key, events: reading.newer, resync: reading.resync, citiesChanged: inv.cities };
@@ -601,7 +711,7 @@ export class CityStore implements EndpointListener {
   }
 
   private async load<D extends Domain>(step: Step, d: D, priority: FetchPriority): Promise<Result<DomainValue[D], GcError>> {
-    const c = this.deps.endpoint.client(priority);
+    const c = this.deps.endpoint.client(priority, step);
     const city = this.key.city;
     switch (d) {
       case "rigs":
@@ -620,7 +730,7 @@ export class CityStore implements EndpointListener {
   }
 
   private async loadSessions(step: Step, priority: FetchPriority): Promise<Result<SessionList, GcError>> {
-    const c = this.deps.endpoint.client(priority);
+    const c = this.deps.endpoint.client(priority, step);
     const out: SessionList = { items: [], unreadable: [], total: 0, truncated: false, partial: false, partialErrors: [] };
     let cursor: string | undefined;
     for (;;) {
@@ -656,9 +766,11 @@ export class CityStore implements EndpointListener {
       slot.error = null;
       slot.held = false;
       this.due.delete(d);
-    } else if (!r.ok) {
+      if (d === "pending") this.pendingChanged();
+      this.syncLookups();
+    } else if (!r.ok && !isCancelled(r.error)) {
       slot.error = r.error;
-      if (!backsOff(r.error)) {
+      if (holds(r.error)) {
         slot.held = true;
         this.due.delete(d);
       }
@@ -667,14 +779,15 @@ export class CityStore implements EndpointListener {
   }
 
   private async fetchSeed(step: Step): Promise<void> {
-    const r = await ops.listWork(this.deps.endpoint.client("snapshot"), this.key.city, this.workQuery({ limit: MAX_CLOSED_RECENT, status: "closed", sort: "newest" }));
+    const r = await ops.listWork(this.deps.endpoint.client("snapshot", step), this.key.city, this.workQuery({ limit: MAX_CLOSED_RECENT, status: "closed", sort: "newest" }));
     if (!this.current(step)) return;
     this.progress(step);
     if (this.settle(r, "closed-seed") && r.ok) {
       this.seed = { value: r.value, fetchedAt: this.deps.clock.now(), error: null, held: false, due: false };
-    } else if (!r.ok) {
+      this.syncLookups();
+    } else if (!r.ok && !isCancelled(r.error)) {
       this.seed.error = r.error;
-      if (!backsOff(r.error)) {
+      if (holds(r.error)) {
         this.seed.held = true;
         this.seed.due = false;
       }
@@ -691,14 +804,20 @@ export class CityStore implements EndpointListener {
     }
     for (const ref of newestFirst.slice(0, BEAD_FETCHES_PER_STEP)) {
       if (!this.gateOpen(step)) return;
-      const r = await ops.getBead(this.deps.endpoint.client("snapshot"), this.key.city, ref.id);
+      const r = await ops.getBead(this.deps.endpoint.client("snapshot", step), this.key.city, ref.id);
       if (!this.current(step)) return;
       this.progress(step);
+      if (!r.ok && isCancelled(r.error)) {
+        this.record(`closed:${ref.id}`, r.error);
+        this.commit();
+        return;
+      }
       this.closedQueue = this.closedQueue.filter((c) => c !== ref);
       if (this.settle(r, `closed:${ref.id}`) && r.ok) {
         const kept = this.recent.filter((c) => c.bead.id !== ref.id || c.seq > ref.seq);
         if (!kept.some((c) => c.bead.id === ref.id)) kept.push({ seq: ref.seq, bead: r.value });
         this.recent = kept.sort((a, b) => b.seq - a.seq).slice(0, MAX_CLOSED_RECENT);
+        this.syncLookups();
       } else {
         this.incomplete = true;
       }
@@ -707,7 +826,7 @@ export class CityStore implements EndpointListener {
   }
 
   private async fetchPeek(step: Step, id: string): Promise<void> {
-    const r = await ops.getSession(this.deps.endpoint.client("peek"), this.key.city, id, { peek: true, peek_lines: PEEK_LINES });
+    const r = await ops.getSession(this.deps.endpoint.client("peek", step), this.key.city, id, { peek: true, peek_lines: PEEK_LINES });
     if (!this.current(step)) return;
     this.progress(step);
     const ok = this.settle(r, `peek:${id}`);
@@ -719,11 +838,120 @@ export class CityStore implements EndpointListener {
       q.fetchedAt = this.deps.clock.now();
       q.error = null;
     } else if (!r.ok) {
-      q.error = r.error;
-      if (backsOff(r.error)) q.due = true;
-      else q.held = true;
+      this.failOnDemand(q, r.error);
     }
     this.commit();
+  }
+
+  /** A failed on-demand read: kept due on backoff or cancellation, held (until sweep / retry) otherwise. */
+  private failOnDemand(part: MutableSlot<unknown> & { due: boolean }, error: GcError): void {
+    if (isCancelled(error)) {
+      part.due = true;
+      return;
+    }
+    part.error = error;
+    if (backsOff(error)) part.due = true;
+    else {
+      part.due = false;
+      part.held = true;
+    }
+  }
+
+  /** A session's template from the session list: wake reasons are asked per template, so until it is known there is nothing to ask. */
+  private templateOf(id: string): string | undefined {
+    return this.slots.sessions.value?.items.find((x) => x.id === id)?.template;
+  }
+
+  private async fetchWake(step: Step, id: string): Promise<void> {
+    const template = this.templateOf(id);
+    if (template === undefined) return;
+    const r = await ops.listSessions(this.deps.endpoint.client("peek", step), this.key.city, { limit: SESSION_PAGE, template, wake_reasons: true });
+    if (!this.current(step)) return;
+    this.progress(step);
+    const ok = this.settle(r, `wake-reasons:${id}`);
+    const w = this.peeks.get(id);
+    if (!w) return;
+    w.wake.due = false;
+    if (ok && r.ok) {
+      const listed = r.value.items.find((x) => x.id === id);
+      w.wake.value = { listed: listed !== undefined, reasons: listed?.wake_reasons ?? [] };
+      w.wake.fetchedAt = this.deps.clock.now();
+      w.wake.error = null;
+    } else if (!r.ok) {
+      this.failOnDemand(w.wake, r.error);
+    }
+    this.commit();
+  }
+
+  private async fetchSessionPending(step: Step, id: string): Promise<void> {
+    const r = await ops.getSessionPending(this.deps.endpoint.client("peek", step), this.key.city, id);
+    if (!this.current(step)) return;
+    this.progress(step);
+    const ok = this.settle(r, `pending:${id}`);
+    const w = this.peeks.get(id);
+    if (!w) return;
+    w.pending.due = false;
+    if (ok && r.ok) {
+      w.pending.value = r.value;
+      w.pending.fetchedAt = this.deps.clock.now();
+      w.pending.error = null;
+    } else if (!r.ok) {
+      this.failOnDemand(w.pending, r.error);
+    }
+    this.commit();
+  }
+
+  private async fetchLookups(step: Step): Promise<void> {
+    const due = [...this.lookups].filter(([, b]) => b.due && !b.held).slice(0, BEAD_FETCHES_PER_STEP);
+    for (const [id] of due) {
+      if (!this.gateOpen(step)) return;
+      const r = await ops.getBead(this.deps.endpoint.client("snapshot", step), this.key.city, id);
+      if (!this.current(step)) return;
+      this.progress(step);
+      const ok = this.settle(r, `bead:${id}`);
+      const b = this.lookups.get(id);
+      if (!b) continue; // no session works on it any more
+      b.due = false;
+      if (ok && r.ok) {
+        b.value = r.value;
+        b.fetchedAt = this.deps.clock.now();
+        b.error = null;
+      } else if (!r.ok) {
+        this.failOnDemand(b, r.error);
+      }
+      this.commit();
+    }
+  }
+
+  /** The request id the city's pending list shows for a session, or null. */
+  private pendingKey(sessionId: string): string | null {
+    return this.slots.pending.value?.items.find((p) => p.session_id === sessionId)?.request_id ?? null;
+  }
+
+  /** The city's pending list changed: refetch the prompt of each watched session whose entry changed. */
+  private pendingChanged(): void {
+    for (const [id, w] of this.peeks) {
+      const key = this.pendingKey(id);
+      if (key === w.pending.key) continue;
+      w.pending.key = key;
+      w.pending.due = true;
+      w.pending.held = false;
+    }
+  }
+
+  /** Keeps a lookup for every active bead of a session or agent that the board does not carry, and only those. */
+  private syncLookups(): void {
+    const onBoard = new Set<string>();
+    for (const list of [this.slots.ready.value, this.slots.inProgress.value, this.seed.value]) {
+      for (const b of list?.items ?? []) onBoard.add(b.id);
+    }
+    for (const c of this.recent) onBoard.add(c.bead.id);
+    const wanted = new Set<string>();
+    for (const x of [...(this.slots.sessions.value?.items ?? []), ...(this.slots.agents.value?.items ?? [])]) {
+      if (x.active_bead !== undefined && x.active_bead !== "" && !onBoard.has(x.active_bead)) wanted.add(x.active_bead);
+    }
+    for (const id of [...this.lookups.keys()]) if (!wanted.has(id)) this.lookups.delete(id);
+    for (const id of wanted) if (!this.lookups.has(id)) this.lookups.set(id, onDemand());
   }
 
   // ---- snapshot -----------------------------------------------------------------
@@ -749,6 +977,8 @@ export class CityStore implements EndpointListener {
       inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
       closed: { seed: this.slotOf(this.seed, this.seed.due), recent: this.recent, incomplete: this.incomplete },
       peeks: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
+      details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
+      beads: new Map([...this.lookups].map(([id, b]) => [id, this.slotOf(b, b.due)])),
       errors: this.errors,
     };
   }

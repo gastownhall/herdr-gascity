@@ -11,16 +11,15 @@
 // subscribed copy drives its store by calling `tick()` from a periodic timer
 // it creates in its own init, and a step starts only inside such a tick.
 //
-// How a copy uses it (main.ts, in a later change):
+// How a copy uses it (src/copy.ts):
 //
-//   init(props, cx):
-//     this.sub = registry.subscribe({ apiUrl, city });   // a Result
-//     this.rev = this.sub.tick();                        // first step, in this copy's turn
-//     a periodic timer of this copy (herdr's cx.timer.every, TICK_MS, with a
-//     handler):  const rev = this.sub.tick(); if (rev !== this.rev) { this.rev = rev; cx.notify(); }
-//   render: reads this.sub.snapshot() only, and may call
-//     registry.setOnScreen(mayBeOnScreen(…));
-//   close: this.sub.unsubscribe() — it starts nothing.
+//   init(props, cx): a periodic timer of this copy (herdr's cx.timer.every,
+//     TICK_MS); discovery's fetches go through `probeFetch()`;
+//   each tick, in the copy's own turn: subscribeCities(apiUrl) once the API
+//     is known and tick it; subscribe({ apiUrl, city }) once a running city is
+//     chosen and tick it; setOnScreen(mayBeOnScreen(…)); notify on a new rev;
+//   render: reads the snapshots only;
+//   close: unsubscribe() both — it starts nothing.
 //
 // App-wide side effects (toasts) register once with `onEvents`, not per copy.
 // The visibility rule (visibility.ts) is per app: `setOnScreen` applies to
@@ -31,8 +30,9 @@ import type { GcError } from "../gc/errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { FetchBudget, type BudgetStats } from "./budget.ts";
 import { systemClock, type Clock } from "./clock.ts";
-import { Endpoint } from "./endpoint.ts";
+import { Endpoint, type EndpointListener } from "./endpoint.ts";
 import type { Domain } from "./invalidate.ts";
+import { CitiesPoller, type CitiesSnapshot } from "./cities.ts";
 import { CityStore, type CityKey, type CitySnapshot, type ErrorEntry, type EventBatch } from "./store.ts";
 
 /** How often each copy should call `tick()`: the granularity of the 300 ms debounce and of "retry now". */
@@ -60,8 +60,10 @@ export interface Subscription {
    * rev, so the copy can notify when it changed.
    */
   tick(): number;
-  /** Watches a session's output (an open detail pane); returns the release. Released on unsubscribe too. */
+  /** Watches a session's detail (output, wake reasons, pending prompt); returns the release. Released on unsubscribe too. */
   watchPeek(sessionId: string): () => void;
+  /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
+  refreshDetail(sessionId: string): void;
   /** "Retry now": re-arms held domains and makes a backing-off endpoint's probe due. */
   retryNow(): void;
   /** Refetches these domains at the next tick (e.g. after a mutation whose outcome is unknown). */
@@ -75,6 +77,30 @@ export interface Subscription {
   unsubscribe(): void;
 }
 
+/** One copy's subscription to an API's shared city list. */
+export interface CitiesSubscription {
+  readonly apiUrl: string;
+  snapshot(): CitiesSnapshot;
+  /** Call from this copy's own periodic timer; `fast` while this copy shows no running city. Returns the snapshot's rev. */
+  tick(fast: boolean): number;
+  /** Polls at the next tick. */
+  refresh(): void;
+  /** Ends the subscription (the copy's close). Starts no work. Idempotent. */
+  unsubscribe(): void;
+}
+
+/** A fetch through the app-wide budget whose queued requests can be dropped together (a discovery probe that lost its race). */
+export interface ProbeFetch {
+  fetch: HostFetch;
+  /** Drops this fetch's queued requests; one already sent stays in flight until herdr settles it. */
+  drop(): void;
+}
+
+/** "scheme://host[:port]" of a URL: the budget's endpoint key. */
+function originOf(url: string): string {
+  return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i.exec(url)?.[0] ?? url;
+}
+
 function storeId(apiUrl: string, city: string): string {
   return `${apiUrl}\u0000${city}`;
 }
@@ -86,6 +112,7 @@ export class SyncRegistry {
   private readonly random: () => number;
   private readonly endpoints = new Map<string, Endpoint>();
   private readonly stores = new Map<string, { store: CityStore; subs: number }>();
+  private readonly pollers = new Map<string, { poller: CitiesPoller; subs: number }>();
   private readonly listeners = new Set<(batch: EventBatch) => void>();
   private onScreen = false;
 
@@ -107,6 +134,7 @@ export class SyncRegistry {
         clock: this.clock,
         onScreen: this.onScreen,
         emit: (batch) => {
+          if (batch.citiesChanged) this.pollers.get(endpoint.value.baseUrl)?.poller.refresh();
           for (const l of [...this.listeners]) l(batch);
         },
         onError: (k, e) => this.deps.onError?.(k, e),
@@ -116,6 +144,62 @@ export class SyncRegistry {
     }
     entry.subs++;
     return ok(this.subscription(id, entry.store, endpoint.value));
+  }
+
+  /** Subscribes a copy to a loopback gc API's shared city list; `not-loopback` otherwise. */
+  subscribeCities(apiUrl: string): Result<CitiesSubscription, GcError> {
+    const endpoint = this.endpointFor(apiUrl);
+    if (!endpoint.ok) return endpoint;
+    const ep = endpoint.value;
+    let entry = this.pollers.get(ep.baseUrl);
+    if (!entry) {
+      entry = { poller: new CitiesPoller(ep, this.clock), subs: 0 };
+      this.pollers.set(ep.baseUrl, entry);
+    }
+    entry.subs++;
+    const { poller } = entry;
+    const owner = {};
+    let active = true;
+    return ok({
+      apiUrl: ep.baseUrl,
+      snapshot: () => poller.snapshot(),
+      tick: (fast) => {
+        if (active) {
+          this.budget.reclaim();
+          poller.tick(owner, fast);
+        }
+        return poller.snapshot().rev;
+      },
+      refresh: () => {
+        if (active) poller.refresh();
+      },
+      unsubscribe: () => {
+        if (!active) return;
+        active = false;
+        poller.abandonStartedBy(owner);
+        const e = this.pollers.get(ep.baseUrl);
+        if (e && --e.subs <= 0) {
+          this.pollers.delete(ep.baseUrl);
+          poller.dispose();
+          this.releaseEndpoint(ep, poller);
+        }
+      },
+    });
+  }
+
+  /**
+   * A fetch for discovery's probes (/health, /v0/cities) through the app-wide
+   * budget, at snapshot priority, so discovery never adds a third request in
+   * flight. A probe that lost its race stays counted until herdr settles it.
+   */
+  probeFetch(): ProbeFetch {
+    const group = {};
+    return {
+      fetch: (url, init) => this.budget.fetchFor(originOf(url), "snapshot", group)(url, init),
+      drop: () => {
+        this.budget.dropQueued(group);
+      },
+    };
   }
 
   /** Sets the app-wide "a gascity view may be on screen" (visibility.ts) for every store. */
@@ -149,6 +233,13 @@ export class SyncRegistry {
     return made;
   }
 
+  /** Drops an endpoint once its last store or poller has gone (from a close: starts nothing). */
+  private releaseEndpoint(endpoint: Endpoint, user: EndpointListener): void {
+    if (endpoint.removeListener(user) > 0) return;
+    endpoint.dispose();
+    this.endpoints.delete(endpoint.baseUrl);
+  }
+
   private subscription(id: string, store: CityStore, endpoint: Endpoint): Subscription {
     const owner = {};
     const peeks = new Set<() => void>();
@@ -163,10 +254,7 @@ export class SyncRegistry {
       if (entry && --entry.subs <= 0) {
         this.stores.delete(id);
         store.dispose();
-        if (endpoint.removeListener(store) === 0) {
-          endpoint.dispose();
-          this.endpoints.delete(endpoint.baseUrl);
-        }
+        this.releaseEndpoint(endpoint, store);
       }
     };
     return {
@@ -188,6 +276,9 @@ export class SyncRegistry {
         };
         peeks.add(once);
         return once;
+      },
+      refreshDetail: (sessionId) => {
+        if (active) store.refreshDetail(sessionId);
       },
       retryNow: () => {
         if (active) store.retryNow();

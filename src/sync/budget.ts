@@ -10,15 +10,23 @@
 //
 // herdr owns each fetch by the copy whose code was running when it started,
 // and when that copy closes the fetch is cancelled: its promise never
-// settles. herdr's own 30 s timeout has freed the pool thread by then, so a
-// slot older than RECLAIM_AFTER_MS is reclaimed (on every fetchFor, pump and
-// reclaim call) and its caller gets a timeout rejection: a read backs off, a
-// mutation becomes outcome-unknown. Nothing here retries.
+// settles. A live copy's fetch always settles within herdr's own 30 s
+// timeout, so a slot older than RECLAIM_AFTER_MS belongs to a closed copy: it
+// is reclaimed (on every fetchFor and reclaim call) and its caller gets a
+// cancellation, not a gc timeout: nothing backs off for it, and a mutation
+// becomes outcome-unknown. Nothing here retries.
+//
+// A caller may tag its requests with a group (a sync step) and drop the
+// group's queued requests when nothing waits for them any more, so they are
+// never sent. Dropping and forgetting an endpoint never start a request: they
+// run from a copy's close, where a new fetch would belong to a closing copy.
 //
 // Every rejection the caller sees carries `hostElapsedMs`, the host fetch's
-// own duration, so time spent queued here never looks like a timeout.
+// own duration, so time spent queued here never looks like a timeout, and a
+// cancellation carries `cancelled` (CancelReason).
 
 import { HERDR_FETCH_TIMEOUT_MS, type HostFetch, type HostRequest, type HostResponse } from "../gc/client.ts";
+import type { CancelReason } from "../gc/errors.ts";
 import type { Clock } from "./clock.ts";
 
 /** Request priorities, most urgent first. */
@@ -36,14 +44,16 @@ interface Queued {
   endpoint: string;
   rank: number;
   seq: number;
+  group: object | null;
   start: () => void;
+  drop: () => void;
 }
 
 interface Running {
   endpoint: string;
   startedAt: number;
   /** Ends the slot and settles the caller; false if it had already ended. */
-  end: (outcome: { response: HostResponse } | { error: unknown }) => boolean;
+  end: (outcome: { response: HostResponse } | { error: unknown; cancelled?: CancelReason }) => boolean;
 }
 
 /** Budget counters for diagnostics and the probe. */
@@ -60,10 +70,14 @@ function messageOf(cause: unknown): string {
   return String(cause);
 }
 
-/** A rejection for the caller: herdr's message, plus how long the host fetch itself ran. */
-function timedRejection(cause: unknown, hostElapsedMs: number): Error & { hostElapsedMs: number } {
-  const e = new Error(messageOf(cause)) as Error & { hostElapsedMs: number };
+/** A rejection the budget hands its callers. */
+export type BudgetRejection = Error & { hostElapsedMs: number; cancelled?: CancelReason };
+
+/** A rejection for the caller: herdr's message, how long the host fetch itself ran, and whether the budget cancelled it. */
+function timedRejection(cause: unknown, hostElapsedMs: number, cancelled?: CancelReason): BudgetRejection {
+  const e = new Error(messageOf(cause)) as BudgetRejection;
   e.hostElapsedMs = hostElapsedMs;
+  if (cancelled !== undefined) e.cancelled = cancelled;
   return e;
 }
 
@@ -77,8 +91,11 @@ export class FetchBudget {
 
   constructor(private readonly hostFetch: HostFetch, private readonly clock: Clock) {}
 
-  /** A fetch for `endpoint` (an API base URL) at `priority`, for a GcClient. */
-  fetchFor(endpoint: string, priority: FetchPriority): HostFetch {
+  /**
+   * A fetch for `endpoint` (an API base URL) at `priority`, for a GcClient.
+   * Requests made with a `group` can be dropped together while still queued.
+   */
+  fetchFor(endpoint: string, priority: FetchPriority, group: object | null = null): HostFetch {
     const rank = PRIORITIES.indexOf(priority);
     return (url: string, init: HostRequest) =>
       new Promise<HostResponse>((resolve, reject) => {
@@ -86,25 +103,54 @@ export class FetchBudget {
           endpoint,
           rank,
           seq: this.seq++,
+          group,
           start: () => this.start(endpoint, url, init, resolve, reject),
+          drop: () => reject(timedRejection(`gascity: request to ${url} dropped before it was sent`, 0, "abandoned")),
         });
         this.reclaim();
       });
   }
 
-  /** Enters or leaves degraded mode for an endpoint. */
+  /** Enters or leaves degraded mode for an endpoint; leaving it starts what now fits. */
   setDegraded(endpoint: string, degraded: boolean): void {
-    if (degraded) this.degraded.add(endpoint);
-    else this.degraded.delete(endpoint);
+    if (degraded) {
+      this.degraded.add(endpoint);
+      return;
+    }
+    this.degraded.delete(endpoint);
     this.pump();
   }
 
-  /** Frees every slot older than RECLAIM_AFTER_MS, then starts what fits. */
+  /**
+   * Forgets an endpoint nobody uses any more (the last store on it went, from
+   * a copy's close): leaves degraded mode without starting anything. Whatever
+   * that frees starts at the next reclaim or settled request.
+   */
+  forgetEndpoint(endpoint: string): void {
+    this.degraded.delete(endpoint);
+  }
+
+  /**
+   * Drops the group's queued requests: each rejects as cancelled
+   * ("abandoned") and is never sent. In-flight requests are untouched (their
+   * slots stay taken until herdr settles them). Starts nothing. Returns how
+   * many were dropped.
+   */
+  dropQueued(group: object): number {
+    const dropped = this.queue.filter((q) => q.group === group);
+    if (dropped.length === 0) return 0;
+    for (let i = this.queue.length - 1; i >= 0; i--) if (this.queue[i]!.group === group) this.queue.splice(i, 1);
+    for (const q of dropped) q.drop();
+    return dropped.length;
+  }
+
+  /** Frees every slot older than RECLAIM_AFTER_MS (its copy closed), then starts what fits. */
   reclaim(): void {
     const now = this.clock.now();
     for (const r of [...this.running]) {
       if (now - r.startedAt >= RECLAIM_AFTER_MS) {
-        r.end({ error: `gascity: request timed out: no answer after ${now - r.startedAt} ms (herdr cancelled it with its copy)` });
+        const error = `gascity: request cancelled: no answer after ${now - r.startedAt} ms, so herdr cancelled it with the copy that started it`;
+        r.end({ error, cancelled: "copy-closed" });
       }
     }
     this.pump();
@@ -132,7 +178,7 @@ export class FetchBudget {
         ended = true;
         this.running.delete(slot);
         if ("response" in outcome) resolve(outcome.response);
-        else reject(timedRejection(outcome.error, this.clock.now() - startedAt));
+        else reject(timedRejection(outcome.error, this.clock.now() - startedAt, outcome.cancelled));
         this.pump();
         return true;
       },
