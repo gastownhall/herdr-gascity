@@ -50,6 +50,18 @@ async function loadFixtures(): Promise<ProbeFixture[]> {
   return out;
 }
 
+/** The sync scenario's report (test/engine/entry.ts syncScenario). */
+interface SyncSummary {
+  cursor: number;
+  closed: [number, string][];
+  batches: { seqs: number[]; resync: string | null }[];
+  outage: { kind: string };
+  connection: { kind: string };
+  errors: number;
+  budget: { maxInFlight: number };
+  stores: number;
+}
+
 const probe = await bundleProbe();
 const fixtures = JSON.stringify(await loadFixtures());
 
@@ -133,7 +145,7 @@ async function runInBun(): Promise<string> {
   return g.__gcEngineProbe.run(fixtures);
 }
 
-describe("the bundled gc client with zod", () => {
+describe("the bundled gc client with zod, and the sync engine", () => {
   test("passes the authority lint with no allowlist: tree-shaken zod/mini keeps no Function site", () => {
     // No allowlist entry may cover a code-compiling site; the probe is linted with none at all.
     expect(ALLOWLIST.filter((e) => e.rule === "function-constructor" || e.rule === "eval")).toEqual([]);
@@ -148,6 +160,15 @@ describe("the bundled gc client with zod", () => {
     expect(parsed.jitless).toBe(true);
     expect(parsed.results.length).toBeGreaterThan(40);
     expect(parsed.results.find((r) => r.fixture === "get-health/malformed")?.ok).toBe(false);
+    const sync = (JSON.parse(quick.output) as { sync: SyncSummary }).sync;
+    expect(sync.cursor).toBe(4);
+    expect(sync.closed).toEqual([[2, "sc-74"]]);
+    expect(sync.batches).toEqual([{ seqs: [2, 3], resync: null }, { seqs: [4], resync: null }]);
+    expect(sync.outage.kind).toBe("backing-off");
+    expect(sync.connection).toEqual({ kind: "connected" });
+    expect(sync.errors).toBeGreaterThan(0);
+    expect(sync.budget.maxInFlight).toBeLessThanOrEqual(2);
+    expect(sync.stores).toBe(0);
     expect(quick.output).toBe(await runInBun());
   }, 60_000);
 

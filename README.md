@@ -2,9 +2,10 @@
 
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
-**Status: scaffold, gc client, discovery.** The mod finds the gc API, lists
-the cities and shows the copy's city with its connection state in the header.
-Live data (the sync engine) and the agents and work panels come next.
+**Status: scaffold, gc client, discovery, sync engine.** The mod finds the gc
+API, lists the cities and shows the copy's city with its connection state in
+the header. The sync engine (`src/sync/`) is built and tested but not wired
+into the panel yet; the agents and work panels come next.
 
 ## Layout
 
@@ -14,6 +15,7 @@ Live data (the sync engine) and the agents and work panels come next.
 | `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
 | `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `errorText.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
+| `src/sync/` | The sync engine: one shared store per gc city per app, its poll loop, the event watcher, the fetch budget, backoff, visibility and staleness (see below). |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
 | `compat/host-aliases.ts` | Maps the global names in `types/` onto the declarations herdr-app generates, for the types-drift check. |
@@ -143,6 +145,81 @@ the job summary; they need no secrets and only read.
   modules or globals, list it in `HOST_SUBSETS` in `scripts/types-drift.ts`
   (a test refuses unclassified files) and map any global type it declares in
   `compat/host-aliases.ts`.
+
+## The sync engine
+
+herdr's `fetch` blocks a background-pool thread for the whole request, and
+herdr's own work runs on that pool. So the engine never long-polls, and
+copies share their gc traffic.
+
+herdr also gives every async host operation (`fetch`, `cx.sleep`, timers)
+to the copy whose code is running when it starts. Its completion runs in that
+copy's scope, and when that copy closes the operation is cancelled: its
+promise never settles. The engine is built around that rule:
+
+- **One store per city per app, driven by every copy's own timer.**
+  `src/sync/registry.ts` keeps one store per (gc API URL, city) in module
+  scope, which every copy of the mod shares. Extra copies of the same city
+  cause no extra requests. Each subscribed copy calls `tick()` every 250 ms
+  from a timer it creates in its own init. A tick starts the store's next
+  step only when one is due, so every step starts in a live copy's own turn.
+  The engine itself owns no timer and never sleeps.
+- **Closing a copy starts nothing.** `unsubscribe()` only abandons a step that
+  copy started. The old step's late answers are dropped, and the next tick of
+  any other copy starts a fresh step. A step that makes no progress for
+  140 s is abandoned the same way and recorded.
+- **Change signal = a short event poll.** `GET …/events?limit=50` without
+  `index` returns at once. herdr's fetch hides response headers, so the
+  cursor comes from the body: the newest `seq` the page shows. gc reads
+  `total` after the page, so `total` may name an event the next poll will
+  bring. A hole between the cursor and the oldest new event, or an
+  unreadable entry that may be new, is a gap; a `total` below the cursor
+  means gc's log was replaced. Both refetch every domain. If the first read
+  is refused (a city not running yet, a read grant), it is retried at the
+  60 s sweep, not in a loop.
+- **Invalidation map** (`invalidate.ts`). Each event type marks the domains
+  it can change: session events → sessions and agents; pending events →
+  pending; bead events that can move a bead on the board → both bounded
+  board columns, plus a fetch of each closed bead (at most 10 per step) for
+  the closed list; city events → rigs and agents. Refetches are debounced
+  300 ms and coalesced per domain.
+- **Cadence** (`scheduler.ts`), as on screen / hidden:
+
+  | Poll | On screen | Hidden |
+  |---|---|---|
+  | events | 2 s | 10 s |
+  | sessions + pending | 5 s | 30 s |
+  | detail peek | 2 s | paused |
+  | sweep (everything) | 60 s | 60 s |
+
+  The event poll keeps running while hidden, so app-wide listeners (toasts)
+  still hear about prompts. `visibility.ts` decides whether a gascity view
+  may be on screen. It applies per app, because a copy cannot tell which
+  pane is itself.
+- **Fetch budget** (`budget.ts`). At most 2 gascity requests are in flight
+  per app, across all copies, cities and endpoints. While an endpoint is
+  backing off, at most 1 request to it is in flight. Queued requests start in
+  this order: mutation > events > snapshot > peek > sweep. A slot older than
+  herdr's 30 s fetch timeout plus 5 s belongs to a cancelled fetch: it is
+  reclaimed, and its caller gets a timeout (a read backs off, a mutation is
+  outcome-unknown). Time spent queued never counts as a timeout.
+- **Backoff** (`backoff.ts`, `endpoint.ts`). A transport failure, a 5xx, or
+  an answer from off the loopback origin (a followed redirect) on a read
+  backs the endpoint off: 1 s doubling to 60 s, with jitter. Until it
+  recovers, only one probe goes out per retry time; a probe that never ends
+  expires after 40 s. The first success resets it and refetches everything.
+  Other read errors (4xx, decode) are shown and held until the next sweep or
+  "retry now". Mutations are never retried; a mutation whose outcome is
+  unknown is neither retried nor counted as gc answering.
+- **Errors and staleness are state.** Each domain keeps its last good data,
+  the error that followed it, and whether a refetch is wanted or held.
+  `domainFreshness` says how old the data is and whether it is stale and why.
+  Every failure, including a listener or log hook that throws and a step
+  that crashes or stalls, goes to a bounded diagnostics ring in the snapshot
+  and to the registry's `onError` hook.
+- **Time is injected.** The clock is a parameter, and the tests run the
+  engine under a fake of herdr's ownership rule (`test/unit/sync/fakes.ts`).
+  The engine-parity probe also runs a scripted sync scenario in QuickJS.
 
 ## Develop
 

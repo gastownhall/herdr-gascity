@@ -150,6 +150,17 @@ function messageOf(cause: unknown): string {
   }
 }
 
+/**
+ * How long the host fetch itself ran, when the rejection says so: the sync
+ * engine's fetch budget sets `hostElapsedMs` so time a request spent queued
+ * there is not mistaken for herdr's timeout.
+ */
+function hostElapsedMs(cause: unknown): number | null {
+  if (cause === null || typeof cause !== "object") return null;
+  const v = (cause as { hostElapsedMs?: unknown }).hostElapsedMs;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
 type TransportFailure = Extract<GcError, { kind: "unreachable" | "timeout" | "too-large" }>;
 
 /** Classifies a fetch rejection by herdr's messages and the time it took. */
@@ -199,7 +210,7 @@ async function call<Op extends OperationId>(
     finalUrl = response.url;
     text = await response.text();
   } catch (cause) {
-    const failure = transportFailure(url, cause, now() - started);
+    const failure = transportFailure(url, cause, hostElapsedMs(cause) ?? now() - started);
     if (mutation && !(failure.kind === "too-large" && failure.direction === "request")) {
       return err({ kind: "outcome-unknown", requestId: null, operationId: op, cause: failure.kind });
     }

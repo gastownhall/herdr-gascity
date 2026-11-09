@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:7e359b698311329a65548834534beb15b98dfd25059b627a1aa28ac6f60b763f over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:4dff67826e52134cabb04aece8a28b73212e7b73bd9c98bba06de0b2908983ab over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2455,6 +2455,11 @@ function messageOf(cause) {
     return String(cause);
   }
 }
+function hostElapsedMs(cause) {
+  if (cause === null || typeof cause !== "object") return null;
+  const v = cause.hostElapsedMs;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
 function transportFailure(url, cause, elapsedMs) {
   const message = messageOf(cause);
   if (/exceeded the \d+ byte limit/.test(message)) {
@@ -2492,7 +2497,7 @@ async function call(baseUrl, fetch2, now, op, args) {
     finalUrl = response.url;
     text = await response.text();
   } catch (cause) {
-    const failure2 = transportFailure(url, cause, now() - started);
+    const failure2 = transportFailure(url, cause, hostElapsedMs(cause) ?? now() - started);
     if (mutation && !(failure2.kind === "too-large" && failure2.direction === "request")) {
       return err({ kind: "outcome-unknown", requestId: null, operationId: op, cause: failure2.kind });
     }
