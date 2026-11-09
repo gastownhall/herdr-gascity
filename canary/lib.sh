@@ -27,11 +27,30 @@ export PATH="$HOME/.local/bin:$PATH"
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "FAIL: $*"; exit 1; }
 
+# github_file_set <file> <name> <value>: appends name=value to a GitHub
+# Actions command file in the delimited form, so no value can inject a second
+# variable. Names are checked; values must be one line.
+github_file_set() {
+  local file=$1 name=$2 value=$3 delimiter
+  [[ $name =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "bad variable name: $name"
+  [[ $value != *$'\n'* ]] || die "$name: value has a newline"
+  delimiter="canary_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  printf '%s<<%s\n%s\n%s\n' "$name" "$delimiter" "$value" "$delimiter" >>"$file"
+}
+
 # Exports a variable for this script and for later workflow steps.
 export_env() {
   export "$1=$2"
-  if [[ -n ${GITHUB_ENV:-} ]]; then printf '%s=%s\n' "$1" "$2" >>"$GITHUB_ENV"; fi
+  if [[ -n ${GITHUB_ENV:-} ]]; then github_file_set "$GITHUB_ENV" "$1" "$2"; fi
 }
+
+# Sets a step output (for the cache key).
+export_output() {
+  if [[ -n ${GITHUB_OUTPUT:-} ]]; then github_file_set "$GITHUB_OUTPUT" "$1" "$2"; fi
+}
+
+# A release version as herdr's manifests give it: strict semver, nothing else.
+valid_version() { [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; }
 
 now() { date +%s.%N; }
 

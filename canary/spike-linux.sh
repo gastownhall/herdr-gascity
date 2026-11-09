@@ -30,14 +30,14 @@ types() {
   cp -rf "$here/hello-mod" "$dir"
   env -u DISPLAY -u WAYLAND_DISPLAY herdr-app types "$dir" 2>&1 | tee "$CANARY_OUT/types.txt" >&2
   ls -la "$dir" >&2
-  compgen -G "$dir/*.d.ts" >/dev/null || die "herdr-app types wrote no .d.ts into $dir"
+  [[ -s $dir/gpui-kit.d.ts ]] || die "herdr-app types wrote no gpui-kit.d.ts into $dir"
 }
 
 # ping <name>: a `hello.<name>` command must reach the shown copy.
 ping() {
   local name=$1
   do_ok 15 "hello.$name" >/dev/null || die "hello.$name was not accepted"
-  # shellcheck disable=SC2016 # a jq variable
+  # shellcheck disable=SC2016,SC2317 # a jq variable; a poll predicate called by name
   got() { probe_has --arg c "$name" 'any(.commands[]; . == $c)'; }
   poll 15 "probe to record hello.$name" got || die "hello.$name never reached the mod copy"
 }
@@ -48,6 +48,7 @@ open_mod() {
   printf '%s\n' "$reply" >"$CANARY_OUT/tab-new-mod.json"
   export_env HELLO_TAB "$(jq -er .tab <<<"$reply")"
   export_env HELLO_PANE "$(jq -er .pane <<<"$reply")"
+  # shellcheck disable=SC2317 # a poll predicate, called by name
   alive() { probe_has '.schema == "herdr-spike-hello-probe/1" and .renders >= 1'; }
   poll 30 "the hello mod's probe" alive || die "the hello mod never wrote its probe"
   ping first
@@ -73,21 +74,24 @@ window_geometry() {
 keyboard() {
   # Set by xdotool's --shell output.
   # shellcheck disable=SC2034
-  local reply WINDOW X Y WIDTH HEIGHT SCREEN
+  local reply geometry WINDOW X Y WIDTH HEIGHT SCREEN
   reply=$(do_ok 15 pane.split --direction right --pane "$HELLO_PANE") || die "pane.split failed: $reply"
   printf '%s\n' "$reply" >"$CANARY_OUT/pane-split.json"
   # The X keyboard focus goes to the window directly (XSetInputFocus), with no
   # pointer input: Weston 13's headless backend has no seat, and XTEST pointer
   # motion aborts its Xwayland (SIGABRT). Keys need the Xvfb display.
-  eval "$(window_geometry)" || die "no Herdr window on $DISPLAY"
+  geometry=$(window_geometry) || die "no Herdr window on $DISPLAY"
+  eval "$geometry"
   printf 'window %s at %s,%s size %sx%s\n' "$WINDOW" "$X" "$Y" "$WIDTH" "$HEIGHT" | tee "$CANARY_OUT/window.txt" >&2
   xdotool windowfocus --sync "$WINDOW"
   printf 'X input focus after windowfocus: %s\n' "$(xdotool getwindowfocus)" | tee -a "$CANARY_OUT/window.txt" >&2
   do_ok 15 pane.go --direction left >/dev/null || die "pane.go left failed"
+  # shellcheck disable=SC2317 # a poll predicate, called by name
   focused() { probe_has '.focused == true and any(.commands[]; . == "focus")'; }
   poll 15 "the mod to get focus from pane.go" focused || die "pane.go never handed the mod the keyboard"
   printf 'X input focus before the key: %s\n' "$(xdotool getwindowfocus)" | tee -a "$CANARY_OUT/window.txt" >&2
   xdotool key --clearmodifiers r
+  # shellcheck disable=SC2317 # a poll predicate, called by name
   keyed() { probe_has '.keys | length > 0'; }
   poll 15 "an XTEST key to reach the mod" keyed || die "the XTEST key never reached the mod"
   hello_probe | jq -c '{focused, keys, commands}' >&2
@@ -123,6 +127,13 @@ shot() {
   read -r colors sd share <<<"$stats"
   printf 'X window grab: %s colors, stddev %s, mod color share %s (%s)\n' "$colors" "$sd" "$share" "$(identify -format '%wx%h' "$CANARY_OUT/x-window.png")" | tee -a "$CANARY_OUT/shot-stats.txt" >&2
   not_blank "$colors" "$sd" || die "the X server's copy of the window is blank"
+  awk -v s="$share" 'BEGIN { exit !(s > 0.05) }' || die "the X server's copy of the window does not show the hello mod's panel"
+  # `herdr-app shot` renders offscreen; only the X server's copy proves the
+  # frame was presented. They must match pixel for pixel.
+  local differ
+  differ=$(compare -metric AE "$path" "$CANARY_OUT/x-window.png" null: 2>&1) || true
+  printf 'pixels that differ between herdr-app shot and the X grab: %s\n' "$differ" | tee -a "$CANARY_OUT/shot-stats.txt" >&2
+  [[ $differ == 0 ]] || die "herdr-app shot and the X server's copy of the window differ ($differ pixels)"
 }
 
 case ${1:-} in

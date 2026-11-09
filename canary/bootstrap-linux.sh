@@ -66,27 +66,34 @@ preflight() {
 }
 
 resolve() {
-  local versions
+  local versions kind version
   versions=$("$here/mirror.sh" resolve "$RESOLVED")
   printf '%s\n' "$versions" >&2
-  if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-    printf '%s\n' "$versions" >>"$GITHUB_OUTPUT"
-    printf 'target=%s\n' "$(target)" >>"$GITHUB_OUTPUT"
-  fi
+  while IFS='=' read -r kind version; do
+    valid_version "$version" || die "$kind: unexpected version $version"
+    export_output "$kind" "$version"
+  done <<<"$versions"
+  export_output target "$(target)"
 }
 
 mirror() {
   "$here/mirror.sh" fill "$RESOLVED" "$MIRROR_CACHE" "$(target)"
   local pid
-  pid=$(MIRROR_LOG="$CANARY_OUT/mirror.log" "$here/mirror.sh" serve "$RESOLVED" "$MIRROR_CACHE" "$CANARY_ROOT/mirror-root" "$MIRROR_PORT")
+  pid=$(MIRROR_LOG="$CANARY_OUT/mirror.log" "$here/mirror.sh" serve "$RESOLVED" "$MIRROR_CACHE" "$CANARY_ROOT/mirror-root" "$MIRROR_PORT" "$(target)")
   export_env MIRROR_PID "$pid"
   curl -fsS "$MIRROR_URL/app/latest.json" >"$CANARY_OUT/mirror-app-latest.json"
 }
 
 install_app() {
   # The published installer, as a person runs it; only the release root is ours.
-  local script=$RESOLVED/app/install.sh
+  # This runs herdr's live install.sh (and the core's, which it pipes to sh):
+  # the job that runs it must never be given a secret.
+  local script=$RESOLVED/app/install.sh version
   sha256sum "$script" | tee "$CANARY_OUT/install.sh.sha256" >&2
+  sha256sum "$RESOLVED/core/install.sh" | tee "$CANARY_OUT/core-install.sh.sha256" >&2
+  # Provenance: the manifests exactly as releases.herdr.dev served them.
+  cp -f "$RESOLVED/app/latest.json" "$CANARY_OUT/upstream-app-latest.json"
+  cp -f "$RESOLVED/core/latest.json" "$CANARY_OUT/upstream-core-latest.json"
   HERDR_RELEASES_URL=$MIRROR_URL sh "$script" </dev/null 2>&1 | tee "$CANARY_OUT/install.log" >&2
   # install.sh does not fail when the core step fails (it says so and goes on).
   command -v herdr-app >/dev/null || die "herdr-app is not on PATH after install.sh"
@@ -98,9 +105,13 @@ install_app() {
     echo "app manifest: $(jq -r .version "$RESOLVED/app/latest.json")"
     echo "core manifest: $(jq -r .version "$RESOLVED/core/latest.json")"
     echo "install.sh sha256: $(cut -d' ' -f1 "$CANARY_OUT/install.sh.sha256")"
+    echo "core install.sh sha256: $(cut -d' ' -f1 "$CANARY_OUT/core-install.sh.sha256")"
   } | tee "$CANARY_OUT/versions-herdr.txt" >&2
-  grep -q "^app: herdr-app $(jq -r .version "$RESOLVED/app/latest.json")$" "$CANARY_OUT/versions-herdr.txt" ||
+  version=$(jq -er .version "$RESOLVED/app/latest.json")
+  valid_version "$version" || die "app manifest has an unexpected version: $version"
+  grep -qx "app: herdr-app $version" "$CANARY_OUT/versions-herdr.txt" ||
     die "installed app version does not match the current stable manifest"
+  export_env HERDR_APP_VERSION "$version"
 }
 
 # CANARY_DISPLAY picks the X server the app runs on:
@@ -113,6 +124,7 @@ display_up() {
       weston --backend=headless --xwayland --socket=herdr-canary --width=1400 --height=900 \
         --log="$CANARY_OUT/weston.log" >/dev/null 2>&1 &
       export_env DISPLAY_PID "$!"
+      # shellcheck disable=SC2317 # a poll predicate, called by name
       find_display() {
         d=$(grep -o 'xserver listening on display :[0-9]*' "$CANARY_OUT/weston.log" 2>/dev/null | grep -o ':[0-9]*$' || true)
         [[ -n $d ]]
@@ -128,6 +140,7 @@ display_up() {
   esac
   export_env DISPLAY "$d"
   # Xwayland starts on the first client; xdpyinfo is that client.
+  # shellcheck disable=SC2317 # a poll predicate, called by name
   x_answers() { xdpyinfo -display "$d" >/dev/null 2>&1; }
   poll 20 "X server on $d" x_answers || die "X server on $d does not answer"
   xdpyinfo -display "$d" >"$CANARY_OUT/xdpyinfo.txt" 2>&1
@@ -143,6 +156,12 @@ app_up() {
     printf '{"frame.welcomed":"skipped"}\n' >"$HERDR_APP_HOME/shared.json.new"
     mv -f "$HERDR_APP_HOME/shared.json.new" "$HERDR_APP_HOME/shared.json"
   fi
+  # This version already ran here: no "Updated to <v>" toast over the shots.
+  if [[ ! -f $HERDR_APP_HOME/update-notes.json ]]; then
+    valid_version "${HERDR_APP_VERSION:-}" || die "HERDR_APP_VERSION is not set by the install stage"
+    jq -cn --arg v "$HERDR_APP_VERSION" '{last_run: $v, presented: []}' >"$HERDR_APP_HOME/update-notes.json.new"
+    mv -f "$HERDR_APP_HOME/update-notes.json.new" "$HERDR_APP_HOME/update-notes.json"
+  fi
   # Opening a link would reach a browser: log it instead.
   for opener in xdg-open open; do
     printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>%q\n' "$CANARY_OUT/opened.txt" >"$bin/$opener"
@@ -154,12 +173,20 @@ app_up() {
     setsid herdr-app >"$CANARY_OUT/app.log" 2>&1 </dev/null &
   pid=$!
   export_env HERDR_APP_PID "$pid"
+  # shellcheck disable=SC2317 # a poll predicate, called by name
   app_answers() {
     kill -0 "$pid" 2>/dev/null || { cat "$CANARY_OUT/app.log" >&2; die "herdr-app exited"; }
     herdr-app status >"$CANARY_OUT/status-first.json" 2>/dev/null
   }
   poll 60 "herdr-app status" app_answers || { cat "$CANARY_OUT/app.log" >&2; die "the window did not answer"; }
   cat "$CANARY_OUT/status-first.json" >&2
+  # The app writes the host type declarations into its home on every start.
+  local dts
+  mkdir -p "$CANARY_OUT/app-home-types"
+  for dts in herdr.d.ts gpui-kit.d.ts; do
+    [[ -s $HERDR_APP_HOME/$dts ]] || die "the app did not write $dts into its home"
+    cp -f "$HERDR_APP_HOME/$dts" "$CANARY_OUT/app-home-types/$dts"
+  done
   # A fresh home has no space yet; tab.new would answer "no space yet".
   space=$(do_ok 30 space.new --name canary --folder "$CANARY_ROOT/space") || die "space.new failed"
   printf '%s\n' "$space" >"$CANARY_OUT/space-new.json"
@@ -173,6 +200,7 @@ stop_pid() {
   local pid=${1:-}
   [[ -n $pid ]] || return 0
   kill "$pid" 2>/dev/null || return 0
+  # shellcheck disable=SC2317 # a poll predicate, called by name
   gone() { ! kill -0 "$pid" 2>/dev/null; }
   poll 10 "pid $pid to exit" gone || kill -9 "$pid" 2>/dev/null || true
 }

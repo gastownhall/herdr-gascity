@@ -12,8 +12,9 @@
 #                                     (e.g. linux-x86_64) into <cache>, checked
 #                                     against the manifests' sha256; tarballs
 #                                     already there and intact are kept
-#   mirror.sh serve <resolved> <cache> <root> <port>
-#                                     lay out <root> like the release server,
+#   mirror.sh serve <resolved> <cache> <root> <port> <target>
+#                                     lay out <root> like the release server
+#                                     (manifests, install.sh, <target> tarballs),
 #                                     with manifest URLs pointing at
 #                                     http://127.0.0.1:<port>, and serve it
 set -euo pipefail
@@ -27,12 +28,16 @@ fetch() { curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$1" -o "$2"; 
 url_of() { jq -er --arg t "$2" '.targets[$t].url' "$1"; }
 sha_of() { jq -er --arg t "$2" '.targets[$t].sha256' "$1"; }
 
-# A manifest URL as a path under the release root (only the upstream host can be mirrored).
+# A manifest URL as a path under the release root (only the upstream host can
+# be mirrored; no "..", no characters outside a plain path).
 rel_path() {
+  local rel
   case $1 in
-    "$upstream"/*) printf '%s\n' "${1#"$upstream"/}" ;;
+    "$upstream"/*) rel=${1#"$upstream"/} ;;
     *) fail "manifest URL $1 is not under $upstream" ;;
   esac
+  [[ $rel =~ ^[A-Za-z0-9._/-]+$ && $rel != *..* ]] || fail "manifest URL $1 has an unexpected path"
+  printf '%s\n' "$rel"
 }
 
 resolve() {
@@ -42,8 +47,12 @@ resolve() {
   fetch "$upstream/core/latest.json" "$dir/core/latest.json"
   fetch "$upstream/app/install.sh" "$dir/app/install.sh"
   fetch "$upstream/core/install.sh" "$dir/core/install.sh"
-  printf 'app=%s\n' "$(jq -er .version "$dir/app/latest.json")"
-  printf 'core=%s\n' "$(jq -er .version "$dir/core/latest.json")"
+  local kind version
+  for kind in app core; do
+    version=$(jq -er .version "$dir/$kind/latest.json")
+    [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || fail "$kind manifest has an unexpected version: $version"
+    printf '%s=%s\n' "$kind" "$version"
+  done
 }
 
 fill() {
@@ -65,12 +74,15 @@ fill() {
 }
 
 serve() {
-  local resolved=$1 cache=$2 root=$3 port=$4 kind base
+  local resolved=$1 cache=$2 root=$3 port=$4 target=$5 kind base rel
   base="http://127.0.0.1:$port"
   rm -rf "$root"
   mkdir -p "$root"
-  cp -rf "$cache/." "$root/"
   for kind in app core; do
+    # Only the tarball this manifest lists for this target, nothing else cached.
+    rel=$(rel_path "$(url_of "$resolved/$kind/latest.json" "$target")")
+    mkdir -p "$(dirname "$root/$rel")"
+    cp -f "$cache/$rel" "$root/$rel"
     mkdir -p "$root/$kind"
     cp -f "$resolved/$kind/install.sh" "$root/$kind/install.sh"
     jq --arg up "$upstream" --arg base "$base" \
@@ -89,6 +101,6 @@ serve() {
 case ${1:-} in
   resolve) resolve "$2" ;;
   fill) fill "$2" "$3" "$4" ;;
-  serve) serve "$2" "$3" "$4" "$5" ;;
+  serve) serve "$2" "$3" "$4" "$5" "$6" ;;
   *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
