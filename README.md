@@ -298,8 +298,9 @@ it unsubscribes and starts nothing; the other copies keep updating.
   source.
 - **Plain text only.** Every string gc supplies (names, statuses, titles,
   errors, problem details, prompts, output) is shown with escape sequences,
-  control characters and bidirectional overrides removed (`vm/sanitize.ts`),
-  never as markdown or links.
+  control characters, bidirectional marks, Unicode tag characters and
+  out-of-band line separators removed (`vm/sanitize.ts`), never as markdown
+  or links. Lines written to herdr's log are cleaned the same way.
 - **Probe.** While the shared value `gascity.probe` is `true`, the copy's
   tick writes `<app home>/data/gascity-probe/probe.json`
   (`gascity-herdr-probe/3`): connection, discovery, city, visibility,
@@ -309,7 +310,13 @@ it unsubscribes and starts nothing; the other copies keep updating.
   request id, exec log,
   errors and the budget high-water mark. It serializes the same view-models the panel draws. Writes
   are herdr's compare-and-swap, at most one in flight, on change or every
-  5 s.
+  5 s. One copy owns the file (the first to write it, until it closes), so
+  several copies do not take turns rewriting it. A document over herdr's
+  1 MiB file limit is cut down by a fixed rule (the session output, pending
+  prompt and bead description go first, then every list is halved until it
+  fits) and says what it left out in `truncated`; the diagnostics record it.
+  When the probe is turned off the file is emptied (herdr gives mods no way
+  to delete a file), compare-and-swap like any write.
 
 ## The work board
 

@@ -33,6 +33,8 @@ export function syncErrorText(e: SyncError): string {
       return cleanLine(`an app-wide listener failed: ${e.message}`);
     case "step-crashed":
       return cleanLine(`a refresh step crashed: ${e.message}`);
+    case "probe-truncated":
+      return cleanLine(`the probe document was over ${e.limitBytes} bytes and was cut down: ${e.dropped.join("; ")}`);
     case "tick-crashed":
       return cleanLine(`a periodic update failed: ${e.message}`);
     case "step-stalled":

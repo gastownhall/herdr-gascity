@@ -208,6 +208,7 @@ export class CopyController {
     }
 
     if (this.deps.host.probeEnabled()) this.writeProbe(clock.now());
+    else this.deps.probe.off(clock.now());
 
     const signature = [
       this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.city?.activity().rev ?? -1, this.onScreen, this.selected,
@@ -230,6 +231,7 @@ export class CopyController {
     this.city = null;
     this.cities?.unsubscribe();
     this.cities = null;
+    this.deps.probe.release(this);
   }
 
   /** The view-models for render (and the probe). */
@@ -680,7 +682,7 @@ export class CopyController {
 
   private writeProbe(now: number): void {
     const v = this.view(now);
-    this.deps.probe.offer(probeDocument({
+    this.deps.probe.offer(this, probeDocument({
       modVersion: MOD_VERSION,
       herdrVersion: this.herdrVersion(),
       machine: this.deps.discovery.machine,
@@ -696,7 +698,7 @@ export class CopyController {
       execLog: this.deps.host.execLog(),
       refreshCount: this.refreshCount,
       fetchInFlightMax: this.deps.registry.budgetStats().maxInFlight,
-    }), now, true);
+    }), now);
   }
 }
 

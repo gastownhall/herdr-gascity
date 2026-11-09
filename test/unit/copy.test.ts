@@ -8,7 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { DiscoveryController } from "../../src/discovery/controller.ts";
 import { CopyController, type CopyHost } from "../../src/copy.ts";
 import { err, ok } from "../../src/result.ts";
-import { ProbeWriter, type ProbeIo } from "../../src/probe.ts";
+import { PROBE_WRITE_DEADLINE_MS, ProbeWriter, type ProbeIo } from "../../src/probe.ts";
 import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
 import type { VisibilityInput } from "../../src/sync/visibility.ts";
 import { FakeGc, FakeHost, fixtureBody, type Owner } from "./sync/fakes.ts";
@@ -34,10 +34,14 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean; herdrVersi
   gc.emit({ type: "order.fired", subject: "gate-sweep" });
   const registry = new SyncRegistry({ fetch: host.wrap(gc.fetch), clock: host, random: () => 0.5 });
   const files = new Map<string, string>();
+  let writes = 0;
+  let probeOn = opts.probe ?? false;
   const io: ProbeIo = {
     path: () => "/app/data/gascity-probe/probe.json",
     read: (p) => Promise.resolve(ok(files.get(p) ?? null)),
-    write: (p, text) => {
+    write: (p, text, expected) => {
+      writes++;
+      if ((files.get(p) ?? null) !== expected) return Promise.resolve(err({ kind: "host-call", api: `writeTextFile(${p})`, cause: "stale snapshot" }));
       files.set(p, text);
       return Promise.resolve(ok(null));
     },
@@ -50,7 +54,7 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean; herdrVersi
       if (visibilityThrows !== null) throw new Error(visibilityThrows);
       return ok(visibility);
     },
-    probeEnabled: () => opts.probe ?? false,
+    probeEnabled: () => probeOn,
     herdrVersion: opts.herdrVersion ?? (() => ok("0.1.14")),
     execLog: () => [],
   };
@@ -81,6 +85,8 @@ function setup(opts: { visibility?: VisibilityInput; probe?: boolean; herdrVersi
   const close = (o: Opened) => host.close(o.owner, () => o.copy.close());
   return {
     host, gc, registry, open, close, files,
+    writes: () => writes,
+    setProbe: (on: boolean) => { probeOn = on; },
     setVisibility: (v: VisibilityInput) => { visibility = v; },
     throwFromVisibility: (message: string | null) => { visibilityThrows = message; },
   };
@@ -254,6 +260,48 @@ describe("a copy", () => {
     expect(doc.board.ready.cards.map((c: { id: string }) => c.id)).toEqual(["sc-18", "fe-1", "sc-58", "sc-74"]);
     expect(doc.board.closed.earlier[0]).toEqual({ id: "sc-73", title: "order:gate-sweep", close_reason: "order dispatch completed: tracking bead lifecycle finished", assignee: null });
     expect(doc.fetch_in_flight_max).toBeLessThanOrEqual(2);
+  });
+
+  test("several copies with different documents (one has a detail open) do not take turns rewriting the probe", async () => {
+    const { host, open, writes } = setup({ probe: true });
+    const a = await open();
+    const b = await open();
+    const c = await open();
+    await host.advance(3000);
+    b.copy.selectSession("sc-20");
+    c.copy.toggleDiagnostics();
+    await host.advance(5000);
+    const before = writes();
+    await host.advance(20_000);
+    // one owner: about one write a second, as with a single copy (its data age changes every second);
+    // three copies taking turns wrote about nine a second
+    expect(writes() - before).toBeLessThanOrEqual(30);
+    void a;
+  });
+
+  test("the next copy takes the probe over when its owner closes", async () => {
+    const { host, open, close, files } = setup({ probe: true });
+    const a = await open();
+    const b = await open();
+    await host.advance(3000);
+    b.copy.selectSession("sc-20");
+    await host.advance(3000);
+    expect(JSON.parse(files.get("/app/data/gascity-probe/probe.json") ?? "{}").detail).toBeNull();
+    await close(a);
+    await host.advance(PROBE_WRITE_DEADLINE_MS + 3000);
+    expect(JSON.parse(files.get("/app/data/gascity-probe/probe.json") ?? "{}").detail?.session).toBe("sc-20");
+  });
+
+  test("turning the probe off empties the probe file (it holds agent output and prompts)", async () => {
+    const { host, open, files, setProbe } = setup({ probe: true });
+    const a = await open();
+    await host.advance(3000);
+    a.copy.selectSession("sc-20");
+    await host.advance(3000);
+    expect(files.get("/app/data/gascity-probe/probe.json")).toContain("sc-20");
+    setProbe(false);
+    await host.advance(1000);
+    expect(files.get("/app/data/gascity-probe/probe.json")).toBe("");
   });
 
   test("retry now with a running city refetches everything and the city list, keeping what is shown; it does not rediscover", async () => {

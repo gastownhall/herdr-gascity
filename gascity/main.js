@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:8b0ad2154783046467b749777382a4a5833de9b662236d7048fb8add354bc067 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:f28992f4554a4ee81f27dea94b6703a46804167208bd90c534375bf13f16e42a over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -5424,6 +5424,8 @@ function syncErrorText(e) {
       return cleanLine(`an app-wide listener failed: ${e.message}`);
     case "step-crashed":
       return cleanLine(`a refresh step crashed: ${e.message}`);
+    case "probe-truncated":
+      return cleanLine(`the probe document was over ${e.limitBytes} bytes and was cut down: ${e.dropped.join("; ")}`);
     case "tick-crashed":
       return cleanLine(`a periodic update failed: ${e.message}`);
     case "step-stalled":
@@ -5749,6 +5751,7 @@ var CopyController = class {
       if (discovery.machine.state.phase !== "city-running") this.followCity(null);
     }
     if (this.deps.host.probeEnabled()) this.writeProbe(clock.now());
+    else this.deps.probe.off(clock.now());
     const signature = [
       this.machineVersion(),
       this.citiesRev,
@@ -5774,6 +5777,7 @@ var CopyController = class {
     this.city = null;
     this.cities?.unsubscribe();
     this.cities = null;
+    this.deps.probe.release(this);
   }
   /** The view-models for render (and the probe). */
   view(now) {
@@ -6173,7 +6177,7 @@ var CopyController = class {
   }
   writeProbe(now) {
     const v = this.view(now);
-    this.deps.probe.offer(probeDocument({
+    this.deps.probe.offer(this, probeDocument({
       modVersion: MOD_VERSION,
       herdrVersion: this.herdrVersion(),
       machine: this.deps.discovery.machine,
@@ -6189,7 +6193,7 @@ var CopyController = class {
       execLog: this.deps.host.execLog(),
       refreshCount: this.refreshCount,
       fetchInFlightMax: this.deps.registry.budgetStats().maxInFlight
-    }), now, true);
+    }), now);
   }
 };
 var machineIds = /* @__PURE__ */ new WeakMap();
@@ -6595,7 +6599,75 @@ var DiscoveryController = class {
 // src/probe.ts
 var PROBE_HEARTBEAT_MS = 5e3;
 var PROBE_WRITE_DEADLINE_MS = 5e3;
+var PROBE_MAX_BYTES = 1024 * 1024;
 var ERROR_LIMIT = 20;
+function utf8Bytes(text) {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 128) n += 1;
+    else if (c < 2048) n += 2;
+    else if (c >= 55296 && c <= 56319 && i + 1 < text.length && (text.charCodeAt(i + 1) & 64512) === 56320) {
+      n += 4;
+      i++;
+    } else n += 3;
+  }
+  return n;
+}
+function serialize(doc) {
+  return `${JSON.stringify(doc, null, 2)}
+`;
+}
+function half(list, keep = "first") {
+  const n = Math.floor(list.length / 2);
+  return keep === "first" ? list.slice(0, n) : list.slice(list.length - n);
+}
+function halveLists(b) {
+  return {
+    ...b,
+    sessions: half(b.sessions),
+    actions: half(b.actions),
+    exec_log: half(b.exec_log, "last"),
+    errors: half(b.errors),
+    board: b.board === null ? null : {
+      ...b.board,
+      ready: { ...b.board.ready, cards: half(b.board.ready.cards) },
+      in_progress: { ...b.board.in_progress, cards: half(b.board.in_progress.cards) },
+      closed: { ...b.board.closed, recent: half(b.board.closed.recent), earlier: half(b.board.closed.earlier) },
+      errors: half(b.board.errors)
+    }
+  };
+}
+function listsEmpty(b) {
+  const lists = [b.sessions, b.actions, b.exec_log, b.errors];
+  if (b.board) lists.push(b.board.ready.cards, b.board.in_progress.cards, b.board.closed.recent, b.board.closed.earlier, b.board.errors);
+  return lists.every((l) => l.length === 0);
+}
+function fitProbe(body, extra, limit = PROBE_MAX_BYTES) {
+  const whole = serialize({ ...body, ...extra });
+  if (utf8Bytes(whole) <= limit) return { text: whole, truncated: [] };
+  const truncated = [];
+  let b = body;
+  if (b.detail !== null && (b.detail.output !== null || b.detail.pending !== null)) {
+    b = { ...b, detail: { ...b.detail, output: null, pending: null } };
+    truncated.push("detail.output", "detail.pending");
+  }
+  if (b.bead_detail !== null && b.bead_detail.description !== null) {
+    b = { ...b, bead_detail: { ...b.bead_detail, description: null } };
+    truncated.push("bead_detail.description");
+  }
+  const sizes = (x) => `sessions ${x.sessions.length}, actions ${x.actions.length}, exec_log ${x.exec_log.length}, errors ${x.errors.length}`;
+  const before = sizes(b);
+  for (let halvings = 0; ; halvings++) {
+    const notes = halvings === 0 ? truncated : [...truncated, `every list halved ${halvings} times (${before} -> ${sizes(b)})`];
+    const text = serialize({ ...b, truncated: notes, ...extra });
+    if (utf8Bytes(text) <= limit) return { text, truncated: notes };
+    if (listsEmpty(b)) break;
+    b = halveLists(b);
+  }
+  const all = [...truncated, "everything but the schema and versions"];
+  return { text: serialize({ schema: body.schema, mod_version: body.mod_version, herdr_version: body.herdr_version, truncated: all, ...extra }), truncated: all };
+}
 var ProbeWriter = class {
   constructor(io) {
     this.io = io;
@@ -6609,41 +6681,91 @@ var ProbeWriter = class {
   lastWriteAt = -Infinity;
   seq = 0;
   failures = [];
-  /** Recent write failures, oldest first. */
+  /** The copy whose documents are written, while the probe is on. */
+  owner = null;
+  /** The probe is off and the file is known to be absent or empty. */
+  cleared = false;
+  /** What the last cut-down document lost ("" when the last write was whole). */
+  lastCut = "";
+  /** Recent write failures and cut-down documents, oldest first. */
   errors() {
     return this.failures;
   }
-  /** Called from a copy's own tick: writes `body` if the probe is on and the document changed or a heartbeat is due. */
-  offer(body, now, enabled) {
-    if (!enabled) return;
-    if (this.inFlight) {
-      if (now - this.inFlight.startedAt < PROBE_WRITE_DEADLINE_MS) return;
-      this.fail(now, { kind: "host-call", api: `writeTextFile(${this.io.path()})`, cause: `no answer within ${PROBE_WRITE_DEADLINE_MS} ms` });
-      this.inFlight = null;
-    }
+  /**
+   * Called from a copy's own tick while the probe is on: writes `body` if
+   * `owner` owns the file (or nobody does) and the document changed or a
+   * heartbeat is due.
+   */
+  offer(owner, body, now) {
+    if (this.busy(now)) return;
+    if (this.owner !== null && this.owner !== owner) return;
+    this.owner = owner;
+    this.cleared = false;
     const json = JSON.stringify(body);
     if (json === this.lastBody && now - this.lastWriteAt < PROBE_HEARTBEAT_MS) return;
+    const fitted = fitProbe(body, { seq: ++this.seq, ts: new Date(now).toISOString() });
+    const cut = fitted.truncated.join("; ");
+    if (cut !== "" && cut !== this.lastCut) {
+      this.record(now, { kind: "probe-truncated", limitBytes: PROBE_MAX_BYTES, dropped: fitted.truncated });
+    }
+    this.lastCut = cut;
+    this.swap(now, () => fitted.text, (text) => {
+      this.expected = text;
+      this.lastBody = json;
+      this.lastWriteAt = now;
+    });
+  }
+  /** Called from a copy's own tick while the probe is off: empties a file that still holds a document. */
+  off(now) {
+    this.owner = null;
+    this.lastBody = null;
+    this.lastCut = "";
+    if (this.cleared || this.busy(now)) return;
+    this.swap(now, (current) => current === null || current === "" ? null : "", (text) => {
+      this.expected = text;
+      this.cleared = true;
+    });
+  }
+  /** The copy closes: it no longer owns the file (the next copy to offer takes over). Starts nothing. */
+  release(owner) {
+    if (this.owner === owner) this.owner = null;
+  }
+  /** A write is in flight (one with no answer by the deadline is given up and recorded). */
+  busy(now) {
+    if (!this.inFlight) return false;
+    if (now - this.inFlight.startedAt < PROBE_WRITE_DEADLINE_MS) return true;
+    this.fail(now, { kind: "host-call", api: `writeTextFile(${this.io.path()})`, cause: `no answer within ${PROBE_WRITE_DEADLINE_MS} ms` });
+    this.inFlight = null;
+    return false;
+  }
+  /**
+   * One compare-and-swap: `next` gets what the file holds and returns the text
+   * to write, or null to leave it as it is; `done` gets what the file holds after.
+   */
+  swap(now, next, done) {
     const token = ++this.tokens;
     this.inFlight = { token, startedAt: now };
-    const text = `${JSON.stringify({ ...body, seq: ++this.seq, ts: new Date(now).toISOString() }, null, 2)}
-`;
     const path = this.io.path();
     const known = this.expected;
-    const expected = known === void 0 ? this.io.read(path) : Promise.resolve({ ok: true, value: known });
-    void expected.then((r) => r.ok ? this.io.write(path, text, r.value) : r).then((r) => {
+    const current = known === void 0 ? this.io.read(path) : Promise.resolve(ok(known));
+    void current.then(async (r) => {
+      if (!r.ok) return r;
+      const text = next(r.value);
+      if (text === null) return ok(r.value);
+      const w = await this.io.write(path, text, r.value);
+      return w.ok ? ok(text) : w;
+    }).then((r) => {
       if (this.inFlight?.token !== token) return;
       this.inFlight = null;
-      if (r.ok) {
-        this.expected = text;
-        this.lastBody = json;
-        this.lastWriteAt = now;
-      } else {
-        this.fail(now, r.error);
-      }
+      if (r.ok) done(r.value);
+      else this.fail(now, r.error);
     });
   }
   fail(at2, error) {
     this.expected = void 0;
+    this.record(at2, error);
+  }
+  record(at2, error) {
     this.failures = [...this.failures, { at: at2, source: "probe", error }].slice(-ERROR_LIMIT);
   }
 };

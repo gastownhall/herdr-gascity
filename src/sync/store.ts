@@ -164,7 +164,9 @@ export type SyncError =
   | { kind: "listener-failed"; message: string }
   | { kind: "step-crashed"; message: string }
   | { kind: "step-stalled"; idleMs: number }
-  | { kind: "tick-crashed"; message: string };
+  | { kind: "tick-crashed"; message: string }
+  /** The probe document was over herdr's file limit and was cut down (probe.ts): what it lost. */
+  | { kind: "probe-truncated"; limitBytes: number; dropped: string[] };
 
 /** One diagnostics entry: when, where (a domain, "events", "bead:<id>", "listener", "step", …) and what. */
 export interface ErrorEntry {
