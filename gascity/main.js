@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:93e38d1a373083b9559558b3796ccfc5e355cd170273a2b6761c052d0c344db9 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:f29bfeeaa9d6cf74744d0f615b7e60af1801a578b819df390d4f5a726572e20b over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -6958,6 +6958,10 @@ var CopyController = class {
   openSession() {
     return this.selectedRef();
   }
+  /** The open session's id, listed by gc or not (a draft binds to it even while gc does not list it). */
+  selectedSession() {
+    return this.selected;
+  }
   /** Whether gc lists session `id` (by its id). */
   listed(id2) {
     return this.city?.snapshot().sessions.value?.items.some((x) => x.id === id2) ?? false;
@@ -8727,7 +8731,7 @@ function inputsFor(copy, box) {
   const closeReason = InputState.new({ placeholder: "close reason (optional)" });
   message.on("change", () => {
     if (message.value().trim() === "") box.typedFor = null;
-    else box.typedFor ??= copy.openSession();
+    else box.typedFor ??= copy.selectedSession();
   });
   message.on("submit", (_, cx) => {
     if (copy.sendInputTo(copy.openSession(), message.value(), "default", box.typedFor)) clearBox(message, box);

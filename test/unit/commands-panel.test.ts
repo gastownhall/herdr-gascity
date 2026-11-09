@@ -743,4 +743,23 @@ describe("a draft belongs to its session", () => {
     box(mod, 0).submit(mod.cx);
     expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/submit"]);
   });
+
+  test("a draft typed while the open session is unlisted stays bound to it: Send in another session's detail posts nothing", async () => {
+    const w = world();
+    const mod = await running({ route: w.route });
+    await openSession(mod);
+    // gc stops listing sc-6 (it closed, or the list is between pages) while the person types.
+    const list = fixtureBody("get-v0-city-by-city-name-sessions", "ok") as { items: Record<string, unknown>[] };
+    w.state.sessions = { ...list, items: list.items.filter((x) => x["id"] !== "sc-6") };
+    mod.click("gascity-retry");
+    await ticks(mod, 8);
+    box(mod, 0).type("meant for sc-6");
+    const other = ids(mod.render()).find((id) => /^gascity-(agent-\d+-\d+|other)-session-\d+$/.test(id) || /^gascity-other-\d+$/.test(id));
+    mod.click(other!);
+    await ticks(mod);
+    mod.click("gascity-send-default");
+    box(mod, 0).submit(mod.cx);
+    expect(mutations(mod)).toEqual([]);
+    expect(text(mod.render(), "gascity-notice")).toBe("this text was typed for session sc-6: open that session to send it, or clear the box");
+  });
 });

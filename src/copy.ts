@@ -1019,6 +1019,11 @@ export class CopyController {
     return this.selectedRef();
   }
 
+  /** The open session's id, listed by gc or not (a draft binds to it even while gc does not list it). */
+  selectedSession(): string | null {
+    return this.selected;
+  }
+
   /** Whether gc lists session `id` (by its id). */
   private listed(id: string): boolean {
     return this.city?.snapshot().sessions.value?.items.some((x) => x.id === id) ?? false;

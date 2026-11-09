@@ -42,8 +42,8 @@ import { renderPanel, type PanelActions, type PanelInputs, type PanelKeyboard } 
 
 /**
  * The session the send box's text was typed for (the open session when
- * typing started; null while the box is empty): a draft is never sent to
- * another session.
+ * typing started, even one gc does not list at that moment; null while the
+ * box is empty): a draft is never sent to another session.
  */
 interface SendBox {
   typedFor: string | null;
@@ -169,7 +169,7 @@ function inputsFor(copy: CopyController, box: SendBox): PanelInputs {
   const closeReason = InputState.new({ placeholder: "close reason (optional)" });
   message.on("change", () => {
     if (message.value().trim() === "") box.typedFor = null;
-    else box.typedFor ??= copy.openSession();
+    else box.typedFor ??= copy.selectedSession();
   });
   message.on("submit", (_, cx) => {
     if (copy.sendInputTo(copy.openSession(), message.value(), "default", box.typedFor)) clearBox(message, box);
