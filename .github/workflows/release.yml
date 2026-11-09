@@ -23,6 +23,7 @@ on:
       - compat.json
       - gascity/RECIPE.md
       - test/install/**
+      - test/unit/workflows.test.ts
   workflow_dispatch:
 
 permissions:
