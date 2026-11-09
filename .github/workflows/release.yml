@@ -1,0 +1,140 @@
+name: Release
+
+# On a v<version> tag (the version in package.json): checks the build,
+# packages the mod (scripts/package.ts) and publishes a GitHub release with
+# gascity-mod-<version>.tar.gz, its .sha256 and install.sh stamped with both.
+#
+# Dispatched by hand, or pushed with a change to the packaging, it is a dry
+# run: the same checks and the same package, uploaded as a workflow artifact.
+# Nothing is published, and the job holds no write permission.
+
+on:
+  push:
+    tags: ["v*"]
+    branches: ["**"]
+    # Tag pushes ignore paths; branch pushes dry-run only when packaging changed.
+    paths:
+      - .github/workflows/release.yml
+      - install.sh
+      - scripts/package.ts
+      - compat.json
+      - gascity/RECIPE.md
+      - test/install/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Check and package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck, authority lint, bundle freshness, unit and installer tests
+        run: bun run ci
+
+      - name: Shellcheck the installer
+        run: shellcheck install.sh test/install/stub/herdr-app test/install/stub/curl
+
+      - name: The tag names package.json's version
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(jq -er .version package.json)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not name package.json's version $version"
+            exit 1
+          fi
+
+      - name: Package
+        id: package
+        run: |
+          bun run package --out dist
+          version=$(jq -er .version package.json)
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          (cd dist && sha256sum -c "gascity-mod-$version.tar.gz.sha256")
+          ls -l dist
+
+      - name: The package is reproducible
+        run: |
+          bun run package --out "$RUNNER_TEMP/again"
+          for f in dist/*; do cmp "$f" "$RUNNER_TEMP/again/${f#dist/}"; done
+
+      - name: Release notes
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p notes
+          herdr_min=$(jq -er .herdrApp.minimum compat.json)
+          gc_commit=$(jq -er .gc.minimumCommit compat.json)
+          gc_release=$(jq -r '.gc.minimumRelease // empty' compat.json)
+          if [ -n "$gc_release" ]; then gc_line="gc $gc_release or newer"
+          else gc_line="gc built from $(jq -er .gc.repo compat.json) main at or after ${gc_commit:0:10} (no gc release has every API call the mod uses yet)"; fi
+          cat >notes/notes.md <<EOF
+          Install, with the Herdr app installed (Linux, macOS):
+
+              curl -fsSL https://github.com/$REPO/releases/download/v$VERSION/install.sh | sh
+
+          install.sh downloads gascity-mod-$VERSION.tar.gz and checks it against the sha256 it carries, runs \`herdr-app check\`, keeps an earlier install in \`<app home>/mod-backups/\`, and, with Herdr open, opens a "Gas City" tab and sets the gc program the mod runs. \`--gc-bin <path>\` names another gc; \`--from <tarball>\` installs a downloaded tarball.
+
+          Needs herdr-app $herdr_min or newer and $gc_line; see compat.json. Do not start gc from a Herdr terminal (gascity/RECIPE.md says why).
+          EOF
+          cat notes/notes.md
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gascity-mod-${{ steps.package.outputs.version }}
+          path: |
+            dist/
+            notes/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish the release
+    needs: package
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gascity-mod-${{ needs.package.outputs.version }}
+          path: release
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.package.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd release/dist
+          sha256sum -c "gascity-mod-$VERSION.tar.gz.sha256"
+          prerelease=()
+          case $VERSION in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" \
+            --notes-file ../notes/notes.md "${prerelease[@]}" \
+            "gascity-mod-$VERSION.tar.gz" "gascity-mod-$VERSION.tar.gz.sha256" install.sh
