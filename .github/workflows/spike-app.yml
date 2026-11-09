@@ -1,0 +1,119 @@
+name: Spike - herdr-app headless
+
+# M8a: can the released herdr-app run, render and host a mod on a GitHub-hosted
+# runner with no GPU? Weston headless + Xwayland + lavapipe, the app installed
+# by herdr's published install.sh from a per-release local mirror.
+
+on:
+  push:
+    branches: ["spike/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (ubuntu-24.04, lavapipe, ${{ matrix.display }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Headless Weston + Xwayland, herdr-app's own sandbox display. Weston
+          # 13's headless backend has no seat, so XTEST input is not gating here.
+          - display: weston
+            keyboard_required: false
+          # A plain virtual X server: the full sequence, XTEST key included.
+          - display: xvfb
+            keyboard_required: true
+    env:
+      HC_SESSION: canary
+      CANARY_DISPLAY: ${{ matrix.display }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: S0 preflight (packages, lavapipe)
+        timeout-minutes: 6
+        run: canary/bootstrap-linux.sh preflight
+
+      - name: S0 resolve current stable release
+        id: resolve
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh resolve
+
+      - name: S0 restore release mirror
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: S0 fill and serve release mirror
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh mirror
+
+      - name: S1 install herdr-app via published install.sh
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh install
+
+      - name: S2 herdr-app check (hello mod)
+        timeout-minutes: 2
+        run: canary/spike-linux.sh check
+
+      - name: S2b herdr-app types
+        timeout-minutes: 2
+        continue-on-error: true
+        run: canary/spike-linux.sh types
+
+      - name: S4a display (weston headless + Xwayland)
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh display
+
+      - name: S4b app up, status, space.new
+        id: app
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh app
+
+      - name: S5 hello mod tab, commands, tab.select
+        timeout-minutes: 3
+        run: canary/spike-linux.sh mod
+
+      - name: S6 herdr-app shot (not blank, shows the mod)
+        if: ${{ !cancelled() && steps.app.outcome == 'success' }}
+        timeout-minutes: 2
+        run: canary/spike-linux.sh shot
+
+      - name: S10 pane.go focus + XTEST key
+        if: ${{ !cancelled() && steps.app.outcome == 'success' }}
+        timeout-minutes: 2
+        continue-on-error: ${{ !matrix.keyboard_required }}
+        run: canary/spike-linux.sh keyboard
+
+      - name: Teardown
+        if: always()
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh teardown
+
+      - name: Result
+        if: always()
+        env:
+          KEYBOARD_STAGE: ${{ matrix.keyboard_required && 'S10-keyboard' || '' }}
+        run: >-
+          canary/result.sh S0-preflight S0-resolve S0-mirror S1-install S2-check
+          S4a-display S4b-app S5-mod S6-shot ${KEYBOARD_STAGE:+"$KEYBOARD_STAGE"}
+
+      - name: Upload screenshot and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: herdr-app-spike-linux-${{ matrix.display }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herdr-canary/out
+          if-no-files-found: error
+          retention-days: 14

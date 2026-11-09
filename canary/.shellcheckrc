@@ -1,0 +1,3 @@
+source-path=SCRIPTDIR
+# Poll predicates are nested functions passed by name.
+disable=SC2317
