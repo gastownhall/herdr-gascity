@@ -5,7 +5,7 @@
 # bootstrap-linux.sh's preflight, resolve, mirror, install and display stages.
 #
 #   preview-linux.sh gc        build gc from $GASCITY_SRC into $CANARY_ROOT/gc/gc
-#   preview-linux.sh city      a scratch city (file beads, subprocess sessions,
+#   preview-linux.sh city      a scratch city (file beads, subprocess sessions, no orders,
 #                              one rig, two agents) with a few beads, from this
 #                              shell: never from a herdr terminal
 #   preview-linux.sh install   package the mod and install it with install.sh
@@ -46,6 +46,9 @@ city_up() {
   mkdir -p "$CITY_ROOT/rigs/frontend" "$GC_HOME" "$shims"
   # No service manager: gc init's `supervisor install` must not reach one.
   for s in systemctl launchctl; do printf '#!/bin/sh\nexit 0\n' >"$shims/$s"; chmod +x "$shims/$s"; done
+  local ORDERS
+  ORDERS=$(find "$GASCITY_SRC/internal/bootstrap/packs/core/orders" -name '*.toml' -exec basename {} .toml \; | sort | jq -Rn '[inputs] | map(@json) | join(", ")' -r)
+  [[ -n $ORDERS ]] || die "no built-in orders found under $GASCITY_SRC"
   cat >"$CITY_ROOT/city.toml" <<EOF
 [workspace]
 name = "my-city"
@@ -55,6 +58,10 @@ provider = "file"
 
 [session]
 provider = "subprocess"
+
+# The built-in maintenance orders would fill the board with their tracking beads.
+[orders]
+skip = [$ORDERS]
 
 [[rigs]]
 name = "frontend"
@@ -114,7 +121,8 @@ shot() {
   # shellcheck disable=SC2317 # a poll predicate, called by name
   shows_city() {
     mod_probe | jq -e '.connection.text == "connected" and .city == "my-city"
-      and (.sessions | length) == 2 and .board.ready.count >= 2 and .board.in_progress.count == 1' >/dev/null 2>&1
+      and (.sessions | length) == 2 and (.board.ready.cards | length) == 2
+      and (.board.in_progress.cards | length) == 1 and (.board.closed.recent + .board.closed.earlier | length) >= 1' >/dev/null 2>&1
   }
   poll 90 "the mod to show my-city" shows_city || { mod_probe >&2 || true; die "the mod never showed the city"; }
   # Let a full refresh land so every region has data, then hide the probe's own traces.

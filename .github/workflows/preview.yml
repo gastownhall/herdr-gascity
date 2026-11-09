@@ -34,6 +34,7 @@ jobs:
     env:
       HC_SESSION: canary
       CANARY_DISPLAY: xvfb
+      GASCITY_SRC: ${{ github.workspace }}/gascity-src
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -92,8 +93,6 @@ jobs:
 
       - name: P1 build gc at the pinned commit
         timeout-minutes: 12
-        env:
-          GASCITY_SRC: ${{ github.workspace }}/gascity-src
         run: canary/preview-linux.sh gc
 
       - name: P2 scratch city
