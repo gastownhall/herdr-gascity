@@ -33,6 +33,8 @@ export interface Parameter {
   in: "path" | "query" | "header" | "cookie";
   required?: boolean;
   schema?: Schema;
+  style?: string;
+  explode?: boolean;
 }
 
 export interface Operation {

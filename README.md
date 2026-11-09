@@ -130,7 +130,9 @@ the job summary; they need no secrets and only read.
   and compares it with the pin, restricted to the used surface
   (`scripts/used-surface-diff.ts`). A used operation, parameter or field that
   is gone, moved, newly required, or that gc may now omit or send with another
-  type fails; additions the decoders absorb (a new enum value, a renamed model
+  type fails, as does a request gc would now refuse (a tighter length or range
+  bound, a new pattern, format or const, fewer enum values) or a query
+  parameter serialized differently (`style`/`explode`); additions the decoders absorb (a new enum value, a renamed model
   with the same fields) are listed as compatible. Locally:
   `scripts/fetch-gc-spec.sh main /tmp/gc.json` then
   `bun run scripts/used-surface-diff.ts --upstream /tmp/gc.json --upstream-commit <sha>`.

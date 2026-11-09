@@ -7,7 +7,8 @@
 // against the other spec: a used operation, field or parameter gone or moved;
 // a response field gc may now omit or send with another type; a request gc
 // would now refuse (a new required field or parameter, a narrower type or
-// enum). Additions the decoders already absorb (a new enum value, a narrower
+// enum, a tighter value constraint, a query parameter serialized
+// differently). Additions the decoders already absorb (a new enum value, a narrower
 // response type, a renamed model with the same fields) are compatible: listed,
 // not failing. Models are matched by where the operations reach them, not by
 // name, so a renamed component is compared with its old self.
@@ -95,6 +96,8 @@ class Differ {
         continue;
       }
       if (!p.required && u.required) this.add("breaking", where, id, "now required");
+      const [ps, us] = [serialization(p), serialization(u)];
+      if (ps !== us) this.add("breaking", where, id, `serialization changed: ${ps} -> ${us}`);
       this.schema(where, id, p.schema ?? {}, u.schema ?? {}, "send");
     }
     for (const u of up) {
@@ -154,6 +157,7 @@ class Differ {
     if (!accepts(to, from)) this.add("breaking", where, via, `type changed: ${label(pTypes)} -> ${label(uTypes)}`);
     else if (label(pTypes) !== label(uTypes)) this.add("compatible", where, via, `type changed: ${label(pTypes)} -> ${label(uTypes)}`);
     this.enums(where, via, p.enum, u.enum, side);
+    if (side === "send") this.constraints(where, via, p, u);
     if (p.items || u.items) this.schema(`${where}[]`, via, p.items ?? {}, u.items ?? {}, side);
     const pAdd = objectOrNull(p.additionalProperties);
     const uAdd = objectOrNull(u.additionalProperties);
@@ -177,6 +181,32 @@ class Differ {
       if (removed.length > 0) this.add("breaking", where, via, `enum values removed: ${list(removed)}`);
       if (added.length > 0) this.add("compatible", where, via, `new enum values: ${list(added)}`);
     }
+  }
+
+  /**
+   * Value constraints on what the mod sends: gc validates them, so a tighter
+   * bound, a new or changed pattern, format or const can refuse a request
+   * that the pin accepted. A looser one is compatible. (On the decode side the
+   * decoders check types, not these constraints.)
+   */
+  private constraints(where: string, via: string, pin: Schema, up: Schema): void {
+    const bound = (key: string, tighter: (p: number, u: number) => boolean) => {
+      const p = typeof pin[key] === "number" ? (pin[key] as number) : undefined;
+      const u = typeof up[key] === "number" ? (up[key] as number) : undefined;
+      if (p === u) return;
+      const show = (v: number | undefined) => (v === undefined ? "none" : String(v));
+      const breaking = u !== undefined && (p === undefined || tighter(p, u));
+      this.add(breaking ? "breaking" : "compatible", where, via, `${key} changed: ${show(p)} -> ${show(u)}`);
+    };
+    for (const key of ["maxLength", "maxItems", "maxProperties", "maximum", "exclusiveMaximum"]) bound(key, (p, u) => u < p);
+    for (const key of ["minLength", "minItems", "minProperties", "minimum", "exclusiveMinimum"]) bound(key, (p, u) => u > p);
+    for (const key of ["pattern", "format", "const", "multipleOf"]) {
+      const [p, u] = [pin[key], up[key]];
+      if (JSON.stringify(p) === JSON.stringify(u)) continue;
+      const show = (v: unknown) => (v === undefined ? "none" : JSON.stringify(v));
+      this.add(u === undefined ? "compatible" : "breaking", where, via, `${key} changed: ${show(p)} -> ${show(u)}`);
+    }
+    if (up.uniqueItems === true && pin.uniqueItems !== true) this.add("breaking", where, via, "items must now be unique");
   }
 
   /** The object model a schema refers to, or null for a scalar or inline schema. */
@@ -218,6 +248,13 @@ function label(t: Set<string> | null): string {
 
 function describe(schema: Schema): string {
   return schema.$ref ? refName(schema.$ref) : label(types(schema));
+}
+
+/** How a parameter is serialized, with OpenAPI's defaults filled in. */
+function serialization(p: Parameter): string {
+  const style = p.style ?? (p.in === "query" || p.in === "cookie" ? "form" : "simple");
+  const explode = p.explode ?? style === "form";
+  return `style=${style} explode=${explode}`;
 }
 
 function objectOrNull(value: Schema["additionalProperties"]): Schema | null {
