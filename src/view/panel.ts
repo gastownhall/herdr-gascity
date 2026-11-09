@@ -2,16 +2,17 @@
 // no host calls, no I/O. Clicks call the actions in the model.
 
 import { div } from "gpui-kit";
-import { v_flex } from "gpui-base";
+import { h_flex, v_flex } from "gpui-base";
 import type { CopyView } from "../copy.ts";
 import type { ThemeRead } from "../host.ts";
 import { renderAgents, type AgentsActions } from "./agents.ts";
+import { renderBoard, type BoardActions } from "./board.ts";
 import { renderDetail, type DetailActions } from "./detail.ts";
 import { renderHeader, type HeaderActions } from "./header.ts";
 import { label, muted, themedRoot } from "./text.ts";
 
 /** What a click may do; main.ts supplies them. */
-export interface PanelActions extends HeaderActions, AgentsActions, DetailActions {
+export interface PanelActions extends HeaderActions, AgentsActions, BoardActions, DetailActions {
   toggleDiagnostics(cx: GpuiContext): void;
 }
 
@@ -60,7 +61,11 @@ export function renderPanel(model: PanelModel): GpuiElement {
   }
   const { view, theme, actions } = model;
   root = root.children(renderHeader(view.header, theme, actions));
-  if (view.agents !== null) root = root.child(renderAgents(view.agents, theme, actions));
+  // Agents beside the work board; the session detail below both.
+  const regions: GpuiElement[] = [];
+  if (view.agents !== null) regions.push(div().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme, actions)));
+  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme, actions));
+  if (regions.length > 0) root = root.child(h_flex().id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme, actions);
   if (detail !== null) root = root.child(detail);
   const diag = diagnostics(model);

@@ -11,7 +11,7 @@ import { ok } from "../../src/result.ts";
 import { ProbeWriter, type ProbeIo } from "../../src/probe.ts";
 import { SyncRegistry, TICK_MS } from "../../src/sync/registry.ts";
 import type { VisibilityInput } from "../../src/sync/visibility.ts";
-import { FakeGc, FakeHost, type Owner } from "./sync/fakes.ts";
+import { FakeGc, FakeHost, fixtureBody, type Owner } from "./sync/fakes.ts";
 
 const API = "http://127.0.0.1:8372";
 
@@ -139,6 +139,80 @@ describe("a copy", () => {
     expect(gc.count("/session/sc-20", seen)).toBe(0);
   });
 
+  test("renders the work board from the shared snapshot: columns without infrastructure beads, the closed seed by creation time, a bead in Ready not listed as closed", async () => {
+    const { host, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    const board = a.copy.view(host.now()).board;
+    expect(board?.ready.cards.map((c) => c.id)).toEqual(["sc-18", "fe-1", "sc-58", "sc-74"]);
+    expect(board?.inProgress.empty).toBe("nothing in progress");
+    expect(board?.closed.recent).toEqual([]);
+    // the recorded seed has sc-74 closed and a session bead; the recorded Ready column has sc-74 open again
+    expect(board?.closed.earlier.map((c) => c.id)).not.toContain("sc-60");
+    expect(board?.closed.earlier.map((c) => c.id)).not.toContain("sc-74");
+    expect(board?.closed.earlier[0]).toMatchObject({ id: "sc-73", closeReason: "order dispatch completed: tracking bead lifecycle finished" });
+    expect(board?.hidden).toBe(1);
+  });
+
+  test("a bead.closed event puts the bead at the top of Recently closed, with gc's close reason", async () => {
+    const { host, gc, open } = setup();
+    let closed = false;
+    gc.override = (req) => {
+      if (req.path === "/v0/city/scratch/bead/fe-1") {
+        return { status: 200, body: { id: "fe-1", title: "Frontend rig task", status: "closed", issue_type: "task", labels: [], created_at: "t", close_reason: "canary done" } };
+      }
+      if (closed && req.path === "/v0/city/scratch/work/ready" && !req.query.has("status")) {
+        const body = fixtureBody("get-v0-city-by-city-name-work-ready", "ready") as { items: { id: string }[] };
+        return { status: 200, body: { items: body.items.filter((b) => b.id !== "fe-1") } };
+      }
+      return undefined;
+    };
+    const a = await open();
+    await host.advance(3000);
+    closed = true;
+    gc.emit({ type: "bead.closed", subject: "fe-1" });
+    await host.advance(3000);
+    const board = a.copy.view(host.now()).board;
+    expect(board?.closed.recent.map((c) => [c.id, c.closeReason])).toEqual([["fe-1", "canary done"]]);
+    expect(board?.ready.cards.map((c) => c.id)).not.toContain("fe-1");
+  });
+
+  test("selecting a bead watches it (its description comes by id); deselecting releases it", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    a.copy.selectBead("sc-74");
+    await host.advance(1000);
+    expect(gc.count("/bead/sc-74")).toBe(1);
+    const d = a.copy.view(host.now()).beadDetail;
+    expect(d).toMatchObject({ kind: "bead", id: "sc-74", description: "recorded for the herdr-gascity contract fixtures" });
+    expect(a.copy.view(host.now()).board?.ready.cards.find((c) => c.id === "sc-74")?.selected).toBe(true);
+    a.copy.selectBead(null);
+    expect(a.copy.view(host.now()).beadDetail).toEqual({ kind: "none" });
+    const seen = gc.seen.length;
+    gc.emit({ type: "bead.updated", subject: "sc-74", payload: { bead: { id: "sc-74", title: "t", status: "open", issue_type: "task", labels: [], created_at: "t" } } });
+    await host.advance(3000);
+    expect(gc.count("/bead/sc-74", seen)).toBe(0);
+  });
+
+  test("switching city clears the selected bead: it is not watched in the new city", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => (req.path === "/v0/cities"
+      ? { status: 200, body: { items: [{ name: "scratch", path: "/s", running: true }, { name: "other", path: "/o", running: true }], total: 2 } }
+      : undefined);
+    const a = await open({ pinned: undefined });
+    a.copy.selectCity("scratch");
+    await host.advance(3000);
+    a.copy.selectBead("sc-74");
+    await host.advance(1000);
+    expect(gc.count("/v0/city/scratch/bead/sc-74")).toBe(1);
+    a.copy.selectCity("other");
+    await host.advance(3000);
+    expect(a.copy.view(host.now()).header.city).toBe("other");
+    expect(a.copy.view(host.now()).beadDetail).toEqual({ kind: "none" });
+    expect(gc.count("/v0/city/other/bead/sc-74")).toBe(0);
+  });
+
   test("a city call answering 'not running' moves the copy to city stopped and ends its subscription", async () => {
     const { host, gc, registry, open } = setup();
     const a = await open();
@@ -167,8 +241,10 @@ describe("a copy", () => {
     await open();
     await host.advance(3000);
     const doc = JSON.parse(files.get("/app/data/gascity-probe/probe.json") ?? "{}");
-    expect(doc).toMatchObject({ schema: "gascity-herdr-probe/2", connection: { text: "connected" }, city: "scratch", visibility: { on_screen: true } });
+    expect(doc).toMatchObject({ schema: "gascity-herdr-probe/3", connection: { text: "connected" }, city: "scratch", visibility: { on_screen: true } });
     expect(doc.sessions.length).toBe(3);
+    expect(doc.board.ready.cards.map((c: { id: string }) => c.id)).toEqual(["sc-18", "fe-1", "sc-58", "sc-74"]);
+    expect(doc.board.closed.earlier[0]).toEqual({ id: "sc-73", title: "order:gate-sweep", close_reason: "order dispatch completed: tracking bead lifecycle finished", assignee: null });
     expect(doc.fetch_in_flight_max).toBeLessThanOrEqual(2);
   });
 

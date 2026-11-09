@@ -70,6 +70,11 @@ export function snapshot(parts: {
   details?: Map<string, DetailState>;
   beads?: Map<string, Slot<T.Bead>>;
   recent?: { seq: number; bead: T.Bead }[];
+  seed?: Slot<WorkList>;
+  incomplete?: boolean;
+  hiddenClosed?: number;
+  events?: Partial<CitySnapshot["events"]>;
+  onScreen?: boolean;
   errors?: CitySnapshot["errors"];
   connection?: CitySnapshot["connection"];
   polledAt?: number | null;
@@ -77,16 +82,16 @@ export function snapshot(parts: {
   return {
     rev: 1,
     key: { apiUrl: "http://127.0.0.1:8372", city: "scratch" },
-    onScreen: true,
+    onScreen: parts.onScreen ?? true,
     connection: parts.connection ?? { kind: "connected" },
-    events: { cursor: 5, polledAt: parts.polledAt === undefined ? NOW - 500 : parts.polledAt, error: null, held: false, resyncs: 0 },
+    events: { cursor: 5, polledAt: parts.polledAt === undefined ? NOW - 500 : parts.polledAt, error: null, held: false, resyncs: 0, ...parts.events },
     rigs: parts.rigs ?? slot(list([])),
     agents: parts.agents ?? slot(list([])),
     sessions: parts.sessions ?? slot(sessions([])),
     pending: parts.pending ?? slot(list([])),
     ready: parts.ready ?? slot({ items: [], unreadable: [] }),
     inProgress: parts.inProgress ?? slot({ items: [], unreadable: [] }),
-    closed: { seed: slot({ items: [], unreadable: [] }), recent: parts.recent ?? [], incomplete: false },
+    closed: { seed: parts.seed ?? slot({ items: [], unreadable: [] }), recent: parts.recent ?? [], incomplete: parts.incomplete ?? false, hidden: parts.hiddenClosed ?? 0 },
     peeks: parts.peeks ?? new Map(),
     details: parts.details ?? new Map(),
     beads: parts.beads ?? new Map(),

@@ -62,6 +62,12 @@ interface SyncSummary {
   stores: number;
   agents: { groups: { key: string; agents: { name: string; sessions: { id: string; status: { kind: string } }[] }[] }[]; region: { kind: string } };
   detail: { kind: string; id?: string };
+  board: {
+    hidden: number;
+    ready: { cards: { id: string }[] };
+    closed: { recent: { id: string; seq: number; closeReason: string | null }[]; earlier: { id: string }[] };
+  };
+  beadDetail: { kind: string; id?: string; closeReason?: string | null; description?: string | null };
   sanitized: string[];
 }
 
@@ -164,9 +170,9 @@ describe("the bundled gc client with zod, and the sync engine", () => {
     expect(parsed.results.length).toBeGreaterThan(40);
     expect(parsed.results.find((r) => r.fixture === "get-health/malformed")?.ok).toBe(false);
     const sync = (JSON.parse(quick.output) as { sync: SyncSummary }).sync;
-    expect(sync.cursor).toBe(4);
+    expect(sync.cursor).toBe(7);
     expect(sync.closed).toEqual([[2, "sc-74"]]);
-    expect(sync.batches).toEqual([{ seqs: [2, 3], resync: null }, { seqs: [4], resync: null }]);
+    expect(sync.batches).toEqual([{ seqs: [2, 3], resync: null }, { seqs: [4, 5, 6, 7], resync: null }]);
     expect(sync.outage.kind).toBe("backing-off");
     expect(sync.connection).toEqual({ kind: "connected" });
     expect(sync.errors).toBeGreaterThan(0);
@@ -177,6 +183,12 @@ describe("the bundled gc client with zod, and the sync engine", () => {
     expect(sync.agents.groups.map((g) => g.key)).toEqual(["rig:frontend", "city"]);
     expect(sync.agents.groups.flatMap((g) => g.agents.flatMap((a) => a.sessions.map((x) => x.id))).sort()).toEqual(["sc-20", "sc-5", "sc-6"]);
     expect(sync.detail).toMatchObject({ kind: "session", id: "sc-20" });
+    // the work board over the same snapshot: the closed bead left Ready and heads Recently closed
+    expect(sync.board.ready.cards.map((c) => c.id)).toEqual(["sc-18", "fe-1", "sc-58"]);
+    expect(sync.board.closed.recent).toMatchObject([{ id: "sc-74", seq: 2, closeReason: "closed in the scenario" }]);
+    expect(sync.board.closed.earlier.map((c) => c.id)).not.toContain("sc-60");
+    expect(sync.board.hidden).toBe(2); // the session bead in the seed, and the session close
+    expect(sync.beadDetail).toMatchObject({ kind: "bead", id: "sc-74", closeReason: "closed in the scenario", description: "recorded for the herdr-gascity contract fixtures" });
     expect(sync.sanitized).toEqual([
       "abcde f",
       "line\nnext",

@@ -1,5 +1,5 @@
-// The invalidation map: which gc event types make which store domains stale,
-// and which closed beads to fetch for the closed list. Anything not listed
+// The invalidation map: which gc event types make which store domains stale.
+// (The closed list follows the beads bead events carry: store.ts.) Anything not listed
 // maps to nothing: the 60 s safety sweep covers it, and an unknown event type
 // is not an error.
 //
@@ -15,17 +15,9 @@ import type { TypedEventStreamEnvelope } from "../gc/types.gen.ts";
 export const ALL_DOMAINS = ["rigs", "agents", "sessions", "pending", "ready", "inProgress"] as const;
 export type Domain = (typeof ALL_DOMAINS)[number];
 
-/** A closed bead named by a bead.closed event; `seq` orders the closed list by close time. */
-export interface ClosedRef {
-  id: string;
-  seq: number;
-}
-
 /** What a batch of events makes stale. */
 export interface Invalidation {
   domains: Set<Domain>;
-  /** Closed beads, oldest close first, one entry per bead at its latest close. */
-  closed: ClosedRef[];
   /** A city.* event: the supervisor's city list may have changed (owned by discovery). */
   cities: boolean;
 }
@@ -43,8 +35,7 @@ const PENDING = new Set(["session.pending", "session.pending_cleared"]);
 
 /** Maps events (any order) to the refetches they call for. */
 export function invalidationFor(events: readonly TypedEventStreamEnvelope[], known: KnownIds): Invalidation {
-  const inv: Invalidation = { domains: new Set(), closed: [], cities: false };
-  const closed = new Map<string, number>();
+  const inv: Invalidation = { domains: new Set(), cities: false };
   for (const e of events) {
     const t = e.type;
     const subject = e.subject;
@@ -59,13 +50,11 @@ export function invalidationFor(events: readonly TypedEventStreamEnvelope[], kno
         inv.domains.add("ready");
         inv.domains.add("inProgress");
       }
-      if (t === "bead.closed" && subject !== undefined) closed.set(subject, Math.max(closed.get(subject) ?? -Infinity, e.seq));
     } else if (t.startsWith("city.")) {
       inv.cities = true;
       inv.domains.add("rigs");
       inv.domains.add("agents");
     }
   }
-  inv.closed = [...closed].map(([id, seq]) => ({ id, seq })).sort((a, b) => a.seq - b.seq);
   return inv;
 }

@@ -302,3 +302,7 @@ export const RequestFailedPayloadSchema: z.ZodMiniType<T.RequestFailedPayload> =
   error_message: z.string(),
   session_id: z.optional(z.string()),
 });
+
+export const BeadEventPayloadSchema: z.ZodMiniType<T.BeadEventPayload> = z.object({
+  bead: BeadSchema,
+});

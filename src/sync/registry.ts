@@ -62,6 +62,8 @@ export interface Subscription {
   tick(): number;
   /** Watches a session's detail (output, wake reasons, pending prompt); returns the release. Released on unsubscribe too. */
   watchPeek(sessionId: string): () => void;
+  /** Watches a bead (an open bead detail): fetched by id, and again on an event about it; returns the release. Released on unsubscribe too. */
+  watchBead(beadId: string): () => void;
   /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
   refreshDetail(sessionId: string): void;
   /** "Retry now": re-arms held domains and makes a backing-off endpoint's probe due. */
@@ -242,13 +244,13 @@ export class SyncRegistry {
 
   private subscription(id: string, store: CityStore, endpoint: Endpoint): Subscription {
     const owner = {};
-    const peeks = new Set<() => void>();
+    const watches = new Set<() => void>();
     let active = true;
     const unsubscribe = () => {
       if (!active) return;
       active = false;
-      for (const release of [...peeks]) release();
-      peeks.clear();
+      for (const release of [...watches]) release();
+      watches.clear();
       store.abandonStartedBy(owner);
       const entry = this.stores.get(id);
       if (entry && --entry.subs <= 0) {
@@ -256,6 +258,15 @@ export class SyncRegistry {
         store.dispose();
         this.releaseEndpoint(endpoint, store);
       }
+    };
+    /** Tracks a store watch so the unsubscribe releases it. */
+    const watch = (release: () => void) => {
+      const once = () => {
+        watches.delete(once);
+        release();
+      };
+      watches.add(once);
+      return once;
     };
     return {
       key: store.key,
@@ -267,16 +278,8 @@ export class SyncRegistry {
         }
         return store.snapshot().rev;
       },
-      watchPeek: (sessionId) => {
-        if (!active) return () => {};
-        const release = store.watchPeek(sessionId);
-        const once = () => {
-          peeks.delete(once);
-          release();
-        };
-        peeks.add(once);
-        return once;
-      },
+      watchPeek: (sessionId) => (active ? watch(store.watchPeek(sessionId)) : () => {}),
+      watchBead: (beadId) => (active ? watch(store.watchBead(beadId)) : () => {}),
       refreshDetail: (sessionId) => {
         if (active) store.refreshDetail(sessionId);
       },

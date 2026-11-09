@@ -54,19 +54,10 @@ describe("event type → domains", () => {
   });
 });
 
-describe("closed beads and the city list", () => {
-  test("bead.closed subjects go to the closed list with the event's seq, newest last, deduped to the latest seq", () => {
-    const a = ev("bead.closed", "fe-9");
-    const b = ev("bead.closed", "sc-74");
-    const c = ev("bead.closed", "fe-9");
-    const inv = invalidationFor([a, b, c], known);
-    expect(inv.closed).toEqual([{ id: "sc-74", seq: b.seq }, { id: "fe-9", seq: c.seq }]);
-  });
-
+describe("bead events without a subject, and the city list", () => {
   test("bead events without a subject still refetch the board columns", () => {
     const inv = invalidationFor([ev("bead.closed"), ev("bead.updated")], known);
     expect([...inv.domains].sort()).toEqual(["inProgress", "ready"]);
-    expect(inv.closed).toEqual([]);
   });
 
   test("city.* events report a city-list change", () => {
@@ -76,6 +67,6 @@ describe("closed beads and the city list", () => {
 
   test("no events, no work", () => {
     const inv = invalidationFor([], known);
-    expect(inv.domains.size + inv.closed.length).toBe(0);
+    expect(inv.domains.size).toBe(0);
   });
 });

@@ -28,8 +28,16 @@
 //   3. marks sessions + pending stale at their cadence, everything at the
 //      sweep, and the watched detail peeks at theirs;
 //   4. refetches stale domains one request at a time (one request in flight
-//      per domain; a failing endpoint stops the step), then the beads named
-//      by bead.closed events (at most 10 per step) for the closed list.
+//      per domain; a failing endpoint stops the step), then, for the closed
+//      list, the beads whose event carried no readable bead (at most 10 per
+//      step).
+//
+// The closed list (closedList.ts) follows the beads gc's bead events carry:
+// a bead.closed event lists its bead, a later bead.updated or bead.deleted
+// about a listed (or seeded) bead drops it unless it is still closed, and
+// infrastructure beads are only counted. An event whose bead cannot be read
+// is recorded and the bead is fetched by id instead; after a gap every
+// listed bead is fetched again.
 //
 // An open detail (watchPeek) also gets, on demand: the session's wake
 // reasons (gc probes the runtime for each session it lists with them, so they
@@ -37,7 +45,8 @@
 // prompt (when the detail opens and whenever the city's pending list changes
 // for that session). Active beads that the board does not carry are fetched
 // by id, at most BEAD_FETCHES_PER_STEP per step, and again on an event about
-// them or at the sweep.
+// them or at the sweep. So is a watched bead (a copy's open bead detail), even
+// when the board shows it: the board's columns carry no description.
 //
 // A request the step was waiting for may be cancelled under it: dropped from
 // the fetch queue when the step is abandoned, or taken with the copy whose
@@ -56,6 +65,7 @@
 
 import type { Listed, Unreadable } from "../gc/decode.ts";
 import type { GcError } from "../gc/errors.ts";
+import { eventBead } from "../gc/events.ts";
 import * as ops from "../gc/ops.ts";
 import type * as T from "../gc/types.gen.ts";
 import type { Result } from "../result.ts";
@@ -63,7 +73,8 @@ import { backsOff } from "./backoff.ts";
 import { RECLAIM_AFTER_MS, type FetchPriority } from "./budget.ts";
 import type { Clock } from "./clock.ts";
 import type { Connection, Endpoint, EndpointListener } from "./endpoint.ts";
-import { ALL_DOMAINS, invalidationFor, type ClosedRef, type Domain } from "./invalidate.ts";
+import { ClosedList, type ClosedBead } from "./closedList.ts";
+import { ALL_DOMAINS, invalidationFor, type Domain } from "./invalidate.ts";
 import { DEBOUNCE_MS, intervalOf, plan, type TaskTimes } from "./scheduler.ts";
 import { freshness, type Freshness } from "./staleness.ts";
 import { EVENT_PAGE_LIMIT, readEventPage, type Resync } from "./watcher.ts";
@@ -123,11 +134,7 @@ export interface SessionList {
   partialErrors: string[];
 }
 
-/** A closed bead, ordered by close time = its bead.closed event's seq. */
-export interface ClosedBead {
-  readonly seq: number;
-  readonly bead: T.Bead;
-}
+export type { ClosedBead } from "./closedList.ts";
 
 /** The recently-closed data: a one-time seed (ordered by creation, the API has no close time) and closes seen in events. */
 export interface ClosedState {
@@ -136,6 +143,8 @@ export interface ClosedState {
   readonly recent: readonly ClosedBead[];
   /** Some closes were not fetched (too many at once, a gap, or a failed fetch). */
   readonly incomplete: boolean;
+  /** Infrastructure beads among the newest closes: hidden, never listed. */
+  readonly hidden: number;
 }
 
 /** The event watcher's state. */
@@ -301,11 +310,14 @@ export class CityStore implements EndpointListener {
     rigs: freshSlot(), agents: freshSlot(), sessions: freshSlot(), pending: freshSlot(), ready: freshSlot(), inProgress: freshSlot(),
   };
   private readonly due = new Map<Domain, Due>();
-  private closedQueue: ClosedRef[] = [];
+  /** Beads to fetch by id for the closed list: a close (`seq`) whose event carried no readable bead, or a recheck (`seq` null). */
+  private closedQueue: { id: string; seq: number | null }[] = [];
   private readonly peeks = new Map<string, Watch>();
   private readonly lookups = new Map<string, OnDemand<T.Bead>>();
+  /** Watched beads (open bead details) and how many watches each has. */
+  private readonly beadWatches = new Map<string, number>();
   private seed: MutableSlot<WorkList> & { due: boolean } = { ...freshSlot<WorkList>(), due: true };
-  private recent: ClosedBead[] = [];
+  private readonly closed = new ClosedList(MAX_CLOSED_RECENT);
   private incomplete = false;
   private events: { cursor: number | null; polledAt: number | null; error: GcError | null; held: boolean; resyncs: number } = {
     cursor: null, polledAt: null, error: null, held: false, resyncs: 0,
@@ -409,6 +421,23 @@ export class CityStore implements EndpointListener {
     };
   }
 
+  /** Starts (or joins) watching a bead: fetched by id, and again on an event about it or at the sweep; returns the release. */
+  watchBead(beadId: string): () => void {
+    this.beadWatches.set(beadId, (this.beadWatches.get(beadId) ?? 0) + 1);
+    this.syncLookups();
+    this.commit();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const n = (this.beadWatches.get(beadId) ?? 0) - 1;
+      if (n > 0) this.beadWatches.set(beadId, n);
+      else this.beadWatches.delete(beadId);
+      this.syncLookups();
+      this.commit();
+    };
+  }
+
   /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
   refreshDetail(sessionId: string): void {
     const w = this.peeks.get(sessionId);
@@ -438,6 +467,7 @@ export class CityStore implements EndpointListener {
       const now = this.deps.clock.now();
       for (const d of ALL_DOMAINS) this.mark(d, now, "snapshot");
       this.incomplete = true;
+      this.recheckClosed();
     }
     this.commit();
   }
@@ -673,6 +703,7 @@ export class CityStore implements EndpointListener {
     if (reading.resync) {
       this.events.resyncs++;
       this.incomplete = true;
+      this.recheckClosed();
       for (const d of ALL_DOMAINS) this.mark(d, at, "events");
     }
     const inv = invalidationFor(reading.newer, this.known());
@@ -682,7 +713,7 @@ export class CityStore implements EndpointListener {
       if (looked) looked.due = true;
     }
     if (reading.resync) for (const b of this.lookups.values()) b.due = true;
-    if (inv.closed.length > 0) this.closedQueue = [...this.closedQueue, ...inv.closed];
+    this.beadEvents(reading.newer);
     if (reading.newer.length > 0 || reading.resync) {
       const batch: EventBatch = { key: this.key, events: reading.newer, resync: reading.resync, citiesChanged: inv.cities };
       try {
@@ -795,14 +826,51 @@ export class CityStore implements EndpointListener {
     this.commit();
   }
 
+  /** Follows the closed list through bead events, oldest first. */
+  private beadEvents(events: readonly T.TypedEventStreamEnvelope[]): void {
+    for (const e of events) {
+      if (!e.type.startsWith("bead.") || e.subject === undefined) continue;
+      const decoded = eventBead(e);
+      if (!decoded.ok) this.record("events", decoded.error);
+      const bead = decoded.ok ? decoded.value : null;
+      if (e.type === "bead.closed") {
+        if (bead) this.closed.closed(e.seq, bead);
+        else this.queueClosed(e.subject, e.seq);
+      } else if (this.closed.has(e.subject) || this.seeded(e.subject)) {
+        if (e.type === "bead.deleted") this.closed.remove(e.subject);
+        else if (bead) this.closed.current(bead);
+        else this.queueClosed(e.subject, null);
+      }
+    }
+  }
+
+  /** The seed shows this bead (and gc has not said since that it is no longer closed). */
+  private seeded(id: string): boolean {
+    return !this.closed.dropped(id) && (this.seed.value?.items.some((b) => b.id === id) ?? false);
+  }
+
+  /** Queues a fetch by id: a close at `seq`, or (null) a recheck of a listed bead. A close supersedes a recheck. */
+  private queueClosed(id: string, seq: number | null): void {
+    const cur = this.closedQueue.find((c) => c.id === id);
+    if (cur && (seq === null || (cur.seq !== null && cur.seq >= seq))) return;
+    this.closedQueue = [...this.closedQueue.filter((c) => c.id !== id), { id, seq }];
+  }
+
+  /** Events may have been missed: fetch every listed bead again. */
+  private recheckClosed(): void {
+    for (const c of this.closed.recent()) this.queueClosed(c.bead.id, null);
+  }
+
   private async fetchClosed(step: Step): Promise<void> {
     if (this.closedQueue.length === 0) return;
-    const newestFirst = [...this.closedQueue].sort((a, b) => b.seq - a.seq);
-    if (newestFirst.length > BEAD_FETCHES_PER_STEP) {
+    const rechecks = this.closedQueue.filter((c) => c.seq === null);
+    let closes = this.closedQueue.filter((c) => c.seq !== null).sort((a, b) => (b.seq ?? 0) - (a.seq ?? 0));
+    if (closes.length > BEAD_FETCHES_PER_STEP) {
       this.incomplete = true;
-      this.closedQueue = newestFirst.slice(0, BEAD_FETCHES_PER_STEP);
+      closes = closes.slice(0, BEAD_FETCHES_PER_STEP);
     }
-    for (const ref of newestFirst.slice(0, BEAD_FETCHES_PER_STEP)) {
+    this.closedQueue = [...rechecks, ...closes];
+    for (const ref of this.closedQueue.slice(0, BEAD_FETCHES_PER_STEP)) {
       if (!this.gateOpen(step)) return;
       const r = await ops.getBead(this.deps.endpoint.client("snapshot", step), this.key.city, ref.id);
       if (!this.current(step)) return;
@@ -814,10 +882,11 @@ export class CityStore implements EndpointListener {
       }
       this.closedQueue = this.closedQueue.filter((c) => c !== ref);
       if (this.settle(r, `closed:${ref.id}`) && r.ok) {
-        const kept = this.recent.filter((c) => c.bead.id !== ref.id || c.seq > ref.seq);
-        if (!kept.some((c) => c.bead.id === ref.id)) kept.push({ seq: ref.seq, bead: r.value });
-        this.recent = kept.sort((a, b) => b.seq - a.seq).slice(0, MAX_CLOSED_RECENT);
+        if (ref.seq === null) this.closed.current(r.value);
+        else this.closed.closed(ref.seq, r.value);
         this.syncLookups();
+      } else if (!r.ok && r.error.kind === "http" && r.error.status === 404) {
+        this.closed.remove(ref.id);
       } else {
         this.incomplete = true;
       }
@@ -939,14 +1008,14 @@ export class CityStore implements EndpointListener {
     }
   }
 
-  /** Keeps a lookup for every active bead of a session or agent that the board does not carry, and only those. */
+  /** Keeps a lookup for every watched bead and every active bead of a session or agent that the board does not carry, and only those. */
   private syncLookups(): void {
     const onBoard = new Set<string>();
     for (const list of [this.slots.ready.value, this.slots.inProgress.value, this.seed.value]) {
       for (const b of list?.items ?? []) onBoard.add(b.id);
     }
-    for (const c of this.recent) onBoard.add(c.bead.id);
-    const wanted = new Set<string>();
+    for (const c of this.closed.recent()) onBoard.add(c.bead.id);
+    const wanted = new Set<string>(this.beadWatches.keys());
     for (const x of [...(this.slots.sessions.value?.items ?? []), ...(this.slots.agents.value?.items ?? [])]) {
       if (x.active_bead !== undefined && x.active_bead !== "" && !onBoard.has(x.active_bead)) wanted.add(x.active_bead);
     }
@@ -959,6 +1028,13 @@ export class CityStore implements EndpointListener {
   private slotOf<V>(s: MutableSlot<V>, dirty: boolean): Slot<V> {
     if (s.value === null && s.fetchedAt === null && s.error === null && dirty && !s.held) return EMPTY_SLOT;
     return { value: s.value, fetchedAt: s.fetchedAt, error: s.error, dirty, held: s.held };
+  }
+
+  /** The seed without the beads gc has since said are no longer closed or gone. */
+  private seedSlot(): Slot<WorkList> {
+    const v = this.seed.value;
+    if (v === null || !v.items.some((b) => this.closed.dropped(b.id))) return this.slotOf(this.seed, this.seed.due);
+    return this.slotOf({ ...this.seed, value: { ...v, items: v.items.filter((b) => !this.closed.dropped(b.id)) } }, this.seed.due);
   }
 
   private build(rev: number): CitySnapshot {
@@ -975,7 +1051,7 @@ export class CityStore implements EndpointListener {
       pending: this.slotOf(this.slots.pending, dirty("pending")),
       ready: this.slotOf(this.slots.ready, dirty("ready")),
       inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
-      closed: { seed: this.slotOf(this.seed, this.seed.due), recent: this.recent, incomplete: this.incomplete },
+      closed: { seed: this.seedSlot(), recent: this.closed.recent(), incomplete: this.incomplete, hidden: this.closed.hidden() },
       peeks: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
       beads: new Map([...this.lookups].map(([id, b]) => [id, this.slotOf(b, b.due)])),
