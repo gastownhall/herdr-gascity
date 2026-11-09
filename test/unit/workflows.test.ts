@@ -59,6 +59,17 @@ describe("workflows", () => {
   });
 });
 
+describe("preview.yml", () => {
+  test("never runs in main's context: only branch pushes other than main", async () => {
+    const w = (await workflows()).find(([n]) => n === "preview.yml")![1] as unknown as { on: Record<string, unknown> };
+    expect(Object.keys(w.on)).toEqual(["push"]);
+    const push = w.on["push"] as Record<string, unknown>;
+    expect(push["branches-ignore"]).toEqual(["main"]);
+    expect(push["branches"]).toBeUndefined();
+    expect(push["tags"]).toBeUndefined();
+  });
+});
+
 describe("release.yml", () => {
   const release = async () => (await workflows()).find(([n]) => n === "release.yml")![1];
 

@@ -6,12 +6,15 @@ name: Preview screenshot
 # `herdr-app shot` captures the window. The image is uploaded as an artifact;
 # a person reviews it and commits it as gascity/preview.png.
 #
-# This job runs herdr's published install.sh: it is never given a secret.
+# This job runs herdr's published install.sh, gc built from source and the Go
+# modules it pulls: it is never given a secret, and it never runs in main's
+# context (no dispatch, no schedule, no push to main), so nothing it could
+# write to the Actions cache is in a scope main, a tag or a release can read.
+# To refresh the preview, push a branch that touches one of the paths below.
 
 on:
-  workflow_dispatch:
   push:
-    branches: ["**"]
+    branches-ignore: [main]
     # The run installs the mod with install.sh, so it also checks the installer.
     paths:
       - .github/workflows/preview.yml
