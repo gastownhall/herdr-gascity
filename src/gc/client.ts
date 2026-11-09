@@ -86,10 +86,15 @@ export interface GcClient {
 
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})\/?$/;
 
+/** Is this an http URL of a loopback literal (127.0.0.1, localhost, [::1]) with a port and no path? */
+export function isLoopbackApiUrl(url: string): boolean {
+  const m = LOOPBACK.exec(url);
+  return m !== null && Number(m[2]) <= 65535;
+}
+
 /** Creates a client, refusing any API URL that is not a loopback literal with a port. */
 export function createGcClient(options: GcClientOptions): Result<GcClient, GcError> {
-  const m = LOOPBACK.exec(options.baseUrl);
-  if (!m || Number(m[2]) > 65535) return err({ kind: "not-loopback", url: options.baseUrl });
+  if (!isLoopbackApiUrl(options.baseUrl)) return err({ kind: "not-loopback", url: options.baseUrl });
   const baseUrl = options.baseUrl.replace(/\/$/, "");
   const now = options.now ?? (() => Date.now());
   return ok({

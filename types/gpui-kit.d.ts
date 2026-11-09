@@ -22,11 +22,17 @@ interface GpuiElement {
   font_semibold(): GpuiElement;
   text_color(color: GpuiColor): GpuiElement;
   bg(color: GpuiColor): GpuiElement;
+  /** Needs an `id`. Keyboard activation counts as a click. */
+  on_click(handler: (event: unknown, cx: GpuiContext) => void): GpuiElement;
 }
 
 /** The context `render` gets. Never keep one past the call that got it. */
 interface GpuiContext {
   notify(): void;
+  /** Runs `body` as a task of this view; a rejection is reported, not swallowed. */
+  spawn(body: (cx: GpuiAsyncContext) => unknown): unknown;
+  /** Resolves after `ms` on GPUI's foreground executor. */
+  sleep(ms?: number): Promise<void>;
 }
 
 /** The context `init`, `close` and tasks get: valid across `await`. */

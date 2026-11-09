@@ -135,8 +135,9 @@ async function runInBun(): Promise<string> {
 
 describe("the bundled gc client with zod", () => {
   test("passes the authority lint with no allowlist: tree-shaken zod/mini keeps no Function site", () => {
-    expect(ALLOWLIST).toEqual([]);
-    expect(lintSource("gascity/main.js", probe)).toEqual([]);
+    // No allowlist entry may cover a code-compiling site; the probe is linted with none at all.
+    expect(ALLOWLIST.filter((e) => e.rule === "function-constructor" || e.rule === "eval")).toEqual([]);
+    expect(lintSource("gascity/main.js", probe, [])).toEqual([]);
     expect(probe).toContain("config({ jitless: true });");
   });
 

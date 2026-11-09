@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  asyncContext, callsTo, element, evaluateModule, fakeGpui, fakeHerdr, findById, loadMod, moduleBody, nodeOf,
+  asyncContext, callsTo, element, evaluateModule, fakeGlobals, fakeGpui, fakeHerdr, findById, loadMod, moduleBody, nodeOf,
   renderContext, textOf,
 } from "../harness.ts";
 
@@ -64,12 +64,12 @@ describe("module loader", () => {
   });
 
   test("a named import the host module lacks fails at import, as herdr's module linker does", () => {
-    const source = 'import { exec } from "herdr";\nexport default class M {}';
+    const source = 'import { openOverlay } from "herdr";\nexport default class M {}';
     expect(() => evaluateModule(source, { ...fakeGpui(), herdr: fakeHerdr().module }))
-      .toThrow('module "herdr" does not provide an export named "exec"');
-    const aliased = 'import { theme as t, exec as e } from "herdr";\nexport default class M {}';
+      .toThrow('module "herdr" does not provide an export named "openOverlay"');
+    const aliased = 'import { theme as t, openOverlay as o } from "herdr";\nexport default class M {}';
     expect(() => evaluateModule(aliased, { ...fakeGpui(), herdr: fakeHerdr().module }))
-      .toThrow('does not provide an export named "exec"');
+      .toThrow('does not provide an export named "openOverlay"');
   });
 
   test("evaluates the module in strict mode, like an ES module", () => {
@@ -114,5 +114,62 @@ describe("contexts", () => {
     mod.init();
     mod.render();
     expect(mod.view.seen).toEqual([undefined, "function", "async", "render"]);
+  });
+});
+
+describe("script globals and tasks", () => {
+  test("the module sees the fake fetch and localStorage, never bun's", async () => {
+    const { globals, fetched, storage } = fakeGlobals({ replies: { "http://127.0.0.1:1/x": { status: 200, body: { a: 1 } } } });
+    const source = [
+      'import { View } from "gpui-kit";',
+      "export default class M extends View {",
+      "  async go() { localStorage.setItem(\"k\", \"v\"); const r = await fetch(\"http://127.0.0.1:1/x\", {}); return [r.status, await r.text()]; }",
+      "  async refused() { return fetch(\"http://127.0.0.1:2/y\", {}); }",
+      "}",
+    ].join("\n");
+    const Mod = evaluateModule(source, fakeGpui(), globals);
+    const m = new Mod();
+    expect(await m.go()).toEqual([200, '{"a":1}']);
+    expect(storage.get("k")).toBe("v");
+    await expect(m.refused()).rejects.toThrow("Connection refused");
+    expect(fetched.map((f) => f.url)).toEqual(["http://127.0.0.1:1/x", "http://127.0.0.1:2/y"]);
+  });
+
+  test("an omitted global is undefined to the module", () => {
+    const { globals } = fakeGlobals({ omitGlobals: ["fetch"] });
+    const Mod = evaluateModule('import { View } from "gpui-kit";\nexport default class M extends View { t() { return typeof fetch; } }', fakeGpui(), globals);
+    expect(new Mod().t()).toBe("undefined");
+  });
+
+  test("spawn runs tasks, settle waits for them and for tasks they spawn, sleep never passes on its own", async () => {
+    const cx = asyncContext();
+    const order: string[] = [];
+    cx.spawn(async (c: any) => {
+      order.push("a");
+      c.spawn(async () => { order.push("b"); });
+    });
+    let slept = false;
+    cx.spawn(async (c: any) => { await Promise.race([c.sleep(5), Promise.resolve()]); slept = true; });
+    await cx.settle();
+    expect(order).toEqual(["a", "b"]);
+    expect(cx.sleeps).toEqual([5]);
+    expect(slept).toBe(true);
+  });
+
+  test("settle rethrows a task's rejection", async () => {
+    const cx = asyncContext();
+    cx.spawn(async () => { throw new Error("task failed"); });
+    await expect(cx.settle()).rejects.toThrow("task failed");
+  });
+
+  test("the fake herdr module answers shared, home, readTextFile and exec", async () => {
+    const { module } = fakeHerdr({ shared: { k: { a: 1 } }, files: { "/f": "text" } });
+    const call = (name: string, ...args: unknown[]) => (module[name] as (...a: unknown[]) => unknown)(...args);
+    expect(call("shared", "k")).toEqual({ a: 1 });
+    expect(call("shared", "missing")).toBeNull();
+    expect(await call("readTextFile", "/f")).toBe("text");
+    expect(await call("readTextFile", "/absent")).toBeNull();
+    expect(await call("exec", "gc", ["supervisor", "status", "--json"], {})).toEqual({ code: 0, stdout: '{"running":true}', stderr: "" });
+    expect(typeof call("home")).toBe("string");
   });
 });

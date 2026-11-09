@@ -2,15 +2,17 @@
 
 Gas City inside the Herdr desktop app: a herdr-app mod that shows a city's rigs, agents and work and acts on them through gc's API.
 
-**Status: scaffold + gc client.** The mod loads and draws a placeholder panel.
-The typed gc API client (`src/gc/`) is built and contract-tested but not wired
-into the panel yet; discovery and the sync engine come next.
+**Status: scaffold, gc client, discovery.** The mod finds the gc API, lists
+the cities and shows the copy's city with its connection state in the header.
+Live data (the sync engine) and the agents and work panels come next.
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `src/` | TypeScript source of the mod. `main.ts` is the `View`; `host.ts` is the only module that touches herdr-app's host APIs; `host.schemas.ts` decodes the host data the mod reads; `view/` draws from a model and does no I/O. |
+| `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
+| `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `errorText.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
 | `api/` | `openapi.pinned.json`: gc's OpenAPI spec pruned to the used surface; `PIN`: the gascity commit and the sha256 of the full upstream file; `used-surface.json`: the operations and model fields the mod uses. |
 | `types/` | The subset of herdr-app's `herdr` and `gpui-kit`/`gpui-base` host modules the source uses. |
@@ -34,7 +36,10 @@ into the panel yet; discovery and the sync engine come next.
   `import * as herdr`. The namespace is used only as `herdr.<export>`.
   `herdr.run` and `herdr.exec` are called directly with a string-literal first
   argument from an allowlist: `tab.new`, `tab.select` and `mod.open`, and
-  the programs `xdg-open` and `open`. The mod imports nothing but `gpui-kit`,
+  the programs `xdg-open` and `open`. The one exception, listed in the lint's
+  `ALLOWLIST` by its exact text, is discovery's
+  `<gcBin> supervisor status --json` (fixed arguments; `src/host.ts` refuses a
+  `gcBin` that does not name `gc` before spawning). The mod imports nothing but `gpui-kit`,
   `gpui-base`, `herdr`, zod and its own modules. It does not use the host's
   `process` (whose `run` spawns programs).
 - **No code compiled at run time.** There is no `eval`, no `Function`
@@ -82,6 +87,33 @@ fails.
   `bun run gen:gc`, then re-record the fixtures against a throwaway city started
   from that gc build (`bun run record:gc --throwaway-city …`; see the header of
   `test/contract/record.ts`).
+
+## Discovery
+
+Each copy of the mod finds gc's API on this machine. Candidates, first that
+answers `GET /health` within 5 s wins:
+
+1. the `apiUrl` setting;
+2. the URL gc reports in `gc supervisor status --json` (`api_url`), when gc
+   prints one;
+3. `[supervisor]` `bind`/`port` in `~/.gc/supervisor.toml` (`0.0.0.0` and `::`
+   dial loopback, as gc does). The reader is strict: anything in those keys it
+   cannot read for sure is shown with its line, and resolution stops there;
+4. `http://127.0.0.1:8372`.
+
+Only loopback URLs (`127.0.0.1`, `localhost`, `[::1]`, with a port) are used;
+any other is refused, not probed. The header names the URL, gc's version and
+where the URL came from; the diagnostics list every candidate and its outcome.
+A gc home other than `~/.gc` needs the `apiUrl` setting (a mod cannot read
+environment variables).
+
+Settings are machine-wide, in herdr's shared store under `gascity.settings`:
+`apiUrl` and `gcBin` (`gc`, or the absolute path to it). A copy opened with
+`props: {city: "<name>"}` shows only that city. A copy opened without props
+shows its last choice (kept in that copy's localStorage), else the only
+running city, else asks. City states: discovering, no endpoint, cities failed,
+choose a city, unknown city, running, stopped; a running city also shows
+read-only and "gc too old" notices from gc's answers.
 
 ## Develop
 
