@@ -1,6 +1,6 @@
 name: Spike - herdr-app headless
 
-# M8a: can the released herdr-app run, render and host a mod on a GitHub-hosted
+# Spike: can the released herdr-app run, render and host a mod on a GitHub-hosted
 # runner with no GPU? Weston headless + Xwayland + lavapipe, the app installed
 # by herdr's published install.sh from a per-release local mirror.
 

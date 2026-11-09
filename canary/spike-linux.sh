@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The M8a spike's checks, run after bootstrap-linux.sh has the app up.
+# The spike's checks, run after bootstrap-linux.sh has the app up.
 #
 #   spike-linux.sh check      `herdr-app check` on the hello mod, copied into mods/
 #   spike-linux.sh types      `herdr-app types` writes the host .d.ts files headless
