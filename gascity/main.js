@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:17f034d2702122acf23f5350019868732d699e9f5b11b8be611bce0c2e3c619f over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:8b0ad2154783046467b749777382a4a5833de9b662236d7048fb8add354bc067 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -7071,6 +7071,38 @@ function sharedRegistry(create) {
   return shared3;
 }
 
+// src/sync/visibilityCache.ts
+var VISIBILITY_MAX_AGE_MS = 1e3;
+var VisibilityCache = class {
+  constructor(read) {
+    this.read = read;
+  }
+  read;
+  last = null;
+  stale = false;
+  /** The answer at `now`: the shared one while it is current, else a new read. */
+  get(now) {
+    const last = this.last;
+    if (last !== null) {
+      const age = now - last.at;
+      if (age >= 0 && (age < TICK_MS || !this.stale && age < VISIBILITY_MAX_AGE_MS)) return last.value;
+    }
+    const value = this.read();
+    this.last = { at: now, value };
+    this.stale = false;
+    return value;
+  }
+  /** herdr re-rendered a copy: its live data may have changed, so read again at the next tick window. */
+  invalidate() {
+    this.stale = true;
+  }
+};
+var shared4 = null;
+function sharedVisibilityCache(create) {
+  shared4 ??= create();
+  return shared4;
+}
+
 // src/view/panel.ts
 import { div as div6 } from "gpui-kit";
 import { h_flex as h_flex6, v_flex as v_flex6 } from "gpui-base";
@@ -7509,6 +7541,9 @@ function registry2() {
     onError: (key, entry) => logError(`gascity: ${key.city}: ${entry.source}: ${syncErrorText(entry.error)}`)
   }));
 }
+function visibility() {
+  return sharedVisibilityCache(() => new VisibilityCache(readVisibility));
+}
 function taskOf(task) {
   return { notify: () => task.notify(), sleep: (ms) => task.sleep(ms) };
 }
@@ -7531,7 +7566,7 @@ function setUp() {
   const copy = new CopyController({
     registry: reg,
     discovery,
-    host: { visibility: readVisibility, probeEnabled: readProbeEnabled, herdrVersion: readHerdrVersion, execLog: readExecLog },
+    host: { visibility: () => visibility().get(systemClock.now()), probeEnabled: readProbeEnabled, herdrVersion: readHerdrVersion, execLog: readExecLog },
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo))
   });
@@ -7696,6 +7731,7 @@ var GasCity = class extends View {
     if (this.state.kind === "ready") this.state.copy.close();
   }
   render(_cx) {
+    visibility().invalidate();
     const state = this.state;
     if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme2 = readTheme();

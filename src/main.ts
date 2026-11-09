@@ -25,6 +25,7 @@ import { DiscoveryController, type DiscoveryTask } from "./discovery/controller.
 import { ProbeWriter, sharedProbeWriter } from "./probe.ts";
 import { systemClock } from "./sync/clock.ts";
 import { SyncRegistry, TICK_MS, sharedRegistry } from "./sync/registry.ts";
+import { VisibilityCache, sharedVisibilityCache } from "./sync/visibilityCache.ts";
 import { errorText } from "./vm/errorText.ts";
 import { syncErrorText } from "./vm/diagnostics.ts";
 import { renderPanel, type PanelActions, type PanelInputs } from "./view/panel.ts";
@@ -41,6 +42,11 @@ function registry(): SyncRegistry {
     fetch: hostFetch,
     onError: (key, entry) => logError(`gascity: ${key.city}: ${entry.source}: ${syncErrorText(entry.error)}`),
   }));
+}
+
+/** The app's visibility read: one per tick window for every copy (sync/visibilityCache.ts). */
+function visibility() {
+  return sharedVisibilityCache(() => new VisibilityCache(readVisibility));
 }
 
 /** A discovery task of the view that owns `cx`. */
@@ -68,7 +74,7 @@ function setUp(): Copy {
   const copy = new CopyController({
     registry: reg,
     discovery,
-    host: { visibility: readVisibility, probeEnabled: readProbeEnabled, herdrVersion: readHerdrVersion, execLog: readExecLog },
+    host: { visibility: () => visibility().get(systemClock.now()), probeEnabled: readProbeEnabled, herdrVersion: readHerdrVersion, execLog: readExecLog },
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
   });
@@ -250,6 +256,8 @@ export default class GasCity extends View {
   }
 
   override render(_cx: GpuiContext): GpuiElement {
+    // herdr renders again when its live data changes: the next tick reads visibility anew.
+    visibility().invalidate();
     const state = this.state;
     if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme = readTheme();

@@ -40,6 +40,42 @@ describe("the copy's lifecycle", () => {
   });
 });
 
+describe("visibility reads", () => {
+  test("herdr's panes(), focused() and layout() are read once per app per window, not by every copy every tick", async () => {
+    const mod = await loadMod({ route: gc() });
+    const b = mod.copy();
+    const c = mod.copy();
+    mod.init();
+    b.init();
+    c.init();
+    await mod.settle();
+    const before = mod.herdrCalls.filter((x) => x.name === "panes").length;
+    for (let i = 0; i < 8; i++) {
+      await mod.tick(250);
+      await b.tick(0);
+      await c.tick(0);
+    }
+    // 2 s of ticks by three copies (24 ticks): at most one read per second
+    const reads = mod.herdrCalls.filter((x) => x.name === "panes").length - before;
+    expect(reads).toBeGreaterThanOrEqual(1);
+    expect(reads).toBeLessThanOrEqual(3);
+    for (const name of ["focused", "layout"]) expect(mod.herdrCalls.filter((x) => x.name === name).length).toBeLessThanOrEqual(3);
+  });
+
+  test("a render (herdr re-renders on a live-data change) makes the next tick read again", async () => {
+    const mod = await loadMod({ route: gc() });
+    mod.init();
+    await mod.settle();
+    await mod.tick(250);
+    const before = mod.herdrCalls.filter((x) => x.name === "panes").length;
+    await mod.tick(250);
+    expect(mod.herdrCalls.filter((x) => x.name === "panes").length).toBe(before);
+    mod.render();
+    await mod.tick(250);
+    expect(mod.herdrCalls.filter((x) => x.name === "panes").length).toBe(before + 1);
+  });
+});
+
 describe("agents panel", () => {
   test("rigs → agents → sessions, with status, pool, and sessions that match no agent never dropped", async () => {
     const mod = await running();
