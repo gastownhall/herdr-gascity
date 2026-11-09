@@ -1,0 +1,8 @@
+# A session runs canary-agent.sh: it prints "CANARY READY <alias>", then
+# reads lines typed into its terminal. Sessions are made on demand (the test
+# creates one through the mod) and never time out during a run.
+start_command = "sh {{.ConfigDir}}/assets/canary-agent.sh"
+prompt_mode = "none"
+min_active_sessions = 0
+idle_timeout = "2h"
+sleep_after_idle = "off"

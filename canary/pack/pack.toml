@@ -1,0 +1,7 @@
+# The canary pack: one deterministic, LLM-free agent for the integration
+# test and the nightly canary. No credentials, no network except the city's
+# own gc API on loopback.
+
+[pack]
+name = "canary"
+schema = 2

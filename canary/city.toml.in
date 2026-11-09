@@ -1,0 +1,23 @@
+# The canary city: the canary pack's deterministic agent on gc's file bead
+# store and the city's own tmux socket. canary/city.ts fills these
+# placeholders and runs `gc init --file` with the result:
+#
+#   @SOCKET@    the city's tmux socket name (tmux -L), unique per run
+#   @PACK_DIR@  the absolute path of canary/pack
+#   @API_URL@   the gc API on loopback, for the agent's bead close
+#   @CITY@      the city's name
+
+[workspace]
+
+[beads]
+provider = "file"
+
+[session]
+socket = "@SOCKET@"
+
+[imports.canary]
+source = "@PACK_DIR@"
+
+[[patches.agent]]
+name = "canary-agent"
+env = { CANARY_API_URL = "@API_URL@", CANARY_CITY = "@CITY@" }
