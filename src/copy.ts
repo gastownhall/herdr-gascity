@@ -97,6 +97,8 @@ export interface CopyDeps {
   window?: boolean;
   /** The app's command book (commandBook.ts), shared by every copy; default: one of this copy's own. */
   commands?: CommandBook;
+  /** Whether any of this copy's text boxes holds text: the window then does not switch sessions on its own. */
+  draft?: () => boolean;
 }
 
 /** What only the view around a copy can do for a command (main.ts). */
@@ -119,6 +121,8 @@ export interface WindowModel {
   pending: { session: string; label: string; kind: string }[];
   /** Tabs holding a Gas City pane (herdr's ids), for "Show Gas City tab". */
   tabs: string[];
+  /** A newer target held back while a draft is typed (cleaned): shown on request. */
+  next: { city: string; session: string } | null;
 }
 
 /** A question the copy asks before acting, or a form. */
@@ -246,6 +250,8 @@ export class CopyController {
   /** The seq of the last shared focus target the window applied. */
   private focusApplied = 0;
   private focusShown: { city: string; session: string } | null = null;
+  /** A newer shared target the window holds back while a text box holds a draft. */
+  private focusNext: { city: string; session: string } | null = null;
   private gascityTabs: string[] = [];
   /** The Idempotency-Key a command's nonce gives the action it sends (only while that command runs). */
   private commandKey: string | null = null;
@@ -313,7 +319,7 @@ export class CopyController {
 
     const signature = [
       this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.city?.activity().rev ?? -1, this.onScreen, this.selected,
-      this.selectedBead, this.notice ?? "", this.gascityTabs.join(","), this.focusShown?.session ?? "",
+      this.selectedBead, this.notice ?? "", this.gascityTabs.join(","), this.focusShown?.session ?? "", this.focusNext?.session ?? "",
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -466,13 +472,18 @@ export class CopyController {
   }
 
   /**
-   * Sends text to a session gc lists: the send box (for the session whose
-   * detail drew it, never the selection at send time) and the
-   * submit/interrupt/message commands. Returns whether it was sent (the
-   * caller then clears its input).
+   * Sends text to a session gc lists: the send box (its Send buttons name
+   * the session whose detail drew them, Enter the open session) and the
+   * submit/interrupt/message commands. A draft typed for another session
+   * (`typedFor`) is refused, never redirected. Returns whether it was sent
+   * (the caller then clears its input).
    */
-  sendInputTo(id: string | null, text: string, mode: InputMode): boolean {
+  sendInputTo(id: string | null, text: string, mode: InputMode, typedFor: string | null = null): boolean {
     if (id === null) return this.refuse("open a session first");
+    // A draft belongs to the session it was typed for: it is never sent to another.
+    if (typedFor !== null && typedFor !== id) {
+      return this.refuse(`this text was typed for session ${cleanLine(typedFor)}: open that session to send it, or clear the box`);
+    }
     if (!this.listed(id)) return this.refuse(`session ${cleanLine(id)} is not listed by gc`);
     if (text.trim() === "") return this.refuse("type a message first");
     const spec = mode === "message" ? sessionMessage(id, text) : sessionSubmit(id, text, mode);
@@ -681,7 +692,6 @@ export class CopyController {
       }
     }
     if (record.result === "refused") this.notice = cleanLine(`gascity.${record.command}: refused: ${record.detail}`);
-    if (record.result === "skipped") this.notice = cleanLine(`gascity.${record.command}: not run here: ${record.detail}`);
     this.commands().record(record);
     return record;
   }
@@ -891,8 +901,13 @@ export class CopyController {
       const t = focusToApply(this.deps.host.focusTarget(), this.focusApplied, now);
       if (t !== null) {
         this.focusApplied = t.seq;
-        this.focusSession(t.city, t.session);
+        this.focusNext = { city: t.city, session: t.session };
       }
+      // While a text box holds a draft the window stays where the person is typing: the newer target waits for "Show".
+      const n = this.focusNext;
+      const shown = this.focusShown;
+      const same = shown !== null && shown.city === n?.city && (shown.session === n.session || this.selected === n.session);
+      if (n !== null && (same || !(this.deps.draft?.() ?? false))) this.showNext();
     }
     const f = this.focusing;
     if (f === null) return;
@@ -913,6 +928,13 @@ export class CopyController {
     }
   }
 
+  /** The window shows the target it held back ("Show"). */
+  showNext(): void {
+    const n = this.focusNext;
+    this.focusNext = null;
+    if (n !== null) this.focusSession(n.city, n.session);
+  }
+
   private windowModel(): WindowModel {
     const s = this.city?.snapshot();
     const sessions = s?.sessions.value?.items ?? [];
@@ -921,7 +943,13 @@ export class CopyController {
       return { session: cleanLine(p.session_id), label: cleanLine(x?.alias || x?.template || p.session_id), kind: cleanLine(p.kind) };
     });
     const t = this.focusShown;
-    return { target: t ? { city: cleanLine(t.city), session: cleanLine(t.session) } : null, pending, tabs: this.gascityTabs };
+    const n = this.focusNext;
+    return {
+      target: t ? { city: cleanLine(t.city), session: cleanLine(t.session) } : null,
+      pending,
+      tabs: this.gascityTabs,
+      next: n ? { city: cleanLine(n.city), session: cleanLine(n.session) } : null,
+    };
   }
 
   // ---- actions ----------------------------------------------------------------------
@@ -984,6 +1012,11 @@ export class CopyController {
   private selectedRef(): string | null {
     const id = this.selected;
     return id !== null && this.listed(id) ? id : null;
+  }
+
+  /** The open session's id as gc sent it, if gc still lists it (the send box's session). */
+  openSession(): string | null {
+    return this.selectedRef();
   }
 
   /** Whether gc lists session `id` (by its id). */

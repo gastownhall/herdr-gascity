@@ -461,7 +461,8 @@ arguments separated by `:`; each argument is percent-encoded
 
 - **Once per app, in the right city.** Every command that changes gc state
   names its city first, and only a copy showing that city acts on it; any
-  other copy logs it as `skipped` and says so in its notice line. Copies
+  other copy logs it as `skipped` in the app's command log (no notice line,
+  so copies showing another city stay quiet). Copies
   share the mod's module, so the first copy of that city to get a delivery
   claims it and the others log a `duplicate`: the same text within 2 s is one
   delivery. An optional last raw argument `nonce=<id>` (letters, digits,
@@ -471,6 +472,19 @@ arguments separated by `:`; each argument is percent-encoded
   its claim up. Commands that only change what a copy shows (`focus`,
   `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) run in each copy
   that gets them.
+- **Retrying a scripted command.** Sending the same nonce again within 10
+  minutes is the same delivery: the command book logs it as a `duplicate`
+  and nothing reaches gc (unless the first delivery was refused, which gives
+  its claim up). So a script that retries after a failed or unknown outcome
+  needs a new nonce, and that is a new action with a new Idempotency-Key:
+  gc cannot deduplicate it against the first attempt, so if the first one
+  landed the retry may apply twice. Check the state first (the probe's
+  `actions` and gc's own API) before retrying. Reusing the same nonce after
+  the 10 minutes is sent again with the same Idempotency-Key, which gc
+  deduplicates only within its own 30-minute memory and not across a gc
+  restart; and where gc declares no key (pin, agent and rig actions, sling,
+  bead close and reopen) nothing is deduplicated. The panel's own Retry
+  button keeps the key after an unknown outcome.
 - **Same path as the buttons.** Each command calls the same copy method its
   button calls, so it sends the same gc request and leaves the same entry in
   the activity log (the tests compare them pairwise).
@@ -565,7 +579,12 @@ sessions that need you, a "Show Gas City tab" button per tab holding a Gas
 City pane (`tab.select`) and Close. While it is open it keeps the shared
 flag `gascity.window` (`{open: true, at}`) fresh every 5 s and clears it on
 close; a flag older than 15 s is stale (a window that died with herdr) and
-ignored. `mod.open` toggles, so while the window is open toasts carry no
+ignored. While any of the window's text boxes holds a draft, a newer
+target does not replace the session being answered: the window offers it
+("Session B in city C needs you too", Show) and switches when Show is
+clicked or the boxes are empty. A send box draft belongs to the session it
+was typed for: Send and Enter refuse it for any other session, so a switch
+never carries text to another session. `mod.open` toggles, so while the window is open toasts carry no
 action; the open window follows each newer target by itself. Commands reach
 the window like any shown copy. Known limit: the authority lint checks a
 toast action's `name`, not its `args`.

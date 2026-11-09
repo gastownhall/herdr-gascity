@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:d51faee7f76523d4bd0672d171ac4c2249f355bc6d1cf59f651d003068dc0b73 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:93e38d1a373083b9559558b3796ccfc5e355cd170273a2b6761c052d0c344db9 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -6259,6 +6259,8 @@ var CopyController = class {
   /** The seq of the last shared focus target the window applied. */
   focusApplied = 0;
   focusShown = null;
+  /** A newer shared target the window holds back while a text box holds a draft. */
+  focusNext = null;
   gascityTabs = [];
   /** The Idempotency-Key a command's nonce gives the action it sends (only while that command runs). */
   commandKey = null;
@@ -6322,7 +6324,8 @@ var CopyController = class {
       this.selectedBead,
       this.notice ?? "",
       this.gascityTabs.join(","),
-      this.focusShown?.session ?? ""
+      this.focusShown?.session ?? "",
+      this.focusNext?.session ?? ""
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -6459,13 +6462,17 @@ var CopyController = class {
     this.city?.refreshAction(id2);
   }
   /**
-   * Sends text to a session gc lists: the send box (for the session whose
-   * detail drew it, never the selection at send time) and the
-   * submit/interrupt/message commands. Returns whether it was sent (the
-   * caller then clears its input).
+   * Sends text to a session gc lists: the send box (its Send buttons name
+   * the session whose detail drew them, Enter the open session) and the
+   * submit/interrupt/message commands. A draft typed for another session
+   * (`typedFor`) is refused, never redirected. Returns whether it was sent
+   * (the caller then clears its input).
    */
-  sendInputTo(id2, text2, mode) {
+  sendInputTo(id2, text2, mode, typedFor = null) {
     if (id2 === null) return this.refuse("open a session first");
+    if (typedFor !== null && typedFor !== id2) {
+      return this.refuse(`this text was typed for session ${cleanLine(typedFor)}: open that session to send it, or clear the box`);
+    }
     if (!this.listed(id2)) return this.refuse(`session ${cleanLine(id2)} is not listed by gc`);
     if (text2.trim() === "") return this.refuse("type a message first");
     const spec2 = mode === "message" ? sessionMessage(id2, text2) : sessionSubmit(id2, text2, mode);
@@ -6652,7 +6659,6 @@ var CopyController = class {
       }
     }
     if (record2.result === "refused") this.notice = cleanLine(`gascity.${record2.command}: refused: ${record2.detail}`);
-    if (record2.result === "skipped") this.notice = cleanLine(`gascity.${record2.command}: not run here: ${record2.detail}`);
     this.commands().record(record2);
     return record2;
   }
@@ -6848,8 +6854,12 @@ var CopyController = class {
       const t = focusToApply(this.deps.host.focusTarget(), this.focusApplied, now);
       if (t !== null) {
         this.focusApplied = t.seq;
-        this.focusSession(t.city, t.session);
+        this.focusNext = { city: t.city, session: t.session };
       }
+      const n = this.focusNext;
+      const shown = this.focusShown;
+      const same = shown !== null && shown.city === n?.city && (shown.session === n.session || this.selected === n.session);
+      if (n !== null && (same || !(this.deps.draft?.() ?? false))) this.showNext();
     }
     const f = this.focusing;
     if (f === null) return;
@@ -6869,6 +6879,12 @@ var CopyController = class {
       this.refuse(`could not show session ${cleanLine(f.session)}: city ${cleanLine(f.city)} is not running`);
     }
   }
+  /** The window shows the target it held back ("Show"). */
+  showNext() {
+    const n = this.focusNext;
+    this.focusNext = null;
+    if (n !== null) this.focusSession(n.city, n.session);
+  }
   windowModel() {
     const s = this.city?.snapshot();
     const sessions = s?.sessions.value?.items ?? [];
@@ -6877,7 +6893,13 @@ var CopyController = class {
       return { session: cleanLine(p.session_id), label: cleanLine(x?.alias || x?.template || p.session_id), kind: cleanLine(p.kind) };
     });
     const t = this.focusShown;
-    return { target: t ? { city: cleanLine(t.city), session: cleanLine(t.session) } : null, pending, tabs: this.gascityTabs };
+    const n = this.focusNext;
+    return {
+      target: t ? { city: cleanLine(t.city), session: cleanLine(t.session) } : null,
+      pending,
+      tabs: this.gascityTabs,
+      next: n ? { city: cleanLine(n.city), session: cleanLine(n.session) } : null
+    };
   }
   // ---- actions ----------------------------------------------------------------------
   send(spec2) {
@@ -6931,6 +6953,10 @@ var CopyController = class {
   selectedRef() {
     const id2 = this.selected;
     return id2 !== null && this.listed(id2) ? id2 : null;
+  }
+  /** The open session's id as gc sent it, if gc still lists it (the send box's session). */
+  openSession() {
+    return this.selectedRef();
   }
   /** Whether gc lists session `id` (by its id). */
   listed(id2) {
@@ -8554,7 +8580,11 @@ function renderWindowHead(m, theme2, actions) {
   const tabs = m.tabs.length === 1 ? [button("gascity-window-tab-0", "Show Gas City tab", (cx) => actions.showTab(m.tabs[0] ?? "", cx))] : m.tabs.map((t, i) => button(`gascity-window-tab-${i}`, `Show Gas City tab ${t}`, (cx) => actions.showTab(t, cx)));
   const bar = h_flex6().id("gascity-window-bar").gap(8).children([...tabs, button("gascity-window-close", "Close", (cx) => actions.closeWindow(cx))]);
   const list = m.pending.length === 0 ? muted(label("gascity-window-none", "No session needs you right now."), theme2) : v_flex6().id("gascity-window-pending").gap(2).children(m.pending.map((p, i) => label(`gascity-window-pending-${i}`, `${p.label} (session ${p.session}): ${p.kind}`).on_click((_, cx) => actions.selectSession(p.session, cx))));
-  return v_flex6().id("gascity-window").gap(6).child(target).child(bar).child(list);
+  let el = v_flex6().id("gascity-window").gap(6).child(target);
+  if (m.next !== null) {
+    el = el.child(h_flex6().id("gascity-window-next").gap(8).child(label("gascity-window-next-text", `Session ${m.next.session} in city ${m.next.city} needs you too.`)).child(button("gascity-window-next-show", "Show", (cx) => actions.showNext(cx))));
+  }
+  return el.child(bar).child(list);
 }
 
 // src/view/panel.ts
@@ -8647,6 +8677,7 @@ function setUp() {
   if (!last.ok) discovery.hostErrors.push(last.error);
   const overlay = overlayOf(props2);
   const focus = { handle: null };
+  const drafts = { any: () => false };
   const copy = new CopyController({
     registry: reg,
     discovery,
@@ -8662,9 +8693,10 @@ function setUp() {
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
     window: overlay !== null,
-    commands: sharedCommandBook()
+    commands: sharedCommandBook(),
+    draft: () => drafts.any()
   });
-  return { kind: "ready", copy, overlay, focus, box: { session: null } };
+  return { kind: "ready", copy, overlay, focus, box: { typedFor: null }, drafts };
 }
 function beadForm(inputs) {
   return {
@@ -8681,6 +8713,10 @@ function createBead2(copy, inputs) {
 function closeBead2(copy, inputs) {
   if (copy.closeBead(inputs.closeReason.value())) inputs.closeReason.set_value("");
 }
+function clearBox(message, box) {
+  message.set_value("");
+  box.typedFor = null;
+}
 function inputsFor(copy, box) {
   const message = InputState.new({ placeholder: "Message to the session" });
   const alias = InputState.new({ placeholder: "alias (optional)" });
@@ -8689,8 +8725,12 @@ function inputsFor(copy, box) {
   const beadPriority = InputState.new({ placeholder: "priority, e.g. 2 (optional)" });
   const beadLabels = InputState.new({ placeholder: "labels, comma-separated (optional)" });
   const closeReason = InputState.new({ placeholder: "close reason (optional)" });
+  message.on("change", () => {
+    if (message.value().trim() === "") box.typedFor = null;
+    else box.typedFor ??= copy.openSession();
+  });
   message.on("submit", (_, cx) => {
-    if (copy.sendInputTo(box.session, message.value(), "default")) message.set_value("");
+    if (copy.sendInputTo(copy.openSession(), message.value(), "default", box.typedFor)) clearBox(message, box);
     cx.notify();
   });
   alias.on("submit", (_, cx) => {
@@ -8727,6 +8767,10 @@ function actionsFor(state, inputs) {
   return {
     showTab: (tab, cx) => {
       selectTab(tab);
+      cx.notify();
+    },
+    showNext: (cx) => {
+      copy.showNext();
       cx.notify();
     },
     closeWindow: (cx) => {
@@ -8770,7 +8814,7 @@ function actionsFor(state, inputs) {
       cx.notify();
     },
     send: (sessionId, mode, cx) => {
-      if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode)) inputs.message.set_value("");
+      if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode, state.box.typedFor)) clearBox(inputs.message, state.box);
       cx.notify();
     },
     answer: (requestId, option, cx) => {
@@ -8840,6 +8884,8 @@ var GasCity = class extends View {
     if (state.kind !== "ready") return;
     const inputs = inputsFor(state.copy, state.box);
     this.inputs = inputs;
+    const boxes = [inputs.message, inputs.alias, inputs.beadTitle, inputs.beadDescription, inputs.beadPriority, inputs.beadLabels, inputs.closeReason];
+    state.drafts.any = () => boxes.some((b) => b.value().trim() !== "");
     if (typeof cx.focus_handle === "function") state.focus.handle = cx.focus_handle();
     if (state.overlay !== null) {
       setWindowOpen(true);
@@ -8895,7 +8941,6 @@ var GasCity = class extends View {
     const theme2 = readTheme();
     if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme: theme2, error: state.error });
     const view = state.copy.view(systemClock.now());
-    state.box.session = view.detail.kind === "session" ? view.detail.ref : null;
     return renderPanel({
       kind: "city",
       theme: theme2,

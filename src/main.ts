@@ -40,6 +40,18 @@ import { errorText } from "./vm/errorText.ts";
 import { syncErrorText } from "./vm/diagnostics.ts";
 import { renderPanel, type PanelActions, type PanelInputs, type PanelKeyboard } from "./view/panel.ts";
 
+/**
+ * The session the send box's text was typed for (the open session when
+ * typing started; null while the box is empty): a draft is never sent to
+ * another session.
+ */
+interface SendBox {
+  typedFor: string | null;
+}
+
+/** Whether any of the copy's text boxes holds text (set once init made them). */
+type Drafts = { any: () => boolean };
+
 /** What this copy can do, decided once in init; `overlay` is the window's overlay id (null for a tab or docked copy). */
 type Copy =
   | { kind: "host-incompatible"; missing: readonly string[] }
@@ -49,8 +61,9 @@ type Copy =
     copy: CopyController;
     overlay: string | null;
     focus: { handle: GpuiFocusHandle | null };
-    /** The session whose detail last drew the send box: Enter in the box sends there. */
-    box: { session: string | null };
+    /** Which session the send box's draft belongs to. */
+    box: SendBox;
+    drafts: Drafts;
   };
 
 /** The app's registry: one per module run, shared by every copy. */
@@ -92,6 +105,7 @@ function setUp(): Copy {
   if (!last.ok) discovery.hostErrors.push(last.error);
   const overlay = overlayOf(props);
   const focus: { handle: GpuiFocusHandle | null } = { handle: null };
+  const drafts: Drafts = { any: () => false };
   const copy = new CopyController({
     registry: reg,
     discovery,
@@ -108,8 +122,9 @@ function setUp(): Copy {
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
     window: overlay !== null,
     commands: sharedCommandBook(),
+    draft: () => drafts.any(),
   });
-  return { kind: "ready", copy, overlay, focus, box: { session: null } };
+  return { kind: "ready", copy, overlay, focus, box: { typedFor: null }, drafts };
 }
 
 /** The new-bead form's fields as typed. */
@@ -133,12 +148,18 @@ function closeBead(copy: CopyController, inputs: PanelInputs): void {
   if (copy.closeBead(inputs.closeReason.value())) inputs.closeReason.set_value("");
 }
 
+/** Empties the send box after a send: its next text is a new draft. */
+function clearBox(message: InputState, box: SendBox): void {
+  message.set_value("");
+  box.typedFor = null;
+}
+
 /**
  * The copy's text inputs; Enter in the send box sends, Enter in the alias
  * starts the session, Enter in the new bead's title creates it, Enter in the
  * close reason closes the bead.
  */
-function inputsFor(copy: CopyController, box: { session: string | null }): PanelInputs {
+function inputsFor(copy: CopyController, box: SendBox): PanelInputs {
   const message = InputState.new({ placeholder: "Message to the session" });
   const alias = InputState.new({ placeholder: "alias (optional)" });
   const beadTitle = InputState.new({ placeholder: "title (required)" });
@@ -146,8 +167,12 @@ function inputsFor(copy: CopyController, box: { session: string | null }): Panel
   const beadPriority = InputState.new({ placeholder: "priority, e.g. 2 (optional)" });
   const beadLabels = InputState.new({ placeholder: "labels, comma-separated (optional)" });
   const closeReason = InputState.new({ placeholder: "close reason (optional)" });
+  message.on("change", () => {
+    if (message.value().trim() === "") box.typedFor = null;
+    else box.typedFor ??= copy.openSession();
+  });
   message.on("submit", (_, cx) => {
-    if (copy.sendInputTo(box.session, message.value(), "default")) message.set_value("");
+    if (copy.sendInputTo(copy.openSession(), message.value(), "default", box.typedFor)) clearBox(message, box);
     cx.notify();
   });
   alias.on("submit", (_, cx) => {
@@ -187,6 +212,10 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
   return {
     showTab: (tab, cx) => {
       selectTab(tab);
+      cx.notify();
+    },
+    showNext: (cx) => {
+      copy.showNext();
       cx.notify();
     },
     closeWindow: (cx) => {
@@ -230,7 +259,7 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
       cx.notify();
     },
     send: (sessionId, mode, cx) => {
-      if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode)) inputs.message.set_value("");
+      if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode, state.box.typedFor)) clearBox(inputs.message, state.box);
       cx.notify();
     },
     answer: (requestId, option, cx) => {
@@ -302,6 +331,8 @@ export default class GasCity extends View {
     if (state.kind !== "ready") return;
     const inputs = inputsFor(state.copy, state.box);
     this.inputs = inputs;
+    const boxes = [inputs.message, inputs.alias, inputs.beadTitle, inputs.beadDescription, inputs.beadPriority, inputs.beadLabels, inputs.closeReason];
+    state.drafts.any = () => boxes.some((b) => b.value().trim() !== "");
     if (typeof cx.focus_handle === "function") state.focus.handle = cx.focus_handle();
     if (state.overlay !== null) {
       setWindowOpen(true);
@@ -366,7 +397,6 @@ export default class GasCity extends View {
     const theme = readTheme();
     if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme, error: state.error });
     const view = state.copy.view(systemClock.now());
-    state.box.session = view.detail.kind === "session" ? view.detail.ref : null;
     return renderPanel({
       kind: "city", theme, view, actions: actionsFor(state, this.inputs), inputs: this.inputs, keyboard: this.keyboard(state),
     });
