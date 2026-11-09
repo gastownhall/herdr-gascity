@@ -1,0 +1,66 @@
+name: gc drift
+
+# Compares gc main's OpenAPI spec with the pin (api/openapi.pinned.json),
+# restricted to the operations and fields in api/used-surface.json, and fails
+# when one the mod uses changed incompatibly. A failing run is the signal; the
+# job summary lists exactly which operation or field changed and how.
+
+on:
+  schedule:
+    - cron: "37 5 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: gastownhall/gascity branch, tag or commit to compare with the pin
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gc-drift-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  used-surface:
+    name: Used gc API surface vs gascity ${{ inputs.ref || 'main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Fetch gc's OpenAPI spec (read-only)
+        id: upstream
+        env:
+          GC_REF: ${{ inputs.ref || 'main' }}
+        run: |
+          commit=$(scripts/fetch-gc-spec.sh "$GC_REF" "$RUNNER_TEMP/gc-openapi.json")
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+      - name: Compare the used surface with the pin
+        env:
+          GC_REF: ${{ inputs.ref || 'main' }}
+          GC_COMMIT: ${{ steps.upstream.outputs.commit }}
+        run: >-
+          bun run scripts/used-surface-diff.ts --upstream "$RUNNER_TEMP/gc-openapi.json"
+          --upstream-ref "$GC_REF" --upstream-commit "$GC_COMMIT" --report "$RUNNER_TEMP/gc-drift.md"
+
+      - name: Job summary
+        if: always()
+        run: |
+          if [[ -s $RUNNER_TEMP/gc-drift.md ]]; then
+            cat "$RUNNER_TEMP/gc-drift.md" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "gc drift: no report (the spec was not fetched or the comparison did not run; see the log)" >>"$GITHUB_STEP_SUMMARY"
+          fi

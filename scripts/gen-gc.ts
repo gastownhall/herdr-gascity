@@ -55,6 +55,59 @@ interface Model {
   item: string | null;
 }
 
+/** A component schema by name. */
+export function component(spec: Spec, name: string): Schema {
+  const schema = spec.components.schemas[name];
+  if (!schema) throw new Error(`no component schema ${name} in the spec`);
+  return schema;
+}
+
+/** True for a component that is an object model (projected), false for a scalar (inlined). */
+export function isObjectModel(spec: Spec, name: string): boolean {
+  const s = component(spec, name);
+  return s.type === "object" || s.oneOf !== undefined;
+}
+
+/** A model property: its schema and whether the model requires it. */
+export interface Property {
+  schema: Schema;
+  required: boolean;
+}
+
+function properties(schema: Schema): Map<string, Property> {
+  const required = new Set(schema.required ?? []);
+  return new Map(Object.entries(schema.properties ?? {}).map(([k, v]) => [k, { schema: v, required: required.has(k) }]));
+}
+
+/**
+ * An object model's properties. A oneOf of object variants (gc's typed event
+ * envelope) projects to the fields the variants share: the same schema where
+ * they agree, string where they are all strings (a const per variant), else
+ * unknown. Required only when every variant requires it.
+ */
+export function componentProperties(spec: Spec, name: string): Map<string, Property> {
+  const schema = component(spec, name);
+  if (!schema.oneOf) return properties(schema);
+  const props = schema.oneOf.map((v) => {
+    if (!v.$ref) throw new Error(`${name}: oneOf variants must be $refs`);
+    return properties(component(spec, refName(v.$ref)));
+  });
+  const names = new Set(props.flatMap((p) => [...p.keys()]));
+  const out = new Map<string, Property>();
+  for (const field of names) {
+    const all = props.map((p) => p.get(field));
+    const present = all.filter((x): x is Property => x !== undefined);
+    const required = present.length === all.length && present.every((x) => x.required);
+    const shapes = new Set(present.map((x) => shapeKey(x.schema)));
+    let schema: Schema;
+    if (shapes.size === 1) schema = present[0]!.schema;
+    else if (present.every((x) => x.schema.type === "string")) schema = { type: "string" };
+    else schema = {};
+    out.set(field, { schema, required });
+  }
+  return out;
+}
+
 class Generator {
   private readonly models = new Map<string, Model>();
   private readonly order: string[] = [];
@@ -65,15 +118,11 @@ class Generator {
   }
 
   private component(name: string): Schema {
-    const schema = this.spec.components.schemas[name];
-    if (!schema) throw new Error(`no component schema ${name} in the pin`);
-    return schema;
+    return component(this.spec, name);
   }
 
-  /** True for a component that is an object model (projected), false for a scalar (inlined). */
   private isObjectModel(name: string): boolean {
-    const s = this.component(name);
-    return s.type === "object" || s.oneOf !== undefined;
+    return isObjectModel(this.spec, name);
   }
 
   /** Projects a component to its listed fields and records it, dependencies first. */
@@ -85,8 +134,7 @@ class Generator {
     }
     const entry = this.used.models[name];
     if (!entry) throw new Error(`${name} is reached from a used operation but not listed in ${USED_SURFACE}`);
-    const schema = this.component(name);
-    const props = schema.oneOf ? this.mergeVariants(name, schema.oneOf) : this.properties(schema);
+    const props = componentProperties(this.spec, name);
     const fields: Field[] = entry.fields.map((field) => {
       const p = props.get(field);
       if (!p) throw new Error(`${name}.${field} is listed in ${USED_SURFACE} but not in the pin`);
@@ -107,38 +155,6 @@ class Generator {
     this.models.set(name, model);
     for (const f of fields) this.dependencies(f.schema, side);
     this.order.push(name);
-  }
-
-  private properties(schema: Schema): Map<string, { schema: Schema; required: boolean }> {
-    const required = new Set(schema.required ?? []);
-    return new Map(Object.entries(schema.properties ?? {}).map(([k, v]) => [k, { schema: v, required: required.has(k) }]));
-  }
-
-  /**
-   * A oneOf of object variants (gc's typed event envelope) projects to the
-   * fields the variants share: the same schema where they agree, string where
-   * they are all strings (a const per variant), else unknown. Required only
-   * when every variant requires it.
-   */
-  private mergeVariants(name: string, variants: Schema[]): Map<string, { schema: Schema; required: boolean }> {
-    const props = variants.map((v) => {
-      if (!v.$ref) throw new Error(`${name}: oneOf variants must be $refs`);
-      return this.properties(this.component(refName(v.$ref)));
-    });
-    const names = new Set(props.flatMap((p) => [...p.keys()]));
-    const out = new Map<string, { schema: Schema; required: boolean }>();
-    for (const field of names) {
-      const all = props.map((p) => p.get(field));
-      const present = all.filter((x): x is { schema: Schema; required: boolean } => x !== undefined);
-      const required = present.length === all.length && present.every((x) => x.required);
-      const shapes = new Set(present.map((x) => shapeKey(x.schema)));
-      let schema: Schema;
-      if (shapes.size === 1) schema = present[0]!.schema;
-      else if (present.every((x) => x.schema.type === "string")) schema = { type: "string" };
-      else schema = {};
-      out.set(field, { schema, required });
-    }
-    return out;
   }
 
   private dependencies(schema: Schema, side: Side): void {
