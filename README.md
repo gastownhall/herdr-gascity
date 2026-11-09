@@ -294,8 +294,9 @@ it unsubscribes and starts nothing; the other copies keep updating.
   shows its most urgent session, or its own state without one. A value this
   version does not know is shown raw and listed in the diagnostics.
 - **Active bead.** Its title comes from the board's data, else from the bead
-  fetched by id (at most 10 per step, again on an event about it); it is
-  never guessed.
+  fetched by id (at most 10 per step, again on an event about it, after an
+  event gap, when gc comes back and on "retry now", but not at every sweep,
+  whose cost would grow with the city); it is never guessed.
 - **Detail pane.** Clicking a session opens it: gc's facts, the output (40
   lines, refreshed every 2 s while the pane is open and on screen), the wake
   reasons (fetched when it opens and on "retry now", because gc probes the

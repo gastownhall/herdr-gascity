@@ -45,8 +45,12 @@
 // prompt (when the detail opens and whenever the city's pending list changes
 // for that session). Active beads that the board does not carry are fetched
 // by id, at most BEAD_FETCHES_PER_STEP per step, and again on an event about
-// them or at the sweep. So is a watched bead (a copy's open bead detail), even
-// when the board shows it: the board's columns carry no description.
+// them, after an event gap, when the endpoint recovers and on "retry now":
+// gc emits an event for every bead change, so (like the board) they are as
+// current as the last good event poll, and the sweep, whose cost would grow
+// with the city, leaves them alone. A watched bead (a copy's open bead
+// detail) is fetched the same way, even when the board shows it (the board's
+// columns carry no description), and also at the sweep.
 //
 // A request the step was waiting for may be cancelled under it: dropped from
 // the fetch queue when the step is abandoned, or taken with the copy whose
@@ -395,6 +399,7 @@ export class CityStore implements EndpointListener {
   /** "Retry now": re-arms held domains and, if the endpoint is backing off, makes the probe due. */
   retryNow(): void {
     this.rearmHeld(this.deps.clock.now(), "snapshot");
+    for (const b of this.lookups.values()) b.due = true;
     this.deps.endpoint.retryNow();
     this.commit();
   }
@@ -487,6 +492,7 @@ export class CityStore implements EndpointListener {
     if (recovered) {
       const now = this.deps.clock.now();
       for (const d of ALL_DOMAINS) this.mark(d, now, "snapshot");
+      for (const b of this.lookups.values()) b.due = true;
       this.incomplete = true;
       this.recheckClosed();
     }
@@ -573,7 +579,10 @@ export class CityStore implements EndpointListener {
         this.last.sweep = now;
         this.rearmHeld(now, "sweep");
         for (const d of ALL_DOMAINS) this.mark(d, now, "sweep");
-        for (const b of this.lookups.values()) b.due = true;
+        for (const id of this.beadWatches.keys()) {
+          const b = this.lookups.get(id);
+          if (b) b.due = true;
+        }
       } else {
         this.last.peek = now;
         for (const q of this.peeks.values()) q.due = true;

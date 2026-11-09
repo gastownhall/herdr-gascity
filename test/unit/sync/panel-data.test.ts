@@ -155,6 +155,55 @@ describe("active beads", () => {
   });
 });
 
+describe("active beads off the board are refetched on events, not on every sweep", () => {
+  const withActive = (ids: string[]) => {
+    const body = fixtureBody("get-v0-city-by-city-name-sessions", "ok") as { items: Record<string, unknown>[] };
+    return { ...body, items: body.items.map((s, i) => (i < ids.length ? { ...s, active_bead: ids[i] } : s)) };
+  };
+
+  test("sweeps do not refetch them: three sweeps later each was fetched once", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => (req.path === "/v0/city/scratch/sessions" ? { status: 200, body: withActive(["fe-97", "fe-98", "fe-99"]) } : undefined);
+    await open();
+    await host.advance(3000);
+    await host.advance(3 * 60_000);
+    for (const id of ["fe-97", "fe-98", "fe-99"]) expect(gc.count(`/bead/${id}`)).toBe(1);
+    // the sweep did run
+    expect(gc.count("/rigs")).toBeGreaterThanOrEqual(4);
+  });
+
+  test("an event gap refetches them (an event about one may have been missed), as does gc coming back and retry now", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => (req.path === "/v0/city/scratch/sessions" ? { status: 200, body: withActive(["fe-99"]) } : undefined);
+    const a = await open();
+    await host.advance(3000);
+    gc.emit(...Array.from({ length: 60 }, () => ({ type: "order.fired" })));
+    await host.advance(3000);
+    expect(gc.count("/bead/fe-99")).toBe(2);
+    const sessionsOnly = gc.override;
+    gc.override = (req) => (req.path.endsWith("/events") ? { reject: "error sending request: connection refused" } : sessionsOnly?.(req));
+    await host.advance(3000);
+    gc.override = sessionsOnly;
+    await host.advance(70_000);
+    expect(a.sub.snapshot().connection).toEqual({ kind: "connected" });
+    expect(gc.count("/bead/fe-99")).toBe(3);
+    a.sub.retryNow();
+    await host.advance(1000);
+    expect(gc.count("/bead/fe-99")).toBe(4);
+  });
+
+  test("a bead the person has open is still checked at the sweep", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    a.sub.watchBead("fe-50");
+    await host.advance(1000);
+    expect(gc.count("/bead/fe-50")).toBe(1);
+    await host.advance(60_000);
+    expect(gc.count("/bead/fe-50")).toBe(2);
+  });
+});
+
 describe("a selected bead", () => {
   test("is fetched by id even when the board shows it (the board has no description), once, and again on an event about it", async () => {
     const { host, gc, open } = setup();

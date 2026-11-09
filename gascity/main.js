@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:1f23602f44c578b34a5e77c1d63c6ab8d76eec3a68a4bb4e76ead3744d62e2d3 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:72ae8cac1da89b1ee670d9c305aeb93d44350e91d2f894d7db73ab9f0d908ccd over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -4301,6 +4301,7 @@ var CityStore = class {
   /** "Retry now": re-arms held domains and, if the endpoint is backing off, makes the probe due. */
   retryNow() {
     this.rearmHeld(this.deps.clock.now(), "snapshot");
+    for (const b of this.lookups.values()) b.due = true;
     this.deps.endpoint.retryNow();
     this.commit();
   }
@@ -4388,6 +4389,7 @@ var CityStore = class {
     if (recovered) {
       const now = this.deps.clock.now();
       for (const d of ALL_DOMAINS) this.mark(d, now, "snapshot");
+      for (const b of this.lookups.values()) b.due = true;
       this.incomplete = true;
       this.recheckClosed();
     }
@@ -4462,7 +4464,10 @@ var CityStore = class {
         this.last.sweep = now;
         this.rearmHeld(now, "sweep");
         for (const d of ALL_DOMAINS) this.mark(d, now, "sweep");
-        for (const b of this.lookups.values()) b.due = true;
+        for (const id of this.beadWatches.keys()) {
+          const b = this.lookups.get(id);
+          if (b) b.due = true;
+        }
       } else {
         this.last.peek = now;
         for (const q of this.peeks.values()) q.due = true;
