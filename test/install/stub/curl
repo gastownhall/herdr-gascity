@@ -1,0 +1,18 @@
+#!/bin/sh
+# A stand-in for curl in install.sh's tests: records its arguments in
+# $STUB_DIR/curl.log and serves a URL from $STUB_DIR/www/<URL without its
+# scheme>; a URL it has no file for fails as `curl -f` does (exit 22).
+set -eu
+dir=${STUB_DIR:?}
+printf '%s\n' "$*" >>"$dir/curl.log"
+out="" url=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o) out=$2; shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+file=$dir/www/${url#*://}
+[ -f "$file" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
