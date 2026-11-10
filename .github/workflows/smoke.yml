@@ -251,6 +251,13 @@ jobs:
           fi
           jq -e '.failed_stage == "M2-check" and .failure_class == "product"' "$RUNNER_TEMP/herdr-canary/out/spike-result.json" >/dev/null ||
             { echo "::error::the smoke did not fail at M2-check"; exit 1; }
+          # Refused for the bundle itself, not for some other reason.
+          check=$RUNNER_TEMP/herdr-canary/out/check.txt
+          if ! grep -q '^check failed: ' "$check" || ! grep -q 'gascity/main\.js' "$check"; then
+            echo "::error::herdr-app check failed without naming the broken main.js"
+            cat "$check"
+            exit 1
+          fi
           echo "the smoke failed at M2-check, as it must"
 
       - name: Upload logs
