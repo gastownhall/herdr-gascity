@@ -127,9 +127,9 @@ describe("smoke.yml", () => {
     return { text, w: Bun.YAML.parse(text) as Workflow & { on: Record<string, { paths?: string[] } | unknown[]> } };
   };
 
-  test("runs on pushes and pull requests touching the mod, and nightly; never dispatched", async () => {
+  test("runs on pushes and pull requests touching the mod only: no schedule, never dispatched", async () => {
     const { w } = await smoke();
-    expect(Object.keys(w.on).sort()).toEqual(["pull_request", "push", "schedule"]);
+    expect(Object.keys(w.on).sort()).toEqual(["pull_request", "push"]);
     for (const event of ["push", "pull_request"] as const) {
       const paths = (w.on[event] as { paths?: string[] }).paths ?? [];
       expect(paths).toContain("src/**");
@@ -164,7 +164,7 @@ describe("smoke.yml", () => {
     const { w } = await smoke();
     const broken = w.jobs["broken-bundle"]!.steps;
     expect(broken.some((s) => s.run === "canary/mod-linux.sh package --broken")).toBe(true);
-    expect(broken.some((s) => (s.run ?? "").includes('.failed_stage == "M2-check"'))).toBe(true);
+    expect(broken.some((s) => (s.run ?? "").includes('.failed_stage == "check"'))).toBe(true);
     const runs = w.jobs["smoke"]!.steps.map((s) => s.run ?? "");
     for (const stage of ["package", "check", "install", "connected", "shot smoke.png"]) expect(runs).toContain(`canary/mod-linux.sh ${stage}`);
   });
