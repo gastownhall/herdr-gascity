@@ -11,7 +11,8 @@ import { renderDetail, type DetailActions } from "./detail.ts";
 import { renderActivity, renderDialog, renderNotice, type DialogActions, type DialogInputs } from "./dialogs.ts";
 import { renderHeader, type HeaderActions } from "./header.ts";
 import { renderWindowHead, type WindowActions } from "./needsYou.ts";
-import { label, muted, themedRoot } from "./text.ts";
+import { label, muted, shrinkIf, themedRoot } from "./text.ts";
+import type { PanelLayout } from "../vm/layout.ts";
 
 /** What a click may do; main.ts supplies them. */
 export interface PanelActions extends HeaderActions, AgentsActions, BoardActions, DetailActions, DialogActions, WindowActions {
@@ -30,9 +31,19 @@ export interface PanelInputs extends DialogInputs {
   message: InputState;
 }
 
+/** The copy's width as herdr laid it out, and where a new one is reported. */
+export interface PanelSize {
+  layout: PanelLayout;
+  /** herdr laid the root out at `width` logical px. */
+  resized(width: number, cx: GpuiContext): void;
+}
+
 /** What the panel shows. */
 export type PanelModel =
-  | { kind: "city"; theme: ThemeRead; view: CopyView; actions: PanelActions; inputs: PanelInputs | null; keyboard: PanelKeyboard | null }
+  | {
+    kind: "city"; theme: ThemeRead; view: CopyView; actions: PanelActions; inputs: PanelInputs | null; keyboard: PanelKeyboard | null;
+    size: PanelSize;
+  }
   | { kind: "copy-invalid"; theme: ThemeRead; error: string }
   | { kind: "host-incompatible"; missing: readonly string[] };
 
@@ -73,7 +84,9 @@ export function renderPanel(model: PanelModel): GpuiElement {
   if (model.kind === "copy-invalid") {
     return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
-  const { view, theme, actions, inputs, keyboard } = model;
+  const { view, theme, actions, inputs, keyboard, size } = model;
+  // The panel may be taller than its pane (the board stacked under the agents): it scrolls.
+  root = root.overflow_y_scroll().on_size_change((s, cx) => size.resized(s.width, cx));
   if (keyboard !== null) root = root.track_focus(keyboard.handle).on_key_down((e, cx) => keyboard.onKey(e, cx));
   root = root.children(renderHeader(view.header, theme, actions));
   const dialog = renderDialog(view.dialog, theme, actions, inputs);
@@ -89,11 +102,12 @@ export function renderPanel(model: PanelModel): GpuiElement {
     if (log !== null) root = root.child(log);
     return themeIssues(root, theme);
   }
-  // Agents beside the work board; the session detail below both.
+  // Agents beside the work board when the panel is wide enough, else the board under them; the session detail below both.
+  const beside = size.layout === "side-by-side";
   const regions: GpuiElement[] = [];
-  if (view.agents !== null) regions.push(div().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme, actions, view.activity)));
-  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme, actions, view.activity));
-  if (regions.length > 0) root = root.child(h_flex().id("gascity-main").gap(12).children(regions));
+  if (view.agents !== null) regions.push(shrinkIf(div().id("gascity-agents-region"), beside).child(renderAgents(view.agents, theme, actions, view.activity)));
+  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme, actions, view.activity, size.layout));
+  if (regions.length > 0) root = root.child((beside ? h_flex().items_start() : v_flex()).id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme, actions, { activity: view.activity, message: inputs?.message ?? null });
   if (detail !== null) root = root.child(detail);
   const activity = renderActivity(view.activity, theme, actions);

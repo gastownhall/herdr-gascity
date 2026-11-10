@@ -31,4 +31,13 @@ describe("errorText", () => {
     expect(errorText({ kind: "decode", operationId: "get-health", path: "items[0]", issues: ["x\u0007: bad"] }))
       .toBe("unreadable answer to get-health at items[0]: x: bad");
   });
+
+  test("a demand-only singleton gc will not start on request says how to start it", () => {
+    const detail = 'agent "frontend/builder" is a pool agent with max_active_sessions = 1 and no [[named_session]]: the controller starts its one session only while there is work for it and drains it when there is none; sling work to "frontend/builder" to start it, or declare a [[named_session]] for it to keep a session running';
+    expect(errorText({ kind: "http", status: 400, problem: { code: "demand-only-singleton", title: "Demand-Only Singleton Agent", detail, errors: [] } }))
+      .toBe(`gc starts this agent's one session only while it has work: sling a bead to it instead (gc: ${detail})`);
+    // Without a detail, still the hint.
+    expect(errorText({ kind: "http", status: 400, problem: { code: "demand-only-singleton", errors: [] } }))
+      .toBe("gc starts this agent's one session only while it has work: sling a bead to it instead");
+  });
 });

@@ -76,6 +76,7 @@ async function waitFor<T>(what: string, ms: number, probe: () => T | null | unde
 interface ProbeDoc {
   ts: string;
   connection: { text: string; tone: string };
+  banners: string[];
   discovery: { source: string; url: string; version: string } | null;
   city: string | null;
   city_phase: string;
@@ -344,7 +345,9 @@ describe("the mod against a scratch gc city", () => {
     steps.push({ step: "session running", sessionId, ms: elapsed });
     log(`session ${sessionId} running after ${elapsed} ms`);
     expect(elapsed).toBeLessThanOrEqual(90_000);
-    expect(newestAction(readProbe(main()), "session.new")?.state).toBe("done");
+    // gc may list the session running before the mod's next outcome poll (0.5, 1, 2, then every 2 s) learns the create is done.
+    await waitFor("the session.new action done in the mod", 15_000, () => newestAction(readProbe(main()), "session.new")?.state === "done", 200,
+      () => JSON.stringify(newestAction(readProbe(main()), "session.new") ?? null));
   }, 120_000);
 
   test("submit 'close <bead>' reaches the agent; the bead is in the closed ring within 60 s", async () => {
@@ -516,7 +519,7 @@ describe("the mod against a scratch gc city", () => {
     const source = readFileSync(BUNDLE, "utf8");
     const from = 'case "not-running":\n        break;\n    }\n    const woke = await wakeSession(';
     expect(source.includes(from)).toBe(true);
-    const brokenSource = source.replace(from, 'case "not-running":\n        return ok({ kind: "watch", watch: openNow() });\n    }\n    const woke = await wakeSession(');
+    const brokenSource = source.replace(from, 'case "not-running":\n        return ok({ kind: "watch", watch: openNow(), wrote: false });\n    }\n    const woke = await wakeSession(');
     const { app: broken, appHome } = newApp("no-wake", { gcBin: GC_BIN }, brokenSource);
     broken.addCopy();
     send(broken, "probe:on");
@@ -607,7 +610,15 @@ describe("the mod against a scratch gc city", () => {
   test("negative: a hardened city (signed write grants): reads work, a change fails with the write-grant reason", async () => {
     const { publicKey } = generateKeyPairSync("ed25519");
     const raw = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("base64");
+    // gc's graceful stop first takes the city off /v0/cities, then stops answering: the chip must end up
+    // saying gc is unreachable (or the city's store is reconnecting), never that the city is not registered.
     await city.stopSupervisor();
+    const down = await waitFor("the stopped supervisor read as unreachable", 60_000, () => {
+      const doc = readProbe(main());
+      return doc && /reconnecting in|not reachable/.test(doc.connection.text) ? doc : null;
+    }, 200, () => JSON.stringify(readProbe(main())?.connection ?? null));
+    expect(down.connection.text).not.toContain("not registered");
+    steps.push({ step: "graceful supervisor stop", chip: down.connection, phase: down.city_phase });
     await city.startSupervisor({ kind: "write-grants", verifyKey: `m7:${raw}` });
     await city.waitRunning();
     send(app, "refresh");
@@ -619,9 +630,13 @@ describe("the mod against a scratch gc city", () => {
     }, 200);
     expect(failed.state).toBe("failed");
     expect(failed.detail).toContain("this city requires a signed write grant");
-    const p = readProbe(main());
-    steps.push({ step: "hardened city", action: failed.detail, chip: p?.connection });
-    expect(p?.city_phase).toBe("city-running");
+    // The refusal is the city's, not only the action's: the header's chip and banner say so.
+    const p = await waitFor("the write-grant chip and banner", 10_000, () => {
+      const doc = readProbe(main());
+      return doc && doc.connection.text === "connected, read-only" && doc.banners.some((b) => b.includes("requires signed write grants")) ? doc : null;
+    }, 200, () => JSON.stringify({ connection: readProbe(main())?.connection ?? null, banners: readProbe(main())?.banners ?? null }));
+    steps.push({ step: "hardened city", action: failed.detail, chip: p.connection, banners: p.banners });
+    expect(p.city_phase).toBe("city-running");
   }, 200_000);
 
   test("negative: a read-only bind: reads work, a change fails with gc's read-only reason", async () => {
@@ -644,8 +659,11 @@ describe("the mod against a scratch gc city", () => {
     }, 200);
     expect(failed.state).toBe("failed");
     expect(failed.detail).toContain("gc serves this API read-only (read_only:");
-    const p = readProbe(appHome);
-    steps.push({ step: "read-only bind", action: failed.detail, chip: p?.connection });
+    const p = await waitFor("the read-only chip and banner", 10_000, () => {
+      const doc = readProbe(appHome);
+      return doc && doc.connection.text === "read-only server" && doc.banners.some((b) => b.includes("gc serves this API read-only (read_only:")) ? doc : null;
+    }, 200, () => JSON.stringify({ connection: readProbe(appHome)?.connection ?? null, banners: readProbe(appHome)?.banners ?? null }));
+    steps.push({ step: "read-only bind", action: failed.detail, chip: p.connection, banners: p.banners });
     await a.closeAll();
     await city.stopSupervisor();
     await city.startSupervisor();

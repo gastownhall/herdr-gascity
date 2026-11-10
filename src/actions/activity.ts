@@ -75,7 +75,8 @@ export interface Confirmation {
 export type Sent =
   | { kind: "done"; detail: string; created?: string }
   | { kind: "accepted"; requestId: string; afterSeq: string }
-  | { kind: "watch"; watch: Watch };
+  /** `wrote`: gc already accepted a change for this action (open terminal's wake); false when nothing was sent to change. */
+  | { kind: "watch"; watch: Watch; wrote: boolean };
 
 /** How a watched action ends. */
 export type WatchEnd =
@@ -172,8 +173,15 @@ export type ActionState =
     lastError: GcError | null;
   }
   /** A watched action between its steps (Watch); `since` is when gc answered its request. */
-  | { kind: "watching"; since: number; watch: Watch; inFlight: boolean }
-  | { kind: "done"; at: number; detail: string; requestId: string | null }
+  /** `wrote`: gc accepted a change before the watch began (Sent `watch`). */
+  | { kind: "watching"; since: number; watch: Watch; inFlight: boolean; wrote: boolean }
+  /**
+   * `wrote`: gc accepted a change for this action (a 2xx answer to the
+   * mutation, or a succeeded outcome). False for an action that ended without
+   * changing anything in gc: open terminal on a session that already runs
+   * only shows or opens a tab.
+   */
+  | { kind: "done"; at: number; detail: string; requestId: string | null; wrote: boolean }
   | { kind: "failed"; at: number; error: GcError }
   | { kind: "unknown"; at: number; error: OutcomeUnknown }
   | { kind: "not-sent"; at: number; reason: string };

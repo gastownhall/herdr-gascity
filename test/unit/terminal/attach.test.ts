@@ -205,6 +205,9 @@ describe("wake first: no gc runtime is started under a herdr terminal", () => {
     expect(t.sessionGets().map((r) => r.at - woke)).toEqual([0, 500, 1500, 3500]);
     expect(t.terminals.opened).toHaveLength(1);
     expect(t.entry(a, id).state.kind).toBe("watching");
+    // gc accepted the wake: once opened, the action counts as a change gc accepted.
+    await t.host.advance(EXIT_WATCH_MS + 2000);
+    expect(t.entry(a, id).state).toMatchObject({ kind: "done", wrote: true });
   });
 
   test("a refused wake opens no tab and says why", async () => {
@@ -405,7 +408,7 @@ describe("where the tab opens, and dedupe", () => {
     await t.host.advance(TICK_MS);
     expect(t.terminals.opened).toHaveLength(0);
     expect(t.terminals.selected).toEqual(["t2"]);
-    expect(t.entry(a, id).state).toMatchObject({ kind: "done" });
+    expect(t.entry(a, id).state).toMatchObject({ kind: "done", wrote: false });
     expect(t.row(a, id)?.detail).toContain("already open");
   });
 
@@ -465,7 +468,7 @@ describe("confirmed through terminals()", () => {
     await t.host.advance(EXIT_WATCH_MS - 1000);
     expect(t.entry(a, id).state.kind).toBe("watching");
     await t.host.advance(2000);
-    expect(t.entry(a, id).state).toMatchObject({ kind: "done" });
+    expect(t.entry(a, id).state).toMatchObject({ kind: "done", wrote: false });
     expect(t.row(a, id)).toMatchObject({ tone: "done", title: "Open terminal · session sc-20" });
     expect(t.row(a, id)?.detail).toStartWith("opened");
   });

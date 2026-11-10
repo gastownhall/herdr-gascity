@@ -1,13 +1,14 @@
 // The header view-model: connection chip, where the gc API URL came from, the
 // copy's city and the other cities' health, notices as banners, the cities
-// an unpinned copy can choose from, and the discovery diagnostics. Pure: it
+// an unpinned copy can choose from, and the discovery diagnostics (in the
+// header until an endpoint answers, then in the drawer). Pure: it
 // reads the city machine and, for a running city, the shared store's
 // connection, needs-you count and data age. Text from gc (city names,
 // statuses, errors) is cleaned of control characters.
 
 import type { CityMachine, CityNotice, CityState } from "../discovery/city.ts";
 import type { Attempt, EndpointSource, NoEndpoint } from "../discovery/resolve.ts";
-import type { GcError } from "../gc/errors.ts";
+import { isTransport, type GcError } from "../gc/errors.ts";
 import type { CityInfo } from "../gc/types.gen.ts";
 import type { Connection } from "../sync/endpoint.ts";
 import { LOOPBACK_ONLY, errorText } from "./errorText.ts";
@@ -48,7 +49,10 @@ export interface HeaderModel {
   choices: CityChoice[] | null;
   /** Whether "retry now" (rediscover) is offered. */
   canRetry: boolean;
+  /** Discovery lines shown in the header: the candidates tried, while no endpoint answered. */
   diagnostics: string[];
+  /** Discovery lines for the diagnostics drawer instead: once an endpoint answered, the header names only it. */
+  drawer: string[];
   /** "2 need you" while sessions wait for the person; null otherwise. */
   needsYou: string | null;
   /** "data N s old" of the city's agents panel; null without a running city. */
@@ -98,10 +102,6 @@ function noEndpointChip(failure: NoEndpoint): string {
   if (!first) return "gc not reachable";
   const more = tried.length > 1 ? `; ${tried.length - 1} more tried` : "";
   return `gc not reachable at ${first.url} (${SOURCE_LABELS[first.source]})${more}`;
-}
-
-function isTransport(e: GcError): boolean {
-  return e.kind === "unreachable" || e.kind === "timeout";
 }
 
 function noticeBanner(n: CityNotice, version: string): string {
@@ -208,7 +208,8 @@ export function headerModel(m: CityMachine, hostErrors: readonly GcError[] = [],
     banners: banners.map(cleanLine),
     choices,
     canRetry: state.phase !== "discovering" && state.phase !== "listing",
-    diagnostics: diagnostics.map(cleanLine),
+    diagnostics: endpoint === null ? diagnostics.map(cleanLine) : [],
+    drawer: endpoint === null ? [] : diagnostics.map(cleanLine),
     needsYou,
     age: running ? running.age : null,
   };

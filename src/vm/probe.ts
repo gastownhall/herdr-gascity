@@ -98,6 +98,8 @@ export interface ProbeBody {
   mod_version: string;
   herdr_version: string | null;
   connection: { text: string; tone: string };
+  /** The header's banners, as drawn (a refused write's grant or read-only banner among them). */
+  banners: string[];
   discovery: { source: string; url: string; version: string } | null;
   city: string | null;
   city_phase: string;
@@ -196,6 +198,7 @@ export function probeDocument(input: ProbeInput): ProbeBody {
     mod_version: input.modVersion,
     herdr_version: input.herdrVersion,
     connection: { text: header.chip.text, tone: header.chip.tone },
+    banners: [...header.banners],
     discovery: endpoint ? { source: endpoint.source, url: endpoint.url, version: cleanLine(endpoint.version) } : null,
     city: state.phase === "city-running" || state.phase === "city-stopped" ? cleanLine(state.city.name) : null,
     city_phase: state.phase,

@@ -124,6 +124,8 @@ function rawText(body: string): string {
 /** gc's problem codes this mapping keys on (internal/api/apierr/catalog.go). */
 const CODE_CITY_NOT_FOUND = "city-not-found";
 const CODE_SESSION_CONFLICT = "session-conflict";
+/** 400 on session create (and pin, wake): a pool agent with max_active_sessions = 1 and no named session runs only while it has work. */
+export const CODE_DEMAND_ONLY_SINGLETON = "demand-only-singleton";
 
 /**
  * Maps a non-2xx answer of `operationId` to a GcError. gc's machine-readable
@@ -156,6 +158,11 @@ export function httpError(operationId: string, status: number, body: string): Gc
   }
   if (problem) return { kind: "http", status, problem };
   return { kind: "http", status, problem: null, raw: rawText(body) };
+}
+
+/** gc did not answer at all (the connection failed or herdr's fetch timed out), as opposed to answering with an error. */
+export function isTransport(e: GcError): boolean {
+  return e.kind === "unreachable" || e.kind === "timeout";
 }
 
 /** A hint for a known problem: a 409 session conflict "pending_interaction: …" means a prompt waits for an answer. */

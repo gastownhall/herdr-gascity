@@ -18,7 +18,7 @@ const city = snapshot();
 
 describe("activity rows", () => {
   test("newest first, each with its state and gc's answer", () => {
-    const a = entry(session.sessionWake("sc-20"), { kind: "done", at: NOW - 3000, detail: "gc: ok", requestId: null });
+    const a = entry(session.sessionWake("sc-20"), { kind: "done", at: NOW - 3000, detail: "gc: ok", requestId: null, wrote: true });
     const b = entry(session.sessionSubmit("sc-20", "hi", "default"), { kind: "polling", requestId: "req-1", afterSeq: "9", acceptedAt: NOW - 2000, polls: 2, nextAt: NOW, inFlight: false, lastError: null });
     const c = entry(session.sessionStop("sc-20"), { kind: "sending", since: NOW - 1000 });
     const m = activityModel({ rev: 3, entries: [a, b, c] }, city, NOW);
@@ -89,7 +89,7 @@ describe("activity rows", () => {
   });
 
   test("gc text is cleaned", () => {
-    const e = entry(session.sessionWake("sc-20"), { kind: "done", at: NOW, detail: "gc: ok\u001b[31m\u0007", requestId: null });
+    const e = entry(session.sessionWake("sc-20"), { kind: "done", at: NOW, detail: "gc: ok\u001b[31m\u0007", requestId: null, wrote: true });
     expect(activityModel({ rev: 1, entries: [e] }, city, NOW).rows[0]?.detail).toBe("gc: ok");
   });
 });
@@ -101,7 +101,7 @@ describe("busy actions", () => {
       entries: [
         entry(session.sessionWake("sc-20"), { kind: "sending", since: NOW }),
         entry(session.sessionSubmit("sc-20", "a", "default"), { kind: "sending", since: NOW }),
-        entry(session.sessionStop("sc-20"), { kind: "done", at: NOW, detail: "ok", requestId: null }),
+        entry(session.sessionStop("sc-20"), { kind: "done", at: NOW, detail: "ok", requestId: null, wrote: true }),
       ],
     }, city, NOW);
     expect(isBusy(m, session.sessionWake("sc-20"))).toBe(true);
@@ -118,11 +118,11 @@ describe("work action rows", () => {
     const waiting = { verb: "Sling to worker", state: { kind: "waiting" as const } };
     const rows = [
       entry(newBead("a", "worker"), { kind: "sending", since: NOW }, 1, waiting),
-      entry(newBead("b", "worker"), { kind: "done", at: NOW, detail: "gc: created bead sc-80", requestId: null }, 1, { ...waiting, state: { kind: "started", id: 41 } }),
+      entry(newBead("b", "worker"), { kind: "done", at: NOW, detail: "gc: created bead sc-80", requestId: null, wrote: true }, 1, { ...waiting, state: { kind: "started", id: 41 } }),
       entry(newBead("c", "worker"), { kind: "failed", at: NOW, error: { kind: "http", status: 422, problem: { detail: "validation failed", errors: [] } } }, 1, waiting),
       entry(newBead("d", "worker"), { kind: "unknown", at: NOW, error: { kind: "outcome-unknown", requestId: null, operationId: "create-bead", cause: "timeout" } }, 1, waiting),
       entry(newBead("e", "worker"), { kind: "not-sent", at: NOW, reason: "the Gas City view that started it closed before it was sent" }, 1, waiting),
-      entry(newBead("f", "worker"), { kind: "done", at: NOW, detail: "gc: created bead sc-81", requestId: null }, 1, { ...waiting, state: { kind: "not-sent", reason: "gc's answer did not name what it created" } }),
+      entry(newBead("f", "worker"), { kind: "done", at: NOW, detail: "gc: created bead sc-81", requestId: null, wrote: true }, 1, { ...waiting, state: { kind: "not-sent", reason: "gc's answer did not name what it created" } }),
     ];
     const details = activityModel({ rev: 1, entries: rows }, city, NOW).rows.reverse().map((r) => r.detail.split("; then ")[1]);
     expect(details).toEqual([
@@ -140,7 +140,7 @@ describe("work action rows", () => {
       rev: 1,
       entries: [
         entry(newBead("fix\u001b[2J login\r\nnow", "w\u202eorker"), { kind: "sending", since: NOW }, 1, { verb: "Sling to w\u202eorker", state: { kind: "waiting" } }),
-        entry(work.beadSling("sc-\u00077", "worker"), { kind: "done", at: NOW, detail: "gc: slung bead sc-7 to worker; warnings: \u001b]8;;http://x\u0007routed", requestId: null }),
+        entry(work.beadSling("sc-\u00077", "worker"), { kind: "done", at: NOW, detail: "gc: slung bead sc-7 to worker; warnings: \u001b]8;;http://x\u0007routed", requestId: null, wrote: true }),
         entry(work.beadClose("sc-7", "r"), { kind: "sending", since: NOW }),
         entry(work.beadReopen("sc-7"), { kind: "sending", since: NOW }),
       ],

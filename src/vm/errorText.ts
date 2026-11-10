@@ -4,11 +4,14 @@
 // names), so the line is cleaned of control characters and escapes.
 
 import { isUnrecognized } from "../gc/decode.ts";
-import type { GcError } from "../gc/errors.ts";
+import { CODE_DEMAND_ONLY_SINGLETON, type GcError } from "../gc/errors.ts";
 import { cleanLine } from "./sanitize.ts";
 
 /** Why a non-loopback URL is refused. */
 export const LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
+
+/** What to do instead when gc will not start a demand-only singleton's session on request. */
+const DEMAND_ONLY_HINT = "gc starts this agent's one session only while it has work: sling a bead to it instead";
 
 function seconds(ms: number): string {
   return `${Math.round(ms / 1000)} s`;
@@ -32,6 +35,10 @@ function rawText(e: GcError): string {
     case "too-large":
       return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
     case "http": {
+      if (e.problem?.code === CODE_DEMAND_ONLY_SINGLETON) {
+        const gc = e.problem.detail ?? "";
+        return `${DEMAND_ONLY_HINT}${gc === "" ? "" : ` (gc: ${gc})`}`;
+      }
       const detail = e.problem ? (e.problem.detail ?? e.problem.title ?? "") : (e.raw ?? "");
       return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
     }

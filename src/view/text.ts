@@ -30,3 +30,12 @@ export function themedRoot(theme: ThemeRead, el: GpuiElement): GpuiElement {
   const { colors } = theme;
   return tinted(tinted(el, colors.background, (e, c) => e.bg(c)), colors.foreground, (e, c) => e.text_color(c));
 }
+
+/**
+ * In a row, an element that takes an equal share of the width and may shrink
+ * below its content, so its text wraps instead of running off the edge; in a
+ * column (`inRow` false) it keeps its natural height.
+ */
+export function shrinkIf(el: GpuiElement, inRow: boolean): GpuiElement {
+  return inRow ? el.flex_1().min_w_0() : el;
+}

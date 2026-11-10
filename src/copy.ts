@@ -55,7 +55,7 @@ import { isMutating, parseCommand, shownCommand, type Command } from "./commands
 import { moveIn, type KeyAction } from "./keys.ts";
 import { focusToApply } from "./notify/focus.ts";
 import { SLING_MAY_ROUTE_TWICE, beadClose, beadCreate, beadReopen, beadSling } from "./actions/work.ts";
-import type { CityScopedError } from "./discovery/city.ts";
+import type { CityEvent, CityScopedError } from "./discovery/city.ts";
 import { selectedCity } from "./discovery/city.ts";
 import { decodeSettings } from "./discovery/settings.ts";
 import type { DiscoveryController, DiscoveryTask } from "./discovery/controller.ts";
@@ -254,6 +254,8 @@ export class CopyController {
   private notice: string | null = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   private applied = new WeakSet<object>();
+  /** Ended actions whose answer was already fed to the machine (each state is a new object; kept across subscriptions). */
+  private writesSeen = new WeakSet<object>();
   /** Failures of this copy's own work, oldest first (diagnostics). */
   private failures: ErrorEntry[] = [];
   /** The next rediscovery while this copy has no endpoint, and how many there were. */
@@ -325,6 +327,7 @@ export class CopyController {
         this.applied.add(error);
         discovery.apply({ type: "city-error", city: running, error });
       }
+      this.followWrites(running);
       // The city went away: drop the subscription now rather than at the next tick.
       if (discovery.machine.state.phase !== "city-running") this.followCity(null);
     }
@@ -365,8 +368,9 @@ export class CopyController {
     const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
+    const header = headerModel(discovery.machine, discovery.hostErrors, live);
     return {
-      header: headerModel(discovery.machine, discovery.hostErrors, live),
+      header,
       agents,
       board,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
@@ -375,6 +379,7 @@ export class CopyController {
       dialog: this.dialog(),
       notice: this.notice,
       diagnostics: diagnosticsModel({
+        notes: header.drawer.map((text) => ({ source: "discovery", text })),
         entries: [
           ...(s?.errors ?? []),
           ...(citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : []),
@@ -1189,10 +1194,37 @@ export class CopyController {
     const rev = this.cities.tick(fast);
     if (rev === this.citiesRev) return;
     this.citiesRev = rev;
-    const value = this.cities.snapshot().value;
-    // Only answers move the machine: a failed poll is shown in the diagnostics and the
-    // city store's connection, and must not throw away the city this copy shows.
-    if (value !== null) this.deps.discovery.apply({ type: "cities", result: { ok: true, value } });
+    const snap = this.cities.snapshot();
+    // A failed poll goes to the machine, which decides what it changes (a gc that
+    // stopped answering, unless a running city's own store already says so); it
+    // is also in the diagnostics. An answer moves the machine as it says.
+    if (snap.error !== null) this.deps.discovery.apply({ type: "cities-poll-failed", error: snap.error });
+    else if (snap.value !== null) this.deps.discovery.apply({ type: "cities", result: { ok: true, value: snap.value } });
+  }
+
+  /**
+   * Feeds the city's ended actions to the machine, oldest end first: a change
+   * gc refused for the whole city (no write grant, a read-only server) raises
+   * its notice, so the header's chip and banner say so and not only the
+   * action's row; one gc then accepted clears it.
+   */
+  private followWrites(city: string): void {
+    const ended: { at: number; event: CityEvent }[] = [];
+    for (const entry of this.city?.activity().entries ?? []) {
+      const state = entry.state;
+      if (this.writesSeen.has(state)) continue;
+      if (state.kind === "done") {
+        this.writesSeen.add(state);
+        // Only a change gc accepted proves writes work (open terminal on a running session changes nothing).
+        if (state.wrote) ended.push({ at: state.at, event: { type: "write-accepted", city } });
+      } else if (state.kind === "failed") {
+        this.writesSeen.add(state);
+        const error = state.error;
+        if (error.kind === "write-grant-required" || error.kind === "read-only") ended.push({ at: state.at, event: { type: "city-error", city, error } });
+      }
+    }
+    ended.sort((a, b) => a.at - b.at);
+    for (const e of ended) this.deps.discovery.apply(e.event);
   }
 
   private followCity(key: { apiUrl: string; city: string } | null): void {

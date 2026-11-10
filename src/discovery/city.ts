@@ -8,6 +8,17 @@
 //                           ├► city-unknown           (the copy's city is not in gc's list)
 //                           └► city-running ⇄ city-stopped
 //
+// A city-list poll that cannot reach gc moves every phase but city-running to
+// cities-failed (keeping the copy's city), so a stopped supervisor reads as
+// unreachable, not as whatever the last list said; a running city's own
+// store says it is reconnecting instead. The next list that arrives moves it
+// back.
+//
+// Notices are what gc said about the copy's city: a read or a change it
+// refused for the whole city. A change gc then accepts proves that writes
+// work, so it clears the write-grant and read-only notices; a fresh
+// discovery clears them all.
+//
 // A copy shows one city. A pinned copy (opened with props {city}) shows only
 // that city and offers no switcher. An unpinned copy keeps the city it shows;
 // with none it takes its last selection (per-copy localStorage) if gc lists
@@ -16,7 +27,7 @@
 
 import { err, ok, type Result } from "../result.ts";
 import type { Listed } from "../gc/decode.ts";
-import type { GcError } from "../gc/errors.ts";
+import { isTransport, type GcError } from "../gc/errors.ts";
 import type { CityInfo, SupervisorCitiesOutputBody } from "../gc/types.gen.ts";
 import type { Endpoint, NoEndpoint } from "./resolve.ts";
 
@@ -64,8 +75,12 @@ export type CityEvent =
   | { type: "cities"; result: Result<CityList, GcError> }
   /** The person chose a city (unpinned copies). */
   | { type: "select"; city: string }
+  /** A periodic /v0/cities poll failed (the shared poller's last answer). */
+  | { type: "cities-poll-failed"; error: GcError }
   /** A city-scoped call for `city` failed in a way that changes the city state. */
-  | { type: "city-error"; city: string; error: CityScopedError };
+  | { type: "city-error"; city: string; error: CityScopedError }
+  /** gc accepted a change to `city`: writes work there. */
+  | { type: "write-accepted"; city: string };
 
 /** The props() api name in errors. */
 const PROPS_API = "props()";
@@ -163,6 +178,23 @@ function onCityError(state: CityState, city: string, error: CityScopedError): Ci
   }
 }
 
+/** The notices a refused change raises: an accepted change proves them gone. */
+const WRITE_NOTICES: ReadonlySet<CityNotice["kind"]> = new Set(["write-grant-required", "read-only"]);
+
+function onWriteAccepted(state: CityState, city: string): CityState {
+  if ((state.phase !== "city-running" && state.phase !== "city-stopped") || state.city.name !== city) return state;
+  const notices = state.notices.filter((n) => !WRITE_NOTICES.has(n.kind));
+  return notices.length === state.notices.length ? state : { ...state, notices };
+}
+
+function onPollFailed(state: CityState, error: GcError): CityState {
+  if (!isTransport(error) || state.phase === "city-running") return state;
+  if (state.phase === "cities-failed" && JSON.stringify(state.error) === JSON.stringify(error)) return state;
+  const endpoint = endpointOf(state);
+  if (endpoint === null || citiesOf(state) === null) return state;
+  return { phase: "cities-failed", endpoint, error, selected: selectedCity(state) };
+}
+
 /** The next machine after `event`. Returns `m` itself when the event changes nothing. */
 export function step(m: CityMachine, event: CityEvent): CityMachine {
   const { copy, state } = m;
@@ -188,8 +220,16 @@ export function step(m: CityMachine, event: CityEvent): CityMachine {
       const next = { ...copy, lastSelection: event.city };
       return { copy: next, state: withCities(state, next, endpoint, cities, event.city) };
     }
+    case "cities-poll-failed": {
+      const next = onPollFailed(state, event.error);
+      return next === state ? m : { copy, state: next };
+    }
     case "city-error": {
       const next = onCityError(state, event.city, event.error);
+      return next === state ? m : { copy, state: next };
+    }
+    case "write-accepted": {
+      const next = onWriteAccepted(state, event.city);
       return next === state ? m : { copy, state: next };
     }
   }
