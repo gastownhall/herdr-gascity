@@ -12,9 +12,10 @@
 //
 // While the endpoint backs off, the poll waits for the probe like any read;
 // if no city store is probing (no copy shows a running city), the poll takes
-// the probe itself.
+// the probe itself. A poll gc did not answer is due again at once, so it is
+// the next probe the backoff lets through.
 
-import type { GcError } from "../gc/errors.ts";
+import { isTransport, type GcError } from "../gc/errors.ts";
 import { listCities } from "../gc/ops.ts";
 import type { CityList } from "../discovery/city.ts";
 import type { Result } from "../result.ts";
@@ -131,6 +132,9 @@ export class CitiesPoller implements EndpointListener {
     }
     if (backsOff(r.error)) this.endpoint.failed(r.error);
     else this.endpoint.succeeded();
+    // gc did not answer: poll again as soon as the endpoint's backoff lets a probe through, so a
+    // copy showing "gc not reachable" sees gc back within the backoff, not the next 10 s poll.
+    if (isTransport(r.error)) this.wanted = true;
     this.snap = { ...this.snap, rev: this.snap.rev + 1, error: r.error };
   }
 }

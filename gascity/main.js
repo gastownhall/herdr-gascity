@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:d2aa23802cbaca17688d67e960d1e2ad86a44998ab0d6132a3560a72c3b531df over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:bf26fae794e29aef436017ac3692b5419ce8d38f79f0e7a4e1deb72acc4375c2 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -4521,11 +4521,11 @@ var ActionLedger = class {
     }
     const sent = r.value;
     if (sent.kind === "watch") {
-      this.watch(rec, sent.watch);
+      this.watch(rec, sent.watch, sent.wrote);
       return;
     }
     if (sent.kind === "done") {
-      this.resolve(rec, { kind: "done", at: now, detail: sent.detail, requestId: null });
+      this.resolve(rec, { kind: "done", at: now, detail: sent.detail, requestId: null, wrote: true });
       this.startFollowUp(rec, sent.created);
       return;
     }
@@ -4574,17 +4574,18 @@ var ActionLedger = class {
     } else if (failure2 !== null) {
       this.resolve(rec, { kind: "unknown", at: now, error: unknown2(s.requestId, rec.spec.operationId, "unreadable-response", [describe3(failure2)]) });
     } else if (outcome.state === "succeeded") {
-      this.resolve(rec, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId });
+      this.resolve(rec, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId, wrote: true });
       this.startFollowUp(rec, void 0);
     } else {
       rec.state = { ...next, lastError: null };
       this.commit();
     }
   }
-  /** The action goes on as `watch` (from its request's answer, or from its previous step). */
-  watch(rec, watch) {
+  /** The action goes on as `watch` (from its request's answer, with whether gc accepted a change, or from its previous step). */
+  watch(rec, watch, wrote) {
     const s = rec.state;
-    rec.state = { kind: "watching", since: s.kind === "watching" ? s.since : this.deps.clock.now(), watch, inFlight: false };
+    const since = s.kind === "watching" ? s.since : this.deps.clock.now();
+    rec.state = { kind: "watching", since, watch, inFlight: false, wrote: s.kind === "watching" ? s.wrote || wrote : wrote };
     this.commit();
   }
   /** Runs a watched action's next step, in the turn of the copy that started it. */
@@ -4601,7 +4602,7 @@ var ActionLedger = class {
     next.then(
       (r) => {
         if (!this.live(rec, token) || rec.state.kind !== "watching") return;
-        if ("step" in r) this.watch(rec, r);
+        if ("step" in r) this.watch(rec, r, false);
         else this.end(rec, r);
       },
       (cause) => {
@@ -4610,12 +4611,13 @@ var ActionLedger = class {
       }
     );
   }
-  /** Ends a watched action as its Watch says. */
+  /** Ends a watched action as its Watch says; done counts as a change only if gc accepted one before the watch. */
   end(rec, e) {
     const at3 = this.deps.clock.now();
+    const wrote = rec.state.kind === "watching" && rec.state.wrote;
     switch (e.kind) {
       case "done":
-        this.resolve(rec, { kind: "done", at: at3, detail: e.detail, requestId: null });
+        this.resolve(rec, { kind: "done", at: at3, detail: e.detail, requestId: null, wrote });
         return;
       case "failed":
         this.resolve(rec, { kind: "failed", at: at3, error: e.error });
@@ -6585,11 +6587,11 @@ function openTerminal(binding, name, deps) {
     if (!s.ok) return s;
     switch (readiness(s.value)) {
       case "ready":
-        return ok({ kind: "watch", watch: openNow() });
+        return ok({ kind: "watch", watch: openNow(), wrote: false });
       case "stopping":
         return err(stoppingError(s.value));
       case "starting":
-        return ok({ kind: "watch", watch: waitRunning(clock.now(), false, 0, s) });
+        return ok({ kind: "watch", watch: waitRunning(clock.now(), false, 0, s), wrote: false });
       case "not-running":
         break;
     }
@@ -6598,7 +6600,7 @@ function openTerminal(binding, name, deps) {
       if (woke.error.kind === "outcome-unknown") return woke;
       return err({ kind: "attach-not-started", sessionId: id2, reason: "wake-refused", detail: errorText(woke.error) });
     }
-    return ok({ kind: "watch", watch: waitRunning(clock.now(), true, 0, s) });
+    return ok({ kind: "watch", watch: waitRunning(clock.now(), true, 0, s), wrote: true });
   };
   const wake = "post-v0-city-by-city-name-session-by-id-wake";
   return {
@@ -7534,7 +7536,7 @@ var CopyController = class {
       if (this.writesSeen.has(state)) continue;
       if (state.kind === "done") {
         this.writesSeen.add(state);
-        ended.push({ at: state.at, event: { type: "write-accepted", city } });
+        if (state.wrote) ended.push({ at: state.at, event: { type: "write-accepted", city } });
       } else if (state.kind === "failed") {
         this.writesSeen.add(state);
         const error = state.error;
@@ -8463,6 +8465,7 @@ var CitiesPoller = class {
     }
     if (backsOff(r.error)) this.endpoint.failed(r.error);
     else this.endpoint.succeeded();
+    if (isTransport(r.error)) this.wanted = true;
     this.snap = { ...this.snap, rev: this.snap.rev + 1, error: r.error };
   }
 };

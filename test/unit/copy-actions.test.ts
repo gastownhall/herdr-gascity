@@ -5,6 +5,8 @@
 // outcome of an action whose copy closed — as unknown, never pending.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { agentSuspend } from "../../src/actions/agent.ts";
 import { sessionClose, sessionWake } from "../../src/actions/session.ts";
 import { CopyController, type CopyHost } from "../../src/copy.ts";
@@ -33,7 +35,7 @@ function setup() {
   let keys = 0;
   const registry = new SyncRegistry({ fetch: host.wrap(gc.fetch), clock: host, random: () => 0.5, newKey: () => `key-${++keys}` });
   const tabs: { space: string; name: string; argv: string[] }[] = [];
-  const terminalScene = {
+  let terminalScene: { spaces: unknown; panes: unknown; terminals: unknown } = {
     spaces: [{ id: "s1", machine: null, active: true, tabs: [{ id: "t1", active: true }] }],
     panes: [{ pane: "p1", tab: "t1", mod: "gascity" }],
     terminals: [],
@@ -83,7 +85,11 @@ function setup() {
   const click = (o: Opened, fn: (c: CopyController) => void) => host.run(o.owner, () => fn(o.copy));
   const close = (o: Opened) => host.close(o.owner, () => o.copy.close());
   const posts = (suffix: string) => gc.seen.filter((r) => r.method === "POST" && r.path.endsWith(suffix));
-  return { host, gc, open, click, close, posts, tabs };
+  /** herdr's terminal scene from now on: a fixture under test/fixtures/terminals. */
+  const useScene = (name: string) => {
+    terminalScene = JSON.parse(readFileSync(join(import.meta.dir, "..", "fixtures", "terminals", `${name}.json`), "utf8")) as typeof terminalScene;
+  };
+  return { host, gc, open, click, close, posts, tabs, useScene };
 }
 
 describe("a copy's actions", () => {
@@ -292,6 +298,34 @@ describe("a change gc refuses for the whole city reaches the header", () => {
       expect(h.chip).toEqual({ tone: "warn", text: "read-only server" });
       expect(h.banners).toEqual(["gc serves this API read-only (read_only: mutations are disabled on a non-loopback bind)."]);
     }
+  });
+
+  test("Open terminal on a session that already runs changes nothing in gc, so the refusal stays; a change gc accepts clears it", async () => {
+    const { host, gc, open, click, posts, useScene } = setup();
+    useScene("attach-running");
+    const a = await open();
+    await host.advance(3000);
+    gc.override = refuse(401, "missing X-GC-City-Write grant");
+    await click(a, (c) => c.request(sessionWake("sc-20")));
+    await host.advance(500);
+    expect(a.copy.view(host.now()).header.chip).toEqual({ tone: "warn", text: "connected, read-only" });
+    const before = gc.seen.filter((r) => r.method === "POST").length;
+    await click(a, (c) => {
+      expect(c.openTerminal("sc-20")).toBe(true);
+    });
+    await host.advance(1000);
+    expect(gc.seen.filter((r) => r.method === "POST").length).toBe(before);
+    const v = a.copy.view(host.now());
+    expect(v.activity?.rows[0]).toMatchObject({ tone: "done" });
+    expect(v.activity?.rows[0]?.detail).toContain("already open");
+    expect(v.header.chip).toEqual({ tone: "warn", text: "connected, read-only" });
+    expect(v.header.banners).toHaveLength(1);
+    gc.override = (req) => (req.method === "POST" ? { status: 200, body: { status: "ok" } } : undefined);
+    await click(a, (c) => c.request(sessionWake("sc-20")));
+    await host.advance(500);
+    expect(posts("/wake").length).toBeGreaterThan(0);
+    expect(a.copy.view(host.now()).header.chip).toEqual({ tone: "ok", text: "connected" });
+    expect(a.copy.view(host.now()).header.banners).toEqual([]);
   });
 
   test("a change refused for its own reasons (a 409) leaves the header alone", async () => {

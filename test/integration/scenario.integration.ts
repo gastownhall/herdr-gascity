@@ -519,7 +519,7 @@ describe("the mod against a scratch gc city", () => {
     const source = readFileSync(BUNDLE, "utf8");
     const from = 'case "not-running":\n        break;\n    }\n    const woke = await wakeSession(';
     expect(source.includes(from)).toBe(true);
-    const brokenSource = source.replace(from, 'case "not-running":\n        return ok({ kind: "watch", watch: openNow() });\n    }\n    const woke = await wakeSession(');
+    const brokenSource = source.replace(from, 'case "not-running":\n        return ok({ kind: "watch", watch: openNow(), wrote: false });\n    }\n    const woke = await wakeSession(');
     const { app: broken, appHome } = newApp("no-wake", { gcBin: GC_BIN }, brokenSource);
     broken.addCopy();
     send(broken, "probe:on");

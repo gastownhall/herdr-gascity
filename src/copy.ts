@@ -1215,7 +1215,8 @@ export class CopyController {
       if (this.writesSeen.has(state)) continue;
       if (state.kind === "done") {
         this.writesSeen.add(state);
-        ended.push({ at: state.at, event: { type: "write-accepted", city } });
+        // Only a change gc accepted proves writes work (open terminal on a running session changes nothing).
+        if (state.wrote) ended.push({ at: state.at, event: { type: "write-accepted", city } });
       } else if (state.kind === "failed") {
         this.writesSeen.add(state);
         const error = state.error;
