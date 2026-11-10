@@ -10,8 +10,12 @@
 
 import { readFile } from "node:fs/promises";
 
-/** One recorded element: its id, children, handlers and every builder call. */
+/** Which builder made an element: gpui-kit's div, or gpui-base's row (h_flex) or column (v_flex). */
+export type ElementKind = "div" | "h_flex" | "v_flex";
+
+/** One recorded element: its builder, id, children, handlers and every builder call. */
 export interface RecordedNode {
+  kind: ElementKind;
   id: string;
   children: (RecordedNode | string)[];
   handlers: Record<string, (...args: unknown[]) => unknown>;
@@ -21,8 +25,8 @@ export interface RecordedNode {
 const HANDLER = /^on_/;
 
 /** A gpui-kit element builder that records instead of drawing. */
-export function element(): any {
-  const node: RecordedNode = { id: "", children: [], handlers: {}, calls: [] };
+export function element(kind: ElementKind = "div"): any {
+  const node: RecordedNode = { kind, id: "", children: [], handlers: {}, calls: [] };
   const el: any = new Proxy(node, {
     get: (_, method) => {
       if (method === "node") return node;
@@ -274,8 +278,8 @@ export function fakeGpui(inputs: FakeInputState[] = []): HostModules {
   /** Input.new records its state as an `input` call on the element. */
   const Input = { new: (state: FakeInputState) => element().input(state) };
   return {
-    "gpui-kit": { View: class {}, div: element },
-    "gpui-base": { v_flex: element, h_flex: element, Input, InputState },
+    "gpui-kit": { View: class {}, div: () => element("div") },
+    "gpui-base": { v_flex: () => element("v_flex"), h_flex: () => element("h_flex"), Input, InputState },
   };
 }
 
@@ -556,6 +560,12 @@ export async function loadMod(options: FakeHostOptions & FakeGlobalsOptions & { 
         const node = findById(render(), id);
         if (!node?.handlers.on_click) throw new Error(`harness: no clickable element "${id}"`);
         router.as(name, () => node.handlers.on_click!({}, cx));
+      },
+      /** herdr laid the copy's root out at this size (logical px): its on_size_change handler runs in this copy's turn. */
+      resize: (width: number, height = 700) => {
+        const root = render();
+        if (!root.handlers.on_size_change) throw new Error("harness: the root does not observe its size");
+        router.as(name, () => root.handlers.on_size_change!({ width, height }, cx));
       },
       /** A key pressed while the copy's root holds the keyboard. */
       key: (keystroke: string) => {

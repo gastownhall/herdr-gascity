@@ -253,6 +253,60 @@ describe("a copy's actions", () => {
   });
 });
 
+describe("a change gc refuses for the whole city reaches the header", () => {
+  const refuse = (status: number, detail: string) => (req: { method: string }) =>
+    (req.method === "POST" ? { status, body: { title: "refused", status, detail } } : undefined);
+
+  test("401 write grant: the chip says read-only and the banner says why; a later accepted change clears both", async () => {
+    const { host, gc, open, click } = setup();
+    const a = await open();
+    await host.advance(3000);
+    gc.override = refuse(401, "missing X-GC-City-Write grant");
+    await click(a, (c) => c.request(sessionWake("sc-20")));
+    await host.advance(500);
+    let h = a.copy.view(host.now()).header;
+    expect(a.copy.view(host.now()).activity?.rows[0]?.tone).toBe("failed");
+    expect(h.chip).toEqual({ tone: "warn", text: "connected, read-only" });
+    expect(h.banners).toEqual([
+      "This city requires signed write grants; the Herdr mod does not mint them, so it is read-only here (gc: missing X-GC-City-Write grant).",
+    ]);
+    gc.override = (req) => (req.method === "POST" ? { status: 200, body: { status: "ok" } } : undefined);
+    await click(a, (c) => c.request(agentSuspend("frontend/builder")));
+    await click(a, (c) => c.confirm(0));
+    await host.advance(500);
+    h = a.copy.view(host.now()).header;
+    expect(h.chip).toEqual({ tone: "ok", text: "connected" });
+    expect(h.banners).toEqual([]);
+  });
+
+  test("403 read_only: the chip says read-only server and the banner quotes gc; another copy of the city shows it too", async () => {
+    const { host, gc, open, click } = setup();
+    const a = await open();
+    const b = await open();
+    await host.advance(3000);
+    gc.override = refuse(403, "read_only: mutations are disabled on a non-loopback bind");
+    await click(a, (c) => c.request(sessionWake("sc-20")));
+    await host.advance(500);
+    for (const o of [a, b]) {
+      const h = o.copy.view(host.now()).header;
+      expect(h.chip).toEqual({ tone: "warn", text: "read-only server" });
+      expect(h.banners).toEqual(["gc serves this API read-only (read_only: mutations are disabled on a non-loopback bind)."]);
+    }
+  });
+
+  test("a change refused for its own reasons (a 409) leaves the header alone", async () => {
+    const { host, gc, open, click } = setup();
+    const a = await open();
+    await host.advance(3000);
+    gc.override = refuse(409, "conflict: session is closing");
+    await click(a, (c) => c.request(sessionWake("sc-20")));
+    await host.advance(500);
+    const h = a.copy.view(host.now()).header;
+    expect(h.chip).toEqual({ tone: "ok", text: "connected" });
+    expect(h.banners).toEqual([]);
+  });
+});
+
 describe("open terminal from a copy", () => {
   const ATTACH = ["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET", "gc", "--city", "/scratch/city", "session", "attach", "sc-20"];
 

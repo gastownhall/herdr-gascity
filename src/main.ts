@@ -38,7 +38,8 @@ import { SyncRegistry, TICK_MS, sharedRegistry } from "./sync/registry.ts";
 import { VisibilityCache, sharedVisibilityCache } from "./sync/visibilityCache.ts";
 import { errorText } from "./vm/errorText.ts";
 import { syncErrorText } from "./vm/diagnostics.ts";
-import { renderPanel, type PanelActions, type PanelInputs, type PanelKeyboard } from "./view/panel.ts";
+import { panelLayout } from "./vm/layout.ts";
+import { renderPanel, type PanelActions, type PanelInputs, type PanelKeyboard, type PanelSize } from "./view/panel.ts";
 
 /**
  * The session the send box's text was typed for (the open session when
@@ -331,6 +332,8 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
 export default class GasCity extends View {
   private state: Copy = { kind: "copy-invalid", error: "init has not run" };
   private inputs: PanelInputs | null = null;
+  /** The root's width as herdr last laid it out (logical px); null until it reports one. */
+  private width: number | null = null;
 
   override init(_props: GpuiProps | undefined, cx: GpuiAsyncContext): void {
     this.state = setUp();
@@ -405,7 +408,19 @@ export default class GasCity extends View {
     if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme, error: state.error });
     const view = state.copy.view(systemClock.now());
     return renderPanel({
-      kind: "city", theme, view, actions: actionsFor(state, this.inputs), inputs: this.inputs, keyboard: this.keyboard(state),
+      kind: "city", theme, view, actions: actionsFor(state, this.inputs), inputs: this.inputs, keyboard: this.keyboard(state), size: this.size(),
     });
+  }
+
+  /** The layout for the root's width; a new width redraws only when it changes the layout. */
+  private size(): PanelSize {
+    return {
+      layout: panelLayout(this.width),
+      resized: (width, cx) => {
+        const before = panelLayout(this.width);
+        this.width = width;
+        if (panelLayout(width) !== before) cx.notify();
+      },
+    };
   }
 }

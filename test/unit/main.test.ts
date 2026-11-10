@@ -51,12 +51,29 @@ describe("connected", () => {
       { name: "readTextFile", args: [CONFIG] },
     ]);
     expect(mod.fetched.map((f) => f.url)).toEqual([`${DEFAULT}/health`, `${DEFAULT}/v0/cities`]);
+    // Connected: the header names only the endpoint and its source; every candidate tried is in the drawer.
+    const root = mod.render();
+    expect(text(root, "gascity-endpoint")).toBe("gc 1.4.0 at http://127.0.0.1:8372 (from built-in default)");
+    expect(findById(root, "gascity-diagnostics")).toBeUndefined();
+    expect(text(root, "gascity-diagnostics-drawer")).toBeUndefined();
+    mod.click("gascity-diagnostics-toggle");
+    expect(text(mod.render(), "gascity-diagnostics-drawer")).toBe([
+      "Hide diagnostics (4)",
+      "discovery: apiUrl setting: no apiUrl setting",
+      "discovery: gc supervisor status: gc supervisor status --json reports no api_url",
+      `discovery: ~/.gc/supervisor.toml: ${CONFIG} does not exist`,
+      "discovery: built-in default: http://127.0.0.1:8372 ok (gc 1.4.0)",
+    ].join(" "));
+  });
+
+  test("gc not found: the candidates tried are listed in the header", async () => {
+    const mod = await started();
     expect(text(mod.render(), "gascity-diagnostics")).toBe([
       "Discovery:",
       "apiUrl setting: no apiUrl setting",
       "gc supervisor status: gc supervisor status --json reports no api_url",
       `~/.gc/supervisor.toml: ${CONFIG} does not exist`,
-      "built-in default: http://127.0.0.1:8372 ok (gc 1.4.0)",
+      "built-in default: http://127.0.0.1:8372 unreachable: cannot reach http://127.0.0.1:8372/health: error sending request: Connection refused (os error 111)",
     ].join(" "));
   });
 

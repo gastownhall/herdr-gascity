@@ -16,6 +16,14 @@ interface GpuiElement {
   when(condition: boolean, apply: (el: GpuiElement) => GpuiElement): GpuiElement;
   size_full(): GpuiElement;
   flex_1(): GpuiElement;
+  /** Lets a flex item shrink below its content's width (so its text wraps). */
+  min_w_0(): GpuiElement;
+  /** In a row: children keep their own height, aligned at the top. */
+  items_start(): GpuiElement;
+  /** Owns vertical wheel and touch scrolling for overflowing children. Needs an `id`. */
+  overflow_y_scroll(): GpuiElement;
+  /** div/h_flex/v_flex: initial size and changed layout size, in logical pixels. Runs after layout. Use a stable id. */
+  on_size_change(handler: (size: { width: number; height: number }, cx: GpuiContext) => void): GpuiElement;
   p(n: number): GpuiElement;
   gap(n: number): GpuiElement;
   text_size(n: number): GpuiElement;

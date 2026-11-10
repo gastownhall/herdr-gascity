@@ -13,7 +13,8 @@ import type { ThemeRead } from "../host.ts";
 import { isBusy, type ActivityModel } from "../vm/activity.ts";
 import type { BeadCard, BeadDetailModel, BoardModel, ClosedCard, ColumnBase } from "../vm/board.ts";
 import { button, waiting } from "./dialogs.ts";
-import { greyedIf, label, muted } from "./text.ts";
+import { greyedIf, label, muted, shrinkIf } from "./text.ts";
+import type { PanelLayout } from "../vm/layout.ts";
 
 export interface BoardActions {
   /** Opens a bead's detail; null closes it. */
@@ -45,9 +46,9 @@ function card(c: BeadCard, id: string, theme: ThemeRead, actions: BoardActions):
 }
 
 /** A column's heading and state lines, and its body (greyed when stale). */
-function column(key: string, m: ColumnBase, body: GpuiElement[], theme: ThemeRead): GpuiElement {
+function column(key: string, m: ColumnBase, body: GpuiElement[], theme: ThemeRead, inRow: boolean): GpuiElement {
   const id = `gascity-col-${key}`;
-  let el = v_flex().id(id).flex_1().gap(4).child(label(`${id}-title`, `${m.title} (${m.count})`));
+  let el = shrinkIf(v_flex().id(id), inRow).gap(4).child(label(`${id}-title`, `${m.title} (${m.count})`));
   const state = m.region;
   if (state.kind === "loading") el = el.child(muted(label(`${id}-loading`, "loading…"), theme));
   if (state.age !== null) el = el.child(muted(label(`${id}-age`, state.stale ? `${state.age} (may be out of date)` : state.age), theme));
@@ -96,22 +97,29 @@ function beadDetail(m: BeadDetailModel, theme: ThemeRead, actions: BoardActions,
   return el.child(greyedIf(description, m.region.stale, theme));
 }
 
-/** The work region for one board and the selected bead's detail. */
-export function renderBoard(m: BoardModel, detail: BeadDetailModel, theme: ThemeRead, actions: BoardActions, activity: ActivityModel | null): GpuiElement {
+/**
+ * The work region for one board and the selected bead's detail. `layout`
+ * places it: beside the agents (side-by-side) it shares the width; its
+ * columns are in a row unless the panel is narrow.
+ */
+export function renderBoard(
+  m: BoardModel, detail: BeadDetailModel, theme: ThemeRead, actions: BoardActions, activity: ActivityModel | null, layout: PanelLayout,
+): GpuiElement {
+  const inRow = layout !== "narrow";
   const filter = m.hidden > 0 ? `${m.filter} · ${m.hidden} hidden` : m.filter;
-  const ready = column("ready", m.ready, m.ready.cards.map((c, i) => card(c, `gascity-card-ready-${i}`, theme, actions)), theme);
-  const inProgress = column("inprogress", m.inProgress, m.inProgress.cards.map((c, i) => card(c, `gascity-card-inprogress-${i}`, theme, actions)), theme);
+  const ready = column("ready", m.ready, m.ready.cards.map((c, i) => card(c, `gascity-card-ready-${i}`, theme, actions)), theme, inRow);
+  const inProgress = column("inprogress", m.inProgress, m.inProgress.cards.map((c, i) => card(c, `gascity-card-inprogress-${i}`, theme, actions)), theme, inRow);
   const closedBody = m.closed.recent.map((c, i) => card(c, `gascity-card-closed-${i}`, theme, actions));
   if (m.closed.earlier.length > 0) {
     closedBody.push(muted(label("gascity-col-closed-divider", m.closed.divider), theme));
     closedBody.push(...m.closed.earlier.map((c, i) => card(c, `gascity-card-earlier-${i}`, theme, actions)));
   }
-  const closed = column("closed", m.closed, closedBody, theme);
-  let el = v_flex().id("gascity-work").flex_1().gap(6)
+  const closed = column("closed", m.closed, closedBody, theme, inRow);
+  let el = shrinkIf(v_flex().id("gascity-work"), layout === "side-by-side").gap(6)
     .child(h_flex().id("gascity-work-head").gap(8).child(label("gascity-work-title", "Work"))
       .child(button("gascity-work-new", "+ New bead", (cx) => actions.openNewBead(cx))))
     .child(muted(label("gascity-work-filter", filter), theme))
-    .child(h_flex().id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed));
+    .child((inRow ? h_flex().items_start() : v_flex()).id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed));
   const d = beadDetail(detail, theme, actions, activity);
   if (d !== null) el = el.child(d);
   return el;

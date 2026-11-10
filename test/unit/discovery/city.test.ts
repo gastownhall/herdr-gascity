@@ -9,6 +9,7 @@ import {
   decodeCopy, initialMachine, step, type CityEvent, type CityList, type CityMachine, type CopyContext,
 } from "../../../src/discovery/city.ts";
 import type { Endpoint, NoEndpoint } from "../../../src/discovery/resolve.ts";
+import type { GcError } from "../../../src/gc/errors.ts";
 import type { CityInfo } from "../../../src/gc/types.gen.ts";
 import { err, ok } from "../../../src/result.ts";
 
@@ -208,5 +209,62 @@ describe("notices on a selected city", () => {
     expect(m.state).toMatchObject({ phase: "city-running", notices: [{ kind: "write-grant-required" }] });
     m = step(m, { type: "select", city: "beta" });
     expect(m.state).toMatchObject({ phase: "city-running", city: { name: "beta" }, notices: [] });
+  });
+});
+
+describe("a change gc refused, then one it accepted", () => {
+  const running = () => run(UNPINNED, resolved, cities(city("alpha", true)));
+  const writeGrant = { kind: "write-grant-required", status: 401, detail: "missing X-GC-City-Write grant" } as const;
+  const readOnly = { kind: "read-only", detail: "read_only: bound to 0.0.0.0" } as const;
+
+  test("a write gc accepted clears the write-grant and read-only notices, and keeps the others", () => {
+    let m = running();
+    for (const error of [writeGrant, readOnly, { kind: "api-missing", operationId: "get-v0-city-by-city-name-pending" }] as const) {
+      m = step(m, { type: "city-error", city: "alpha", error });
+    }
+    m = step(m, { type: "write-accepted", city: "alpha" });
+    expect(m.state).toMatchObject({ phase: "city-running", notices: [{ kind: "api-missing", operationId: "get-v0-city-by-city-name-pending" }] });
+  });
+
+  test("a write accepted with no refusal noted, or for another city, changes nothing", () => {
+    const before = running();
+    expect(step(before, { type: "write-accepted", city: "alpha" })).toBe(before);
+    const refused = step(before, { type: "city-error", city: "alpha", error: writeGrant });
+    expect(step(refused, { type: "write-accepted", city: "beta" })).toBe(refused);
+  });
+
+  test("a fresh discovery forgets the refusal", () => {
+    const refused = step(running(), { type: "city-error", city: "alpha", error: readOnly });
+    const again = [{ type: "discover" }, resolved, cities(city("alpha", true))].reduce<CityMachine>((m, e) => step(m, e as CityEvent), refused);
+    expect(again.state).toMatchObject({ phase: "city-running", notices: [] });
+  });
+});
+
+describe("a failed city-list poll", () => {
+  const unreachable = { kind: "unreachable", url: "http://127.0.0.1:8372/v0/cities", cause: "connection refused" } as const;
+  const timeout = { kind: "timeout", url: "http://127.0.0.1:8372/v0/cities", ms: 30_000 } as const;
+  const failed = (error: GcError): CityEvent => ({ type: "cities-poll-failed", error });
+
+  test("gc unreachable while the copy's city is not registered (a graceful supervisor stop): cities-failed, keeping the city", () => {
+    const m = step(run({ pinned: "alpha", lastSelection: null }, resolved, cities(city("beta", true))), failed(unreachable));
+    expect(m.state).toMatchObject({ phase: "cities-failed", error: unreachable, selected: "alpha" });
+    expect(step(m, cities(city("alpha", true))).state).toMatchObject({ phase: "city-running", city: { name: "alpha" } });
+  });
+
+  test("gc unreachable while the city is stopped, or while the copy asks for a city: cities-failed", () => {
+    const stopped = run(UNPINNED, resolved, cities(city("alpha", true)), cities(city("alpha", false)));
+    expect(step(stopped, failed(timeout)).state).toMatchObject({ phase: "cities-failed", selected: "alpha" });
+    const choosing = run(UNPINNED, resolved, cities(city("alpha", false), city("beta", false)));
+    expect(step(choosing, failed(unreachable)).state).toMatchObject({ phase: "cities-failed", selected: null });
+  });
+
+  test("a running city keeps its state: the city store's connection says it is reconnecting", () => {
+    const before = run(UNPINNED, resolved, cities(city("alpha", true)));
+    expect(step(before, failed(unreachable))).toBe(before);
+  });
+
+  test("an answer that is not a transport failure changes nothing (it is in the diagnostics)", () => {
+    const before = run({ pinned: "alpha", lastSelection: null }, resolved, cities(city("beta", true)));
+    expect(step(before, failed({ kind: "http", status: 500, problem: null, raw: "boom" }))).toBe(before);
   });
 });

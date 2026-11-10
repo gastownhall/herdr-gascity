@@ -55,19 +55,29 @@ secondary text in the theme's muted color.
 - **Header:** the connection chip (`connected`, `connecting`, `looking for
   gc`, `gc not reachable at <url> (<where the URL came from>)`,
   `reconnecting in N s (<cause>)`, `city stopped`, `gc too old (needs …)`,
-  `read-only server`), "N need you", the data's age, and `Retry now` when
-  there is something to retry. Below it: the API URL, gc's version and where
-  the URL came from; `City: <name>`; the other cities with their state; a
-  "Choose a city:" list when more than one city runs and none is chosen;
-  "Discovery:" with each place gc's API was looked for and what it gave.
-- **Agents** (left, takes the free width): one group per rig in gc's order,
+  `read-only server`, `connected, read-only`), "N need you", the data's age,
+  and `Retry now` when there is something to retry. Below it: the API URL,
+  gc's version and where the URL came from; `City: <name>`; banners (a city
+  that requires signed write grants, a read-only server, an old gc) — a
+  change gc refuses for either reason raises them, and the next change it
+  accepts clears them; the other cities with their state; a "Choose a city:"
+  list when more than one city runs and none is chosen; and, only while no gc
+  API answered, "Discovery:" with each place gc's API was looked for and what
+  it gave (once connected, those lines are in the diagnostics drawer).
+- **Layout by width** (the root's laid-out width, from herdr's
+  `on_size_change`): from 1500 px the agents and the work board are side by
+  side; below that (and until herdr reports a size) the board is under the
+  agents, its three columns side by side; below 720 px the columns stack
+  too. Every region in a row may shrink so its text wraps; the pane scrolls
+  vertically.
+- **Agents** (left when side by side): one group per rig in gc's order,
   `▾ <rig> · <N> agents · <M> running` with `[Suspend rig…]`;
   then the city's own agents. Each agent row: name, pool limits, status,
   `[New session…]`, `[Suspend agent…]`/`[Resume agent]`; under it its
   sessions, `session <id>: <alias> · <status> · bead <id> "<title>"` (or
   "no active bead"), "terminal attached" when one is. Sessions no agent
   claims are under "Other sessions".
-- **Work** (right): `Work [+ New bead]`, the filter note (which
+- **Work** (right when side by side, else below): `Work [+ New bead]`, the filter note (which
   infrastructure bead types are hidden), then three columns: Ready (N),
   In progress (N), Recently closed (N). A card: `<id> · <priority> ·
   "<title>" · <state> · <type> · → <assignee> · [<labels>]`.

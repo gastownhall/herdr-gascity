@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:28bcb6bcf024ef508db26a3c51e21047d40e2066af9e682d772d20b26b9558bb over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:d2aa23802cbaca17688d67e960d1e2ad86a44998ab0d6132a3560a72c3b531df over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2055,6 +2055,7 @@ function rawText(body) {
 }
 var CODE_CITY_NOT_FOUND = "city-not-found";
 var CODE_SESSION_CONFLICT = "session-conflict";
+var CODE_DEMAND_ONLY_SINGLETON = "demand-only-singleton";
 function httpError(operationId, status2, body) {
   const problem = parseProblem(body);
   const detail = problem?.detail ?? "";
@@ -2080,6 +2081,9 @@ function httpError(operationId, status2, body) {
   }
   if (problem) return { kind: "http", status: status2, problem };
   return { kind: "http", status: status2, problem: null, raw: rawText(body) };
+}
+function isTransport(e) {
+  return e.kind === "unreachable" || e.kind === "timeout";
 }
 function problemHint(error) {
   if (error.kind !== "http" || error.status !== 409 || !error.problem) return null;
@@ -3964,6 +3968,19 @@ function onCityError(state, city, error) {
       return { ...state, notices: addNotice(state.notices, { kind: "api-missing", operationId: error.operationId }) };
   }
 }
+var WRITE_NOTICES = /* @__PURE__ */ new Set(["write-grant-required", "read-only"]);
+function onWriteAccepted(state, city) {
+  if (state.phase !== "city-running" && state.phase !== "city-stopped" || state.city.name !== city) return state;
+  const notices = state.notices.filter((n) => !WRITE_NOTICES.has(n.kind));
+  return notices.length === state.notices.length ? state : { ...state, notices };
+}
+function onPollFailed(state, error) {
+  if (!isTransport(error) || state.phase === "city-running") return state;
+  if (state.phase === "cities-failed" && JSON.stringify(state.error) === JSON.stringify(error)) return state;
+  const endpoint = endpointOf(state);
+  if (endpoint === null || citiesOf(state) === null) return state;
+  return { phase: "cities-failed", endpoint, error, selected: selectedCity(state) };
+}
 function step(m, event) {
   const { copy, state } = m;
   switch (event.type) {
@@ -3988,8 +4005,16 @@ function step(m, event) {
       const next = { ...copy, lastSelection: event.city };
       return { copy: next, state: withCities(state, next, endpoint, cities, event.city) };
     }
+    case "cities-poll-failed": {
+      const next = onPollFailed(state, event.error);
+      return next === state ? m : { copy, state: next };
+    }
     case "city-error": {
       const next = onCityError(state, event.city, event.error);
+      return next === state ? m : { copy, state: next };
+    }
+    case "write-accepted": {
+      const next = onWriteAccepted(state, event.city);
       return next === state ? m : { copy, state: next };
     }
   }
@@ -4054,6 +4079,7 @@ function targetText(t) {
 
 // src/vm/errorText.ts
 var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
+var DEMAND_ONLY_HINT = "gc starts this agent's one session only while it has work: sling a bead to it instead";
 function seconds(ms) {
   return `${Math.round(ms / 1e3)} s`;
 }
@@ -4072,6 +4098,10 @@ function rawText2(e) {
     case "too-large":
       return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
     case "http": {
+      if (e.problem?.code === CODE_DEMAND_ONLY_SINGLETON) {
+        const gc = e.problem.detail ?? "";
+        return `${DEMAND_ONLY_HINT}${gc === "" ? "" : ` (gc: ${gc})`}`;
+      }
       const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
       return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
     }
@@ -6208,7 +6238,8 @@ function diagnosticsModel(input) {
   const failures = [...input.entries].sort((a, b) => b.at - a.at).slice(0, DIAGNOSTICS_LIMIT).map((e) => ({ at: iso(e.at), source: cleanLine(e.source), text: syncErrorText(e.error) }));
   const unreadable2 = (input.unreadable ?? []).map((u) => ({ at: null, source: "gc", text: cleanLine(u) }));
   const drift3 = input.drift.map((d) => ({ at: null, source: "gc", text: cleanLine(`value this version does not know: ${d}`) }));
-  return [...failures, ...unreadable2, ...drift3];
+  const notes = (input.notes ?? []).map((n) => ({ at: null, source: cleanLine(n.source), text: cleanLine(n.text) }));
+  return [...notes, ...failures, ...unreadable2, ...drift3];
 }
 
 // src/vm/header.ts
@@ -6250,9 +6281,6 @@ function noEndpointChip(failure2) {
   if (!first) return "gc not reachable";
   const more = tried.length > 1 ? `; ${tried.length - 1} more tried` : "";
   return `gc not reachable at ${first.url} (${SOURCE_LABELS[first.source]})${more}`;
-}
-function isTransport(e) {
-  return e.kind === "unreachable" || e.kind === "timeout";
 }
 function noticeBanner(n, version2) {
   switch (n.kind) {
@@ -6341,7 +6369,8 @@ function headerModel(m, hostErrors = [], live = null) {
     banners: banners.map(cleanLine),
     choices,
     canRetry: state.phase !== "discovering" && state.phase !== "listing",
-    diagnostics: diagnostics2.map(cleanLine),
+    diagnostics: endpoint === null ? diagnostics2.map(cleanLine) : [],
+    drawer: endpoint === null ? [] : diagnostics2.map(cleanLine),
     needsYou,
     age: running ? running.age : null
   };
@@ -6399,6 +6428,7 @@ function probeDocument(input) {
     mod_version: input.modVersion,
     herdr_version: input.herdrVersion,
     connection: { text: header.chip.text, tone: header.chip.tone },
+    banners: [...header.banners],
     discovery: endpoint ? { source: endpoint.source, url: endpoint.url, version: cleanLine(endpoint.version) } : null,
     city: state.phase === "city-running" || state.phase === "city-stopped" ? cleanLine(state.city.name) : null,
     city_phase: state.phase,
@@ -6630,6 +6660,8 @@ var CopyController = class {
   notice = null;
   /** City-scoped errors already fed to the machine (each failure is a new object). */
   applied = /* @__PURE__ */ new WeakSet();
+  /** Ended actions whose answer was already fed to the machine (each state is a new object; kept across subscriptions). */
+  writesSeen = /* @__PURE__ */ new WeakSet();
   /** Failures of this copy's own work, oldest first (diagnostics). */
   failures = [];
   /** The next rediscovery while this copy has no endpoint, and how many there were. */
@@ -6692,6 +6724,7 @@ var CopyController = class {
         this.applied.add(error);
         discovery.apply({ type: "city-error", city: running, error });
       }
+      this.followWrites(running);
       if (discovery.machine.state.phase !== "city-running") this.followCity(null);
     }
     if (this.deps.host.probeEnabled()) this.writeProbe(clock.now());
@@ -6736,8 +6769,9 @@ var CopyController = class {
     const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
+    const header = headerModel(discovery.machine, discovery.hostErrors, live);
     return {
-      header: headerModel(discovery.machine, discovery.hostErrors, live),
+      header,
       agents,
       board,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
@@ -6746,6 +6780,7 @@ var CopyController = class {
       dialog: this.dialog(),
       notice: this.notice,
       diagnostics: diagnosticsModel({
+        notes: header.drawer.map((text2) => ({ source: "discovery", text: text2 })),
         entries: [
           ...s?.errors ?? [],
           ...citiesError ? [{ at: this.cities?.snapshot().fetchedAt ?? now, source: "cities", error: citiesError }] : [],
@@ -7482,8 +7517,32 @@ var CopyController = class {
     const rev = this.cities.tick(fast);
     if (rev === this.citiesRev) return;
     this.citiesRev = rev;
-    const value = this.cities.snapshot().value;
-    if (value !== null) this.deps.discovery.apply({ type: "cities", result: { ok: true, value } });
+    const snap = this.cities.snapshot();
+    if (snap.error !== null) this.deps.discovery.apply({ type: "cities-poll-failed", error: snap.error });
+    else if (snap.value !== null) this.deps.discovery.apply({ type: "cities", result: { ok: true, value: snap.value } });
+  }
+  /**
+   * Feeds the city's ended actions to the machine, oldest end first: a change
+   * gc refused for the whole city (no write grant, a read-only server) raises
+   * its notice, so the header's chip and banner say so and not only the
+   * action's row; one gc then accepted clears it.
+   */
+  followWrites(city) {
+    const ended = [];
+    for (const entry of this.city?.activity().entries ?? []) {
+      const state = entry.state;
+      if (this.writesSeen.has(state)) continue;
+      if (state.kind === "done") {
+        this.writesSeen.add(state);
+        ended.push({ at: state.at, event: { type: "write-accepted", city } });
+      } else if (state.kind === "failed") {
+        this.writesSeen.add(state);
+        const error = state.error;
+        if (error.kind === "write-grant-required" || error.kind === "read-only") ended.push({ at: state.at, event: { type: "city-error", city, error } });
+      }
+    }
+    ended.sort((a, b) => a.at - b.at);
+    for (const e of ended) this.deps.discovery.apply(e.event);
   }
   followCity(key) {
     const cur = this.city;
@@ -8671,6 +8730,15 @@ function sharedVisibilityCache(create) {
   return shared5;
 }
 
+// src/vm/layout.ts
+var SIDE_BY_SIDE_FROM_PX = 1500;
+var NARROW_BELOW_PX = 720;
+function panelLayout(width) {
+  if (width === null || !Number.isFinite(width) || width <= 0) return "stacked";
+  if (width >= SIDE_BY_SIDE_FROM_PX) return "side-by-side";
+  return width < NARROW_BELOW_PX ? "narrow" : "stacked";
+}
+
 // src/view/panel.ts
 import { div as div6 } from "gpui-kit";
 import { h_flex as h_flex7, v_flex as v_flex7 } from "gpui-base";
@@ -8699,6 +8767,9 @@ function greyedIf(el, stale, theme2) {
 function themedRoot(theme2, el) {
   const { colors } = theme2;
   return tinted(tinted(el, colors.background, (e, c) => e.bg(c)), colors.foreground, (e, c) => e.text_color(c));
+}
+function shrinkIf(el, inRow) {
+  return inRow ? el.flex_1().min_w_0() : el;
 }
 
 // src/view/dialogs.ts
@@ -8852,9 +8923,9 @@ function card2(c, id2, theme2, actions) {
   const el = label(id2, cardText(c)).on_click((_, cx) => actions.selectBead(c.selected ? null : c.id, cx));
   return c.selected ? el : muted(el, theme2);
 }
-function column(key, m, body, theme2) {
+function column(key, m, body, theme2, inRow) {
   const id2 = `gascity-col-${key}`;
-  let el = v_flex3().id(id2).flex_1().gap(4).child(label(`${id2}-title`, `${m.title} (${m.count})`));
+  let el = shrinkIf(v_flex3().id(id2), inRow).gap(4).child(label(`${id2}-title`, `${m.title} (${m.count})`));
   const state = m.region;
   if (state.kind === "loading") el = el.child(muted(label(`${id2}-loading`, "loading…"), theme2));
   if (state.age !== null) el = el.child(muted(label(`${id2}-age`, state.stale ? `${state.age} (may be out of date)` : state.age), theme2));
@@ -8890,17 +8961,18 @@ function beadDetail(m, theme2, actions, activity) {
   else description = description.children(m.description.split("\n").map((line, i) => label(`gascity-bead-line-${i}`, line)));
   return el.child(greyedIf(description, m.region.stale, theme2));
 }
-function renderBoard(m, detail, theme2, actions, activity) {
+function renderBoard(m, detail, theme2, actions, activity, layout2) {
+  const inRow = layout2 !== "narrow";
   const filter = m.hidden > 0 ? `${m.filter} · ${m.hidden} hidden` : m.filter;
-  const ready = column("ready", m.ready, m.ready.cards.map((c, i) => card2(c, `gascity-card-ready-${i}`, theme2, actions)), theme2);
-  const inProgress = column("inprogress", m.inProgress, m.inProgress.cards.map((c, i) => card2(c, `gascity-card-inprogress-${i}`, theme2, actions)), theme2);
+  const ready = column("ready", m.ready, m.ready.cards.map((c, i) => card2(c, `gascity-card-ready-${i}`, theme2, actions)), theme2, inRow);
+  const inProgress = column("inprogress", m.inProgress, m.inProgress.cards.map((c, i) => card2(c, `gascity-card-inprogress-${i}`, theme2, actions)), theme2, inRow);
   const closedBody = m.closed.recent.map((c, i) => card2(c, `gascity-card-closed-${i}`, theme2, actions));
   if (m.closed.earlier.length > 0) {
     closedBody.push(muted(label("gascity-col-closed-divider", m.closed.divider), theme2));
     closedBody.push(...m.closed.earlier.map((c, i) => card2(c, `gascity-card-earlier-${i}`, theme2, actions)));
   }
-  const closed2 = column("closed", m.closed, closedBody, theme2);
-  let el = v_flex3().id("gascity-work").flex_1().gap(6).child(h_flex3().id("gascity-work-head").gap(8).child(label("gascity-work-title", "Work")).child(button("gascity-work-new", "+ New bead", (cx) => actions.openNewBead(cx)))).child(muted(label("gascity-work-filter", filter), theme2)).child(h_flex3().id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed2));
+  const closed2 = column("closed", m.closed, closedBody, theme2, inRow);
+  let el = shrinkIf(v_flex3().id("gascity-work"), layout2 === "side-by-side").gap(6).child(h_flex3().id("gascity-work-head").gap(8).child(label("gascity-work-title", "Work")).child(button("gascity-work-new", "+ New bead", (cx) => actions.openNewBead(cx)))).child(muted(label("gascity-work-filter", filter), theme2)).child((inRow ? h_flex3().items_start() : v_flex3()).id("gascity-columns").gap(12).child(ready).child(inProgress).child(closed2));
   const d = beadDetail(detail, theme2, actions, activity);
   if (d !== null) el = el.child(d);
   return el;
@@ -9052,7 +9124,8 @@ function renderPanel(model) {
   if (model.kind === "copy-invalid") {
     return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
-  const { view, theme: theme2, actions, inputs, keyboard } = model;
+  const { view, theme: theme2, actions, inputs, keyboard, size } = model;
+  root = root.overflow_y_scroll().on_size_change((s, cx) => size.resized(s.width, cx));
   if (keyboard !== null) root = root.track_focus(keyboard.handle).on_key_down((e, cx) => keyboard.onKey(e, cx));
   root = root.children(renderHeader(view.header, theme2, actions));
   const dialog = renderDialog(view.dialog, theme2, actions, inputs);
@@ -9067,10 +9140,11 @@ function renderPanel(model) {
     if (log !== null) root = root.child(log);
     return themeIssues(root, theme2);
   }
+  const beside = size.layout === "side-by-side";
   const regions = [];
-  if (view.agents !== null) regions.push(div6().id("gascity-agents-region").flex_1().child(renderAgents(view.agents, theme2, actions, view.activity)));
-  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions, view.activity));
-  if (regions.length > 0) root = root.child(h_flex7().id("gascity-main").gap(12).children(regions));
+  if (view.agents !== null) regions.push(shrinkIf(div6().id("gascity-agents-region"), beside).child(renderAgents(view.agents, theme2, actions, view.activity)));
+  if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions, view.activity, size.layout));
+  if (regions.length > 0) root = root.child((beside ? h_flex7().items_start() : v_flex7()).id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme2, actions, { activity: view.activity, message: inputs?.message ?? null });
   if (detail !== null) root = root.child(detail);
   const activity = renderActivity(view.activity, theme2, actions);
@@ -9321,6 +9395,8 @@ function actionsFor(state, inputs) {
 var GasCity = class extends View {
   state = { kind: "copy-invalid", error: "init has not run" };
   inputs = null;
+  /** The root's width as herdr last laid it out (logical px); null until it reports one. */
+  width = null;
   init(_props, cx) {
     this.state = setUp();
     const state = this.state;
@@ -9390,8 +9466,20 @@ var GasCity = class extends View {
       view,
       actions: actionsFor(state, this.inputs),
       inputs: this.inputs,
-      keyboard: this.keyboard(state)
+      keyboard: this.keyboard(state),
+      size: this.size()
     });
+  }
+  /** The layout for the root's width; a new width redraws only when it changes the layout. */
+  size() {
+    return {
+      layout: panelLayout(this.width),
+      resized: (width, cx) => {
+        const before = panelLayout(this.width);
+        this.width = width;
+        if (panelLayout(width) !== before) cx.notify();
+      }
+    };
   }
 };
 export {

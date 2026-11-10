@@ -52,6 +52,7 @@ describe("probeDocument", () => {
       mod_version: "0.0.0",
       herdr_version: "0.1.14",
       connection: { text: "connected", tone: "ok" },
+      banners: [],
       discovery: { source: "default", url: "http://127.0.0.1:8372", version: "1.4.0" },
       city: "scratch",
       city_phase: "city-running",
@@ -107,6 +108,16 @@ describe("probeDocument", () => {
       diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0, window: false, notice: null, commands: [],
     });
     expect(other.board?.closed.incomplete).toBe(false);
+  });
+
+  test("the header's banners are in the probe, as drawn", () => {
+    const m = initialMachine({ pinned: null, lastSelection: null });
+    const header = { ...headerModel(m), banners: ["This city requires signed write grants; the Herdr mod does not mint them, so it is read-only here (gc: x)."] };
+    const doc = probeDocument({
+      modVersion: "0.0.0", herdrVersion: null, machine: m, header, onScreen: false, keyboard: false, agents: null,
+      board: null, beadDetail: { kind: "none" }, detail: { kind: "none" }, activity: null, diagnostics: [], execLog: [], refreshCount: 0, fetchInFlightMax: 0, window: false, notice: null, commands: [],
+    });
+    expect(doc.banners).toEqual(header.banners);
   });
 
   test("before discovery: no city, no sessions", () => {
