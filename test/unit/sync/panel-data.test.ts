@@ -353,6 +353,39 @@ describe("the shared city list", () => {
     expect(gc.count("/v0/cities", start)).toBe(1);
   });
 
+  test("a poll gc did not answer is retried at the endpoint's backoff probe, not only at the next 10 s poll", async () => {
+    const { host, gc, reg } = setup();
+    let down = true;
+    gc.override = (req) => (req.path !== "/v0/cities" ? undefined
+      : down ? { reject: "error sending request: connection refused" } : { status: 200, body: { items: [{ name: CITY, path: "/c", running: false }], total: 1 } });
+    const list = cities(reg);
+    await host.run("copy-a", () => {
+      list.tick(true);
+      host.every(TICK_MS, () => list.tick(true));
+    });
+    await host.runTurns();
+    expect(list.snapshot().error).toMatchObject({ kind: "unreachable" });
+    down = false;
+    await host.advance(3_000);
+    const polls = gc.seen.filter((r) => r.path === "/v0/cities").map((r) => r.at);
+    expect(polls.length).toBeGreaterThanOrEqual(2);
+    expect(polls[1]! - polls[0]!).toBeLessThan(3_000);
+    expect(list.snapshot().error).toBeNull();
+    expect(list.snapshot().value?.items.map((c) => c.name)).toEqual([CITY]);
+  });
+
+  test("an answer that is not a transport failure waits for the next poll", async () => {
+    const { host, gc, reg } = setup();
+    gc.override = (req) => (req.path === "/v0/cities" ? { status: 500, body: { title: "boom", status: 500, detail: "boom" } } : undefined);
+    const list = cities(reg);
+    await host.run("copy-a", () => {
+      list.tick(true);
+      host.every(TICK_MS, () => list.tick(true));
+    });
+    await host.advance(3_000);
+    expect(gc.count("/v0/cities")).toBe(1);
+  });
+
   test("closing the copy whose tick started a poll abandons it; the other copy's next tick polls again", async () => {
     const { host, gc, reg } = setup();
     let hold = true;

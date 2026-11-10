@@ -128,7 +128,29 @@ describe("the chip", () => {
   });
 });
 
+describe("the endpoint stops answering", () => {
+  test("a pinned city gc no longer lists, then gc unreachable: the chip says gc is not reachable, not that the city is unregistered", () => {
+    const m = machine({ pinned: "ghost", lastSelection: null }, resolved, cities(city("alpha", true)), {
+      type: "cities-poll-failed", error: { kind: "unreachable", url: "http://127.0.0.1:9100/v0/cities", cause: "connection refused" },
+    });
+    const h = headerModel(m);
+    expect(h.chip).toEqual({ tone: "error", text: "gc not reachable at http://127.0.0.1:9100 (~/.gc/supervisor.toml)" });
+    expect(h.chip.text).not.toContain("not registered");
+    expect(h.canRetry).toBe(true);
+  });
+});
+
 describe("notices: read-only banner and chips", () => {
+  test("a write gc then accepted clears the banner and the chip", () => {
+    let m = step(machine(UNPINNED, resolved, cities(city("alpha", true))), {
+      type: "city-error", city: "alpha", error: { kind: "write-grant-required", status: 401, detail: "missing X-GC-City-Write grant" },
+    });
+    expect(headerModel(m).chip).toEqual({ tone: "warn", text: "connected, read-only" });
+    m = step(m, { type: "write-accepted", city: "alpha" });
+    expect(headerModel(m).chip).toEqual({ tone: "ok", text: "connected" });
+    expect(headerModel(m).banners).toEqual([]);
+  });
+
   const withError = (error: Parameters<typeof step>[1] & { type: "city-error" }) =>
     headerModel(step(machine(UNPINNED, resolved, cities(city("alpha", true))), error));
 
@@ -187,15 +209,25 @@ describe("other cities and unreadable entries", () => {
     };
     const h = header(UNPINNED, resolved, event);
     expect(h.banners).toEqual(["1 city entry from gc could not be read (see diagnostics)."]);
-    expect(h.diagnostics.at(-1)).toBe("unreadable city beta (items[1]): unreadable answer to get-v0-cities at items[1].running: items[1].running: expected boolean");
+    expect(h.drawer.at(-1)).toBe("unreadable city beta (items[1]): unreadable answer to get-v0-cities at items[1].running: items[1].running: expected boolean");
   });
 
-  test("diagnostics list every discovery attempt of a connected copy", () => {
-    expect(header(UNPINNED, resolved, cities(city("alpha", true))).diagnostics).toEqual([
+  test("a connected copy's header shows only the endpoint and its source; every candidate tried goes to the drawer", () => {
+    const h = header(UNPINNED, resolved, cities(city("alpha", true)));
+    expect(h.endpoint).toBe("gc 1.2.3 at http://127.0.0.1:9100 (from ~/.gc/supervisor.toml)");
+    expect(h.diagnostics).toEqual([]);
+    expect(h.drawer).toEqual([
       "apiUrl setting: no apiUrl setting",
       "gc supervisor status: gc supervisor status --json reports no api_url",
       "~/.gc/supervisor.toml: http://127.0.0.1:9100 ok (gc 1.2.3)",
     ]);
+  });
+
+  test("while gc has not been found, the candidates are in the header (and not twice in the drawer)", () => {
+    const failure: NoEndpoint = { reason: "none-reachable", attempts: [{ source: "setting", outcome: "absent", detail: "no apiUrl setting" }] };
+    const h = header(UNPINNED, { type: "resolved", result: err(failure) });
+    expect(h.diagnostics).toEqual(["apiUrl setting: no apiUrl setting"]);
+    expect(h.drawer).toEqual([]);
   });
 });
 

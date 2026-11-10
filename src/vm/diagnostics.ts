@@ -1,7 +1,8 @@
-// The diagnostics drawer: the last failures with their time and where they
-// happened (a store domain, the event watcher, a step, the city list, the
-// probe writer), newest first, plus the entries gc sent that could not be
-// read and the values this version does not know. Pure.
+// The diagnostics drawer: standing notes (where discovery looked for gc),
+// the last failures with their time and where they happened (a store domain,
+// the event watcher, a step, the city list, the probe writer), newest first,
+// plus the entries gc sent that could not be read and the values this
+// version does not know. Pure.
 
 import type { ErrorEntry, SyncError } from "../sync/store.ts";
 import { errorText } from "./errorText.ts";
@@ -24,6 +25,8 @@ export interface DiagnosticsInput {
   drift: readonly string[];
   /** Unreadable list entries (agents view-model), already worded. */
   unreadable?: readonly string[];
+  /** Standing notes, listed first (the discovery candidates of a connected copy). */
+  notes?: readonly { source: string; text: string }[];
 }
 
 /** The text of any failure the sync engine records. */
@@ -58,5 +61,6 @@ export function diagnosticsModel(input: DiagnosticsInput): DiagnosticLine[] {
     .map((e) => ({ at: iso(e.at), source: cleanLine(e.source), text: syncErrorText(e.error) }));
   const unreadable = (input.unreadable ?? []).map((u) => ({ at: null, source: "gc", text: cleanLine(u) }));
   const drift = input.drift.map((d) => ({ at: null, source: "gc", text: cleanLine(`value this version does not know: ${d}`) }));
-  return [...failures, ...unreadable, ...drift];
+  const notes = (input.notes ?? []).map((n) => ({ at: null, source: cleanLine(n.source), text: cleanLine(n.text) }));
+  return [...notes, ...failures, ...unreadable, ...drift];
 }

@@ -59,7 +59,7 @@ it. `compat.json` names the herdr-app and gc versions a release supports.
 |---|---|
 | `src/` | TypeScript source of the mod. `main.ts` is the `View`; `copy.ts` wires one copy to discovery and the shared sync registry; `host.ts` is the only module that touches herdr-app's host APIs; `host.schemas.ts` decodes the host data the mod reads; `probe.ts` writes the probe file; `view/` draws from a model and does no I/O. |
 | `src/discovery/` | Finding gc and the copy's city: `resolve.ts` (endpoint resolution), `supervisorConfig.ts` (strict supervisor.toml reader), `gcStatus.ts`, `settings.ts` (machine-wide settings), `city.ts` (the per-copy city state machine), `controller.ts` (runs them). |
-| `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `board.ts` (the work board and bead detail), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
+| `src/vm/` | Pure view-models: `header.ts` (connection chip, endpoint source, cities, banners, diagnostics), `agents.ts` (the rig/agent/session join), `board.ts` (the work board and bead detail), `status.ts` (the status chip), `detail.ts`, `region.ts` (data age and errors), `layout.ts` (how the regions fit the width), `diagnostics.ts`, `probe.ts` (the probe document), `errorText.ts`, `sanitize.ts`. |
 | `src/gc/` | The gc API client: `client.ts` (written against herdr's constrained `fetch`), `ops.ts` (one function per used operation), `errors.ts` (the `GcError` union and gc's problem+json mapping), `decode.ts` (decode policy), `zod.ts` (the only zod import; turns on `jitless`), and `*.gen.ts` generated from the pin. |
 | `src/commands.ts`, `src/keys.ts` | The command grammar (strict; see below) and the key map of a focused copy. |
 | `src/notify/` | "Needs you" toasts: `needsYou.ts` (one toast per new pending prompt, per app), `focus.ts` (the shared `gascity.focus` target), `window.ts` (the overlay window copy). |
@@ -202,7 +202,8 @@ before the candidate counts as unreachable):
 
 Only loopback URLs (`127.0.0.1`, `localhost`, `[::1]`, with a port) are used;
 any other is refused, not probed. The header names the URL, gc's version and
-where the URL came from; the diagnostics list every candidate and its outcome.
+where the URL came from; every candidate and its outcome is listed in the
+header while none answered, and in the diagnostics drawer once one did.
 A gc home other than `~/.gc` needs the `apiUrl` setting (a mod cannot read
 environment variables).
 
@@ -212,7 +213,13 @@ Settings are machine-wide, in herdr's shared store under `gascity.settings`:
 shows its last choice (kept in that copy's localStorage), else the only
 running city, else asks. City states: discovering, no endpoint, cities failed,
 choose a city, unknown city, running, stopped; a running city also shows
-read-only and "gc too old" notices from gc's answers.
+read-only and "gc too old" notices from gc's answers, including a change gc
+refused for the whole city (no write grant, a read-only server), until a
+change it accepts or a fresh discovery. A city-list poll that cannot reach gc
+moves every state but running to "cities failed" (`gc not reachable at …`),
+so a supervisor stopped with `gc supervisor stop` (which first takes the city
+off the list) never reads as an unregistered city; a running city's store
+says it is reconnecting instead.
 
 With no endpoint, the copy rediscovers from its own 250 ms timer: 5 s after
 the failure, then 10, 20, 40 and every 60 s ("retry now" does it at once). A
@@ -384,7 +391,7 @@ it unsubscribes and starts nothing; the other copies keep updating.
   or links. Lines written to herdr's log are cleaned the same way.
 - **Probe.** While the shared value `gascity.probe` is `true`, the copy's
   tick writes `<app home>/data/gascity-probe/probe.json`
-  (`gascity-herdr-probe/4`; `probe:on` / `probe:off` set it; /4 added the toasts in the exec/run log and the `window`, `notice` and `commands` fields): connection, discovery, city, visibility,
+  (`gascity-herdr-probe/4`; `probe:on` / `probe:off` set it; /4 added the toasts in the exec/run log and the `window`, `notice` and `commands` fields, and later the header's `banners`): connection, banners, discovery, city, visibility,
   sessions with their status, the board (each column's cards, the closes
   seen in events with their seq and `close_reason`, the seed, the filter and
   the columns' errors), the selected bead, the session detail, actions with their state and
@@ -403,8 +410,9 @@ it unsubscribes and starts nothing; the other copies keep updating.
 
 ## The work board
 
-The work board sits beside the agents panel and reads the same shared store;
-it adds no polling of its own.
+The work board sits beside the agents panel when the pane is at least
+1500 px wide, else under it (its columns stack too below 720 px), and reads
+the same shared store; it adds no polling of its own.
 
 - **Ready** and **In progress** are gc's `/work/ready` lists (open, and
   `status=in_progress`), at most 50 each, in gc's own order (priority, then

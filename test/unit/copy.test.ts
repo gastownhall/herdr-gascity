@@ -246,6 +246,37 @@ describe("a copy", () => {
     expect(registry.storeCount()).toBe(0);
   });
 
+  test("a graceful supervisor stop (the city leaves the list, then gc stops answering): the chip says gc is not reachable", async () => {
+    const { host, gc, registry, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    gc.override = (req) => (req.path === "/v0/cities" ? { status: 200, body: { items: [], total: 0 } } : undefined);
+    await host.advance(61_000);
+    expect(a.copy.view(host.now()).header.chip.text).toBe('city "scratch" is not registered with gc at http://127.0.0.1:8372');
+    expect(registry.storeCount()).toBe(0);
+    gc.override = () => ({ reject: "error sending request: connection refused" });
+    await host.advance(11_000);
+    const h = a.copy.view(host.now()).header;
+    expect(h.chip).toEqual({ tone: "error", text: "gc not reachable at http://127.0.0.1:8372 (built-in default)" });
+    expect(h.canRetry).toBe(true);
+    // gc comes back with the city: the copy shows it again, without a person's retry.
+    gc.override = null;
+    await host.advance(70_000);
+    expect(a.copy.view(host.now()).header.chip).toEqual({ tone: "ok", text: "connected" });
+    expect(a.copy.view(host.now()).header.city).toBe("scratch");
+  });
+
+  test("gc unreachable while the city runs: the city stays shown, reconnecting", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(3000);
+    gc.override = () => ({ reject: "error sending request: connection refused" });
+    await host.advance(65_000);
+    const v = a.copy.view(host.now());
+    expect(v.header.city).toBe("scratch");
+    expect(v.header.chip.text).toMatch(/^reconnecting in \d+ s/);
+  });
+
   test("the copy tells the registry whether a gascity view may be on screen", async () => {
     const { host, gc, open, setVisibility } = setup();
     await open();

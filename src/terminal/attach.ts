@@ -222,12 +222,12 @@ export function openTerminal(binding: TerminalBinding, name: string, deps: OpenD
     if (!s.ok) return s;
     switch (readiness(s.value)) {
       case "ready":
-        return ok({ kind: "watch", watch: openNow() });
+        return ok({ kind: "watch", watch: openNow(), wrote: false });
       case "stopping":
         return err(stoppingError(s.value));
       case "starting":
         // gc is starting it already: no wake, wait until it has settled.
-        return ok({ kind: "watch", watch: waitRunning(clock.now(), false, 0, s) });
+        return ok({ kind: "watch", watch: waitRunning(clock.now(), false, 0, s), wrote: false });
       case "not-running":
         break;
     }
@@ -237,7 +237,7 @@ export function openTerminal(binding: TerminalBinding, name: string, deps: OpenD
       if (woke.error.kind === "outcome-unknown") return woke;
       return err({ kind: "attach-not-started", sessionId: id, reason: "wake-refused", detail: errorText(woke.error) });
     }
-    return ok({ kind: "watch", watch: waitRunning(clock.now(), true, 0, s) });
+    return ok({ kind: "watch", watch: waitRunning(clock.now(), true, 0, s), wrote: true });
   };
 
   const wake = "post-v0-city-by-city-name-session-by-id-wake";

@@ -55,7 +55,7 @@ const B = { copy: "b" };
 /** A whole probe document. */
 function fullBody(over: Partial<ProbeBody> = {}): ProbeBody {
   return {
-    schema: PROBE_SCHEMA, mod_version: "0.0.0", herdr_version: "0.1.14", connection: { text: "connected", tone: "ok" }, discovery: null,
+    schema: PROBE_SCHEMA, mod_version: "0.0.0", herdr_version: "0.1.14", connection: { text: "connected", tone: "ok" }, banners: [], discovery: null,
     city: "scratch", city_phase: "city-running", visibility: { on_screen: true }, keyboard: false, needs_you: 0, data_age: null,
     sessions: [], board: null, bead_detail: null, detail: null, actions: [], exec_log: [], errors: [], refresh_count: 0, fetch_in_flight_max: 0,
     window: false, notice: null, commands: [],

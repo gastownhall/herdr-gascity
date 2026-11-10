@@ -343,11 +343,11 @@ export class ActionLedger {
     }
     const sent = r.value;
     if (sent.kind === "watch") {
-      this.watch(rec, sent.watch);
+      this.watch(rec, sent.watch, sent.wrote);
       return;
     }
     if (sent.kind === "done") {
-      this.resolve(rec, { kind: "done", at: now, detail: sent.detail, requestId: null });
+      this.resolve(rec, { kind: "done", at: now, detail: sent.detail, requestId: null, wrote: true });
       this.startFollowUp(rec, sent.created);
       return;
     }
@@ -392,7 +392,7 @@ export class ActionLedger {
     } else if (failure !== null) {
       this.resolve(rec, { kind: "unknown", at: now, error: unknown(s.requestId, rec.spec.operationId, "unreadable-response", [describe(failure)]) });
     } else if (outcome.state === "succeeded") {
-      this.resolve(rec, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId });
+      this.resolve(rec, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId, wrote: true });
       this.startFollowUp(rec, undefined);
     } else {
       rec.state = { ...next, lastError: null };
@@ -400,10 +400,11 @@ export class ActionLedger {
     }
   }
 
-  /** The action goes on as `watch` (from its request's answer, or from its previous step). */
-  private watch(rec: ActionRecord, watch: Watch): void {
+  /** The action goes on as `watch` (from its request's answer, with whether gc accepted a change, or from its previous step). */
+  private watch(rec: ActionRecord, watch: Watch, wrote: boolean): void {
     const s = rec.state;
-    rec.state = { kind: "watching", since: s.kind === "watching" ? s.since : this.deps.clock.now(), watch, inFlight: false };
+    const since = s.kind === "watching" ? s.since : this.deps.clock.now();
+    rec.state = { kind: "watching", since, watch, inFlight: false, wrote: s.kind === "watching" ? s.wrote || wrote : wrote };
     this.commit();
   }
 
@@ -421,7 +422,7 @@ export class ActionLedger {
     next.then(
       (r) => {
         if (!this.live(rec, token) || rec.state.kind !== "watching") return;
-        if ("step" in r) this.watch(rec, r);
+        if ("step" in r) this.watch(rec, r, false);
         else this.end(rec, r);
       },
       (cause: unknown) => {
@@ -431,12 +432,13 @@ export class ActionLedger {
     );
   }
 
-  /** Ends a watched action as its Watch says. */
+  /** Ends a watched action as its Watch says; done counts as a change only if gc accepted one before the watch. */
   private end(rec: ActionRecord, e: WatchEnd): void {
     const at = this.deps.clock.now();
+    const wrote = rec.state.kind === "watching" && rec.state.wrote;
     switch (e.kind) {
       case "done":
-        this.resolve(rec, { kind: "done", at, detail: e.detail, requestId: null });
+        this.resolve(rec, { kind: "done", at, detail: e.detail, requestId: null, wrote });
         return;
       case "failed":
         this.resolve(rec, { kind: "failed", at, error: e.error });
