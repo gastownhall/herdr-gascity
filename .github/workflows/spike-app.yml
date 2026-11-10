@@ -40,57 +40,57 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: S0 preflight (packages, lavapipe)
+      - name: Preflight (packages, lavapipe)
         timeout-minutes: 6
         run: canary/bootstrap-linux.sh preflight
 
-      - name: S0 resolve current stable release
+      - name: Resolve current stable release
         id: resolve
         timeout-minutes: 2
         run: canary/bootstrap-linux.sh resolve
 
-      - name: S0 restore release mirror
+      - name: Restore release mirror
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/herdr-canary/mirror-cache
           key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
 
-      - name: S0 fill and serve release mirror
+      - name: Fill and serve release mirror
         timeout-minutes: 3
         run: canary/bootstrap-linux.sh mirror
 
-      - name: S1 install herdr-app via published install.sh
+      - name: Install herdr-app via published install.sh
         timeout-minutes: 3
         run: canary/bootstrap-linux.sh install
 
-      - name: S2 herdr-app check (hello mod)
+      - name: herdr-app check (hello mod)
         timeout-minutes: 2
         run: canary/spike-linux.sh check
 
-      - name: S2b herdr-app types
+      - name: herdr-app types
         timeout-minutes: 2
         continue-on-error: true
         run: canary/spike-linux.sh types
 
-      - name: S4a display (weston headless + Xwayland)
+      - name: Display (weston headless + Xwayland)
         timeout-minutes: 2
         run: canary/bootstrap-linux.sh display
 
-      - name: S4b app up, status, space.new
+      - name: App up, status, space.new
         id: app
         timeout-minutes: 2
         run: canary/bootstrap-linux.sh app
 
-      - name: S5 hello mod tab, commands, tab.select
+      - name: Hello mod tab, commands, tab.select
         timeout-minutes: 3
         run: canary/spike-linux.sh mod
 
-      - name: S6 herdr-app shot (not blank, shows the mod)
+      - name: herdr-app shot (not blank, shows the mod)
         if: ${{ !cancelled() && steps.app.outcome == 'success' }}
         timeout-minutes: 2
         run: canary/spike-linux.sh shot
 
-      - name: S10 pane.go focus + XTEST key
+      - name: pane.go focus + XTEST key
         if: ${{ !cancelled() && steps.app.outcome == 'success' }}
         timeout-minutes: 2
         continue-on-error: ${{ !matrix.keyboard_required }}
@@ -104,10 +104,10 @@ jobs:
       - name: Result
         if: always()
         env:
-          KEYBOARD_STAGE: ${{ matrix.keyboard_required && 'S10-keyboard' || '' }}
+          KEYBOARD_STAGE: ${{ matrix.keyboard_required && 'keyboard' || '' }}
         run: >-
-          canary/result.sh S0-preflight S0-resolve S0-mirror S1-install S2-check
-          S4a-display S4b-app S5-mod S6-shot ${KEYBOARD_STAGE:+"$KEYBOARD_STAGE"}
+          canary/result.sh preflight resolve mirror install-app hello-check
+          display app hello-mod hello-shot ${KEYBOARD_STAGE:+"$KEYBOARD_STAGE"}
 
       - name: Upload screenshot and logs
         if: always()

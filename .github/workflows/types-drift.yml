@@ -61,12 +61,12 @@ jobs:
           HERDR_APP_VERSION: ${{ steps.resolve.outputs.app }}
         run: canary/types-drift.sh decide
 
-      - name: S0 preflight (packages)
+      - name: Preflight (packages)
         if: steps.decide.outputs.check == 'true'
         timeout-minutes: 6
         run: canary/bootstrap-linux.sh preflight
 
-      - name: S0 restore release mirror
+      - name: Restore release mirror
         id: mirror-cache
         if: steps.decide.outputs.check == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -74,32 +74,32 @@ jobs:
           path: ${{ runner.temp }}/herdr-canary/mirror-cache
           key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
 
-      - name: S0 fill and serve release mirror
+      - name: Fill and serve release mirror
         id: mirror
         if: steps.decide.outputs.check == 'true'
         timeout-minutes: 3
         run: canary/bootstrap-linux.sh mirror
 
       # Saved even when a later step fails: one download per release.
-      - name: S0 save release mirror
+      - name: Save release mirror
         if: always() && steps.mirror.outcome == 'success' && steps.mirror-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/herdr-canary/mirror-cache
           key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
 
-      - name: S1 install herdr-app via published install.sh
+      - name: Install herdr-app via published install.sh
         if: steps.decide.outputs.check == 'true'
         timeout-minutes: 3
         run: canary/bootstrap-linux.sh install
 
-      - name: T0 herdr-app types (headless)
+      - name: herdr-app types (headless)
         id: generate
         if: steps.decide.outputs.check == 'true'
         timeout-minutes: 2
         run: canary/spike-linux.sh types
 
-      - name: T0 restore the last checked release's declarations
+      - name: Restore the last checked release's declarations
         id: previous
         if: steps.generate.outcome == 'success'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -120,18 +120,18 @@ jobs:
         if: steps.generate.outcome == 'success'
         run: bun install --frozen-lockfile
 
-      - name: T1 type-check src/ against the generated declarations
+      - name: Type-check src/ against the generated declarations
         id: check
         if: steps.generate.outcome == 'success'
         timeout-minutes: 3
         run: canary/types-drift.sh check
 
       # The declarations, for the next release's diff: once per release.
-      - name: T2 remember this release's declarations
+      - name: Remember this release's declarations
         if: always() && steps.generate.outcome == 'success' && steps.previous.outputs.cache-hit != 'true'
         run: canary/types-drift.sh remember
 
-      - name: T2 save this release's declarations
+      - name: Save this release's declarations
         if: always() && steps.generate.outcome == 'success' && steps.previous.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -141,7 +141,7 @@ jobs:
       # The result: the hourly run skips a pass and fails fast on a failure.
       # A failure before `herdr-app types` ran (packages, mirror) records
       # nothing, so the next hourly run tries again.
-      - name: T3 record this run's result
+      - name: Record this run's result
         id: record
         if: always() && (steps.generate.outcome == 'failure' || steps.check.outcome == 'success' || steps.check.outcome == 'failure')
         env:
@@ -149,7 +149,7 @@ jobs:
           HERDR_APP_VERSION: ${{ steps.resolve.outputs.app }}
         run: canary/types-drift.sh record "$RESULT"
 
-      - name: T3 save this run's result
+      - name: Save this run's result
         if: always() && steps.record.outcome == 'success'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

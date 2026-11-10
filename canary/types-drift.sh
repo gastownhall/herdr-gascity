@@ -114,7 +114,7 @@ remember() {
 
 case ${1:-} in
   decide) decide ;;
-  check) run_stage T1-check product check ;;
+  check) run_stage types-check product check ;;
   remember) remember ;;
   record) record "${2:-}" ;;
   *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;

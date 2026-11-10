@@ -137,10 +137,10 @@ shot() {
 }
 
 case ${1:-} in
-  check) run_stage S2-check product check_mod ;;
-  types) run_stage S2b-types product types ;;
-  mod) run_stage S5-mod product open_mod ;;
-  keyboard) run_stage S10-keyboard ui keyboard ;;
-  shot) run_stage S6-shot ui shot ;;
+  check) run_stage hello-check product check_mod ;;
+  types) run_stage types product types ;;
+  mod) run_stage hello-mod product open_mod ;;
+  keyboard) run_stage keyboard ui keyboard ;;
+  shot) run_stage hello-shot ui shot ;;
   *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -4,12 +4,12 @@
 # Vulkan, herdr's published installer for the app and its core (served from a
 # per-release local mirror). After herdr-app's own `scripts/sandbox`.
 #
-#   bootstrap-linux.sh preflight   S0  system packages, software Vulkan, runtime dir
-#   bootstrap-linux.sh resolve     S0  current stable versions (cache key)
-#   bootstrap-linux.sh mirror      S0  fill the mirror (cache misses only) and serve it
-#   bootstrap-linux.sh install     S1  herdr's published install.sh against the mirror
-#   bootstrap-linux.sh display     S4a weston --backend=headless --xwayland (or Xvfb)
-#   bootstrap-linux.sh app         S4b welcome skipped, app up, `status`, `space.new`
+#   bootstrap-linux.sh preflight   system packages, software Vulkan, runtime dir
+#   bootstrap-linux.sh resolve     current stable versions (cache key)
+#   bootstrap-linux.sh mirror      fill the mirror (cache misses only) and serve it
+#   bootstrap-linux.sh install     herdr's published install.sh against the mirror
+#   bootstrap-linux.sh display     weston --backend=headless --xwayland (or Xvfb)
+#   bootstrap-linux.sh app         welcome skipped, app up, `status`, `space.new`
 #   bootstrap-linux.sh teardown    stop the app, its core, the display and the mirror
 #
 # Each stage appends its outcome to $CANARY_ROOT/out/stages.jsonl. Values later
@@ -218,12 +218,12 @@ teardown() {
 }
 
 case ${1:-} in
-  preflight) run_stage S0-preflight infra preflight ;;
-  resolve) run_stage S0-resolve infra resolve ;;
-  mirror) run_stage S0-mirror infra mirror ;;
-  install) run_stage S1-install product install_app ;;
-  display) run_stage S4a-display infra display_up ;;
-  app) run_stage S4b-app product app_up ;;
+  preflight) run_stage preflight infra preflight ;;
+  resolve) run_stage resolve infra resolve ;;
+  mirror) run_stage mirror infra mirror ;;
+  install) run_stage install-app product install_app ;;
+  display) run_stage display infra display_up ;;
+  app) run_stage app product app_up ;;
   teardown) teardown ;;
   *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

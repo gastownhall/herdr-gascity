@@ -89,6 +89,8 @@ it. `compat.json` names the herdr-app and gc versions a release supports.
 | `canary/pack/` | The canary pack: one deterministic, LLM-free agent (`assets/canary-agent.sh`) for the integration test and the nightly canary. |
 | `canary/city.ts`, `canary/city.toml.in` | An isolated scratch city (own HOME, GC_HOME, XDG dirs, tmux socket, port; teardown stops only what it started). |
 | `canary/scope-audit.ts`, `canary/proc.ts` | The `HC_SCOPE` process audit over `/proc`. |
+| `canary/bootstrap-linux.sh`, `canary/mirror.sh`, `canary/lib.sh`, `canary/result.sh` | The released herdr-app headless on a GPU-less Linux runner (Xvfb or Weston, lavapipe), installed by herdr's published `install.sh` from a sha256-checked per-release mirror; each stage's outcome in `out/stages.jsonl`. |
+| `canary/mod-linux.sh` | The packaged mod in that app against a scratch city run by gc built at `api/PIN`: package, `herdr-app check`, `install.sh --from`, the probe connected, the shot. Run by the smoke and the preview workflows. |
 
 ## Rules the build enforces
 
@@ -798,6 +800,43 @@ GC_BIN=/abs/path/to/gc bun run test:integration
 - **Artifacts.** `logs/` under the run's directory: `report.json` (timings,
   audits, checks), the probe files, every request and host call, each
   terminal's output, the supervisor's log.
+
+## Real-app smoke
+
+`.github/workflows/smoke.yml` loads the mod in the current stable herdr-app
+before it ships: on every push and pull request that touches `src/`,
+`gascity/`, the installer, the packaging or the scripts it runs. It takes
+about six minutes:
+
+- the released app and its core, installed by herdr's own `install.sh` and
+  run headless on Xvfb with software Vulkan (`canary/bootstrap-linux.sh`);
+- the mod packaged as a release packages it (`bun run package`), then
+  `herdr-app check` on it with no display;
+- gc built from the commit in `api/PIN`, running a scratch city with two
+  sessions and a few beads (`canary/mod-linux.sh city`);
+- `install.sh --from` the package, with the app open: the installer must
+  open the Gas City tab, show it, and store `gcBin`;
+- `gascity.probe:on`, and the mod's probe must show it connected to the
+  city with its sessions listed, then the whole board;
+- `herdr-app shot` (not blank) and `herdr-app status` with no errors.
+
+The shot, the probe, the app's log and every stage's outcome
+(`spike-result.json`, `stages.jsonl`) are the run's artifact. A second job
+packages the same mod with a syntax error appended to `main.js` and passes
+only when the smoke fails at the check stage. The workflow is read-only,
+gets no secret, saves no cache (it only restores the release mirror, whose
+tarballs are checked against the release manifests on every run) and cannot
+be dispatched.
+
+`canary/mod-linux.sh city` puts its city in `GC_HOME` (default `~/.gc`) on
+gc's default port, where a person's own gc lives, so it refuses to run
+unless `GITHUB_ACTIONS=true` or `HERDR_CANARY_THROWAWAY_HOME` equals `$HOME`
+(your word that HOME is a throwaway directory), and refuses a `GC_HOME`
+that already exists or a supervisor already answering on the port. It
+records the supervisor `gc init` started (`$CANARY_ROOT/supervisor.json`:
+home and pid), and `teardown` stops that supervisor only, and only while it
+is still the one running there. Never run it, or herdr-app, on a machine
+whose gc or Herdr you use.
 
 ## Develop
 
