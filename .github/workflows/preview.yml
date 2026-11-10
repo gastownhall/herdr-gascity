@@ -10,7 +10,8 @@ name: Preview screenshot
 # modules it pulls: it is never given a secret, and it never runs in main's
 # context (no dispatch, no schedule, no push to main), so nothing it could
 # write to the Actions cache is in a scope main, a tag or a release can read.
-# To refresh the preview, push a branch that touches one of the paths below.
+# To refresh the preview, push a branch that touches one of the paths below
+# (a change to the built mod does).
 
 on:
   push:
@@ -19,6 +20,7 @@ on:
     paths:
       - .github/workflows/preview.yml
       - canary/preview-linux.sh
+      - gascity/main.js
       - install.sh
       - scripts/package.ts
 
