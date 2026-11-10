@@ -200,8 +200,13 @@ install_mod() {
   local tabs tab status
   # Herdr is open (bootstrap's app stage): the installer opens the tab and sets gcBin.
   HERDR_GASCITY_WAIT=30 sh "$repo/install.sh" --from "$(tarball)" --gc-bin "$GC" 2>&1 | tee "$CANARY_OUT/install-mod.log" >&2
-  jq -e --arg gc "$GC" '.["gascity.settings"].gcBin == $gc' "$HERDR_APP_HOME/shared.json" >/dev/null ||
+  # herdr saves shared settings a moment after the mod's command answers.
+  # shellcheck disable=SC2317 # a poll predicate, called by name
+  gc_bin_saved() { jq -e --arg gc "$GC" '.["gascity.settings"].gcBin == $gc' "$HERDR_APP_HOME/shared.json" >/dev/null 2>&1; }
+  poll 15 "gascity.settings.gcBin in shared.json" gc_bin_saved || {
+    jq -c '.["gascity.settings"]' "$HERDR_APP_HOME/shared.json" >&2 || true
     die "gascity.settings.gcBin is not $GC in shared.json"
+  }
   # The installer's tab: one terminal-free "Gas City" tab in a local space, shown.
   herdr-app ls >"$CANARY_OUT/ls-install.json"
   tabs=$(jq -c '[.spaces[] | select(.machine == null) | .tabs[]
