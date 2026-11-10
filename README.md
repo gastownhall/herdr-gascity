@@ -797,8 +797,8 @@ GC_BIN=/abs/path/to/gc bun run test:integration
 
 `.github/workflows/smoke.yml` loads the mod in the current stable herdr-app
 before it ships: on every push and pull request that touches `src/`,
-`gascity/`, the installer, the packaging or the scripts it runs, and nightly
-against the latest herdr-app release. It takes about six minutes:
+`gascity/`, the installer, the packaging or the scripts it runs. It takes
+about six minutes:
 
 - the released app and its core, installed by herdr's own `install.sh` and
   run headless on Xvfb with software Vulkan (`canary/bootstrap-linux.sh`);
@@ -819,6 +819,16 @@ only when the smoke fails at the check stage. The workflow is read-only,
 gets no secret, saves no cache (it only restores the release mirror, whose
 tarballs are checked against the release manifests on every run) and cannot
 be dispatched.
+
+`canary/mod-linux.sh city` puts its city in `GC_HOME` (default `~/.gc`) on
+gc's default port, where a person's own gc lives, so it refuses to run
+unless `GITHUB_ACTIONS=true` or `HERDR_CANARY_THROWAWAY_HOME` equals `$HOME`
+(your word that HOME is a throwaway directory), and refuses a `GC_HOME`
+that already exists or a supervisor already answering on the port. It
+records the supervisor `gc init` started (`$CANARY_ROOT/supervisor.json`:
+home and pid), and `teardown` stops that supervisor only, and only while it
+is still the one running there. Never run it, or herdr-app, on a machine
+whose gc or Herdr you use.
 
 ## Develop
 

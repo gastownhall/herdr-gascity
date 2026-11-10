@@ -23,7 +23,12 @@
 #   mod-linux.sh shot [file]  wait until the mod shows the whole board, then
 #                             `herdr-app shot` into out/<file> (preview.png);
 #                             `herdr-app status` must report no errors
-#   mod-linux.sh teardown     stop the city's supervisor
+#   mod-linux.sh teardown     stop the supervisor the city stage recorded, only that
+#
+# The city stage puts a city into GC_HOME (default ~/.gc) and gc's default
+# port, where a person's own gc lives: it runs only when GITHUB_ACTIONS=true
+# or HERDR_CANARY_THROWAWAY_HOME=$HOME (HOME is a throwaway directory), and
+# only into a GC_HOME that does not exist yet.
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 . "$here/lib.sh"
@@ -35,7 +40,11 @@ CITY_ROOT=$CANARY_ROOT/city-root
 CITY=$CITY_ROOT/my-city
 API=http://127.0.0.1:8372
 # The supervisor's home: the default ~/.gc, so the mod finds it as a person's.
+# That is where a person's own gc lives, so the city stage runs only in a
+# throwaway home (see guard_throwaway_home) and teardown stops only the
+# supervisor this script recorded in SUPERVISOR_MARKER.
 export GC_HOME=${GC_HOME:-$HOME/.gc}
+SUPERVISOR_MARKER=$CANARY_ROOT/supervisor.json
 
 build_gc() {
   [[ -n ${GASCITY_SRC:-} && -f $GASCITY_SRC/go.mod ]] || die "GASCITY_SRC must point at a gascity checkout"
@@ -51,8 +60,33 @@ api() {
   curl "${args[@]}"
 }
 
+# Refuses to put a scratch city where a person's gc may live: only on a CI
+# runner (GITHUB_ACTIONS=true) or with HERDR_CANARY_THROWAWAY_HOME set to
+# $HOME (the caller's word that HOME is a throwaway directory), only into a
+# GC_HOME that does not exist yet, and only with nothing on gc's port.
+guard_throwaway_home() {
+  if [[ ${GITHUB_ACTIONS:-} != true && ${HERDR_CANARY_THROWAWAY_HOME:-} != "$HOME" ]]; then
+    die "refusing to start a scratch city in $GC_HOME outside CI: set HERDR_CANARY_THROWAWAY_HOME=\$HOME only when HOME is a throwaway directory"
+  fi
+  [[ ! -e $GC_HOME ]] || die "refusing: $GC_HOME already exists (a real gc home?); the scratch city needs a fresh one"
+  if curl -fsS --max-time 2 "$API/health" >/dev/null 2>&1; then
+    die "refusing: a gc supervisor already answers on $API"
+  fi
+}
+
+# Records the supervisor gc init started (its pid, under this GC_HOME) for teardown.
+record_supervisor() {
+  local pid
+  pid=$("$GC" supervisor status --json 2>/dev/null | jq -er 'select(.running == true) | .pid | select(. > 0)') ||
+    die "cannot find the pid of the supervisor gc init started"
+  jq -n --arg home "$GC_HOME" --argjson pid "$pid" --arg api "$API" '{gc_home: $home, pid: $pid, api: $api}' >"$SUPERVISOR_MARKER.new"
+  mv -f "$SUPERVISOR_MARKER.new" "$SUPERVISOR_MARKER"
+  log "the scratch city's supervisor: pid $pid in $GC_HOME"
+}
+
 city_up() {
-  local shims=$CANARY_ROOT/gc-shims
+  local shims=$CANARY_ROOT/gc-shims rc=0
+  guard_throwaway_home
   [[ -x $GC ]] || die "no gc at $GC (run the gc stage)"
   mkdir -p "$CITY_ROOT/rigs/frontend" "$GC_HOME" "$shims"
   # No service manager: gc init's `supervisor install` must not reach one.
@@ -97,7 +131,10 @@ mode = "always"
 template = "reviewer"
 mode = "always"
 EOF
-  PATH=$shims:$PATH "$GC" init --skip-provider-readiness --file "$CITY_ROOT/city.toml" "$CITY" 2>&1 | tee "$CANARY_OUT/gc-init.log" >&2
+  PATH=$shims:$PATH "$GC" init --skip-provider-readiness --file "$CITY_ROOT/city.toml" "$CITY" 2>&1 | tee "$CANARY_OUT/gc-init.log" >&2 || rc=$?
+  # Whatever runs under this fresh GC_HOME now is this script's, even after a failed init.
+  record_supervisor
+  (( rc == 0 )) || die "gc init failed (exit $rc)"
   # shellcheck disable=SC2317 # a poll predicate, called by name
   sessions_up() {
     [[ $(curl -fsS "$API/v0/city/my-city/sessions" 2>/dev/null | jq '[.items[] | select(.running)] | length') == 2 ]]
@@ -215,19 +252,39 @@ shot() {
   jq -e '.errors == []' >/dev/null <<<"$status" || die "herdr-app status reports errors: $(jq -c .errors <<<"$status")"
 }
 
+# Stops the supervisor the city stage recorded, and nothing else: no record,
+# another GC_HOME, or another supervisor running there now, and it is left alone.
 teardown() {
-  [[ -x $GC ]] || return 0
+  local home pid now
+  if [[ ! -f $SUPERVISOR_MARKER ]]; then
+    log "teardown: no supervisor recorded in $SUPERVISOR_MARKER; nothing to stop"
+    return 0
+  fi
+  home=$(jq -r '.gc_home // ""' "$SUPERVISOR_MARKER")
+  pid=$(jq -r '.pid // 0' "$SUPERVISOR_MARKER")
+  if [[ $home != "$GC_HOME" ]]; then
+    log "teardown: the recorded supervisor is in $home, not $GC_HOME; left alone"
+    return 0
+  fi
+  [[ -x $GC ]] || { log "teardown: no gc at $GC; nothing stopped"; return 0; }
+  now=$("$GC" supervisor status --json 2>/dev/null | jq -r 'if .running == true then .pid else 0 end' 2>/dev/null) || now=0
+  if [[ $pid == 0 || $now != "$pid" ]]; then
+    log "teardown: the supervisor running now (pid ${now:-0}) is not the recorded one (pid $pid); left alone"
+    return 0
+  fi
   "$GC" supervisor stop --wait >/dev/null 2>&1 || true
+  rm -f "$SUPERVISOR_MARKER"
+  log "teardown: stopped the scratch city's supervisor (pid $pid)"
 }
 
 case ${1:-} in
-  gc) run_stage P1-gc infra build_gc ;;
-  city) run_stage P2-city infra city_up ;;
-  package) run_stage M1-package product package_mod "${@:2}" ;;
-  check) run_stage M2-check product check_mod ;;
-  install) run_stage P3-install product install_mod ;;
-  connected) run_stage P4-connected product connected ;;
-  shot) run_stage P5-shot ui shot "${@:2}" ;;
+  gc) run_stage gc infra build_gc ;;
+  city) run_stage city infra city_up ;;
+  package) run_stage package product package_mod "${@:2}" ;;
+  check) run_stage check product check_mod ;;
+  install) run_stage install-mod product install_mod ;;
+  connected) run_stage connected product connected ;;
+  shot) run_stage shot ui shot "${@:2}" ;;
   teardown) teardown ;;
-  *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
