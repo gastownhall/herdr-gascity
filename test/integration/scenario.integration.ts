@@ -345,7 +345,9 @@ describe("the mod against a scratch gc city", () => {
     steps.push({ step: "session running", sessionId, ms: elapsed });
     log(`session ${sessionId} running after ${elapsed} ms`);
     expect(elapsed).toBeLessThanOrEqual(90_000);
-    expect(newestAction(readProbe(main()), "session.new")?.state).toBe("done");
+    // gc may list the session running before the mod's next outcome poll (0.5, 1, 2, then every 2 s) learns the create is done.
+    await waitFor("the session.new action done in the mod", 15_000, () => newestAction(readProbe(main()), "session.new")?.state === "done", 200,
+      () => JSON.stringify(newestAction(readProbe(main()), "session.new") ?? null));
   }, 120_000);
 
   test("submit 'close <bead>' reaches the agent; the bead is in the closed ring within 60 s", async () => {
