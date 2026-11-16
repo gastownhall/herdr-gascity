@@ -157,6 +157,14 @@ describe("auditAuthority", () => {
     expect(findings(i)).toEqual([`event bead.closed for ${BEAD} at ${at(7.9)} has no write before it`]);
   });
 
+  test("gc stamps a request after it measures its duration: a change in that lag is still the write's", () => {
+    // Seen on a runner: bead.created 3.8 ms before the request record, whose duration_ms was 2.
+    const i = good();
+    i.events = i.events.map((e) => (e.payload?.path === `/v0/city/${CITY}/beads` ? request(6, "POST", `/v0/city/${CITY}/beads`, 201, 2) : e));
+    i.events = i.events.map((e) => (e.type === "bead.created" && e.subject === BEAD ? event(5.9962, "bead.created", BEAD) : e));
+    expect(findings(i)).toEqual([]);
+  });
+
   test("an action of a kind the audit does not know fails closed", () => {
     const i = good();
     i.probe.actions.push({ action: "city.unregister", state: "done", attempt: 1 });

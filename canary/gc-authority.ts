@@ -75,6 +75,12 @@ export interface AuthorityAudit {
 
 /** The most fetches the mod may have in flight at once. */
 export const FETCH_IN_FLIGHT_BOUND = 2;
+/**
+ * How long gc may take between measuring a request's duration and stamping its
+ * supervisor.request event (it logs and records metrics in between): a write's
+ * start is its stamp less duration_ms less this. Seen at about 2 ms on a runner.
+ */
+export const RECORD_LAG_MS = 50;
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -166,8 +172,8 @@ function writesOf(events: readonly GcEvent[], run: RunSubjects, since: number): 
     const status = p.status ?? 0;
     if (status < 200 || status > 299) continue;
     const end = epochMs(e.ts);
-    // The event is stamped at completion; the request began duration_ms (rounded) earlier.
-    const start = end - (p.duration_ms ?? 0) - 1;
+    // The event is stamped after completion; the request began duration_ms (truncated) and the record's lag earlier.
+    const start = end - (p.duration_ms ?? 0) - 1 - RECORD_LAG_MS;
     if (start < since) continue;
     out.push({ method: p.method, path: p.path, status, start, end, ts: e.ts, by: null });
   }
