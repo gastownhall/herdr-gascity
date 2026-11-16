@@ -766,8 +766,8 @@ GC_BIN=/abs/path/to/gc bun run test:integration
   `HC_SCOPE` token, and `terminals()` reports it with herdr's record shape
   (the program named from the PTY's foreground process). Commands go only to
   copies on screen, as `herdr-app do gascity.<command>` does.
-- **The scenario.** Discovery (from `~/.gc/supervisor.toml`) and one shared
-  store for both copies; a session started through the mod, running within
+- **The scenario.** Discovery (the API URL gc reports in
+  `gc supervisor status --json`) and one shared store for both copies; a session started through the mod, running within
   90 s; a bead created through the mod and `submit close <bead>` sent to the
   session, the bead in the closed ring within 60 s; changes shown within 3 s
   of gc's event (the median of six samples within 3 s, none over 4 s: the
@@ -780,12 +780,11 @@ GC_BIN=/abs/path/to/gc bun run test:integration
   woken session; then the terminal's tree is killed and gc must still report
   the session running. Then the race path: the recorded attach argv run right
   after the session was suspended again, once with the city's tmux server
-  running and once with it killed. At the pinned gc the attach goes into
-  gc's start path itself (the test checks its output says so; without the
-  server it starts a fresh one) and gives up within milliseconds, so the
-  audit samples `/proc` every 100 ms the whole time. When the pin moves past
-  gastownhall/gascity#9011 (attach lets the controller wake the session),
-  the race path flips to asserting that the attach started nothing.
+  running and once with it killed. At the pinned gc (past
+  gastownhall/gascity#9011) the attach asks the controller to wake the
+  session and waits for it; the test checks its output says so and that it
+  never went into gc's own start path, while the audit samples `/proc` every
+  100 ms the whole time.
 - **The checks are shown to bite.** The audit flags a daemon started from a
   terminal without the `env -u` prefix (and passes with it), and a copy of
   the bundle patched to skip the wake fails the wake-before-attach check.

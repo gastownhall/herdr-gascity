@@ -312,7 +312,8 @@ describe("the mod against a scratch gc city", () => {
     copies = [app.addCopy(), app.addCopy()];
     send(app, "probe:on");
     const p = await waitConnected(main());
-    expect(p.discovery?.source).toBe("supervisor-config");
+    // gc reports its own API URL (`gc supervisor status --json`), ahead of supervisor.toml.
+    expect(p.discovery?.source).toBe("gc-reported");
     expect(p.discovery?.url).toBe(city.apiUrl);
     // The gc-reported step ran the one allowlisted exec.
     expect(app.execs.every((e) => e.allowed)).toBe(true);
@@ -462,14 +463,14 @@ describe("the mod against a scratch gc city", () => {
   }, 150_000);
 
   // The race: the session falls asleep between the mod's wake and the attach.
-  // At the pinned gc, the attach then goes into gc's start path itself (it
-  // scans for orphaned runtimes, makes a pane) and gives up within
-  // milliseconds ("session not found"); with the city's tmux server gone it
-  // starts a fresh server first. The audit samples /proc the whole time.
-  // Once the pin includes gastownhall/gascity#9011 (attach lets the controller
-  // wake the session), these flip to asserting the attach started nothing.
+  // At the pinned gc (which includes gastownhall/gascity#9011) the attach
+  // does not start the runtime itself: it asks the controller to wake the
+  // session, waits for it, and only then attaches. So the attach must never
+  // reach gc's own start path (which scans for orphaned runtimes), with the
+  // city's tmux server running or killed, and the audit samples /proc every
+  // 100 ms the whole time.
   for (const variant of ["city tmux server running", "city tmux server killed"] as const) {
-    test(`race path (${variant}): the recorded attach argv right after a new suspend reaches gc's start path; no leak`, async () => {
+    test(`race path (${variant}): the recorded attach argv right after a new suspend asks the controller to wake it, starts nothing itself; no leak`, async () => {
       expect(attachArgv.length).toBeGreaterThan(0);
       await suspendAndWait(sessionId);
       if (variant === "city tmux server killed") {
@@ -482,8 +483,9 @@ describe("the mod against a scratch gc city", () => {
       const a = await auditWhile(t, `race path, ${variant}`, async () =>
         (await gcSession(sessionId)).running || (terminals.record(t).program as { shell: boolean }).shell, 60_000);
       const output = plain(t.output());
-      // The attach reached gc's start path (else the audit proved nothing).
-      expect(output).toContain(`scanning for orphaned runtimes for ${sessionId}`);
+      // The attach found the session asleep and left the start to the controller.
+      expect(output).toContain(`Session ${sessionId} is not running; asking the controller to start it`);
+      expect(output).not.toContain("scanning for orphaned runtimes");
       if (variant === "city tmux server killed") expect(output).toContain("no tmux server running");
       expect(a.leaks).toEqual([]);
       const before = await gcSession(sessionId);

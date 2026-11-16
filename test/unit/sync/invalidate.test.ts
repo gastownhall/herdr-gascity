@@ -2,7 +2,7 @@
 // and which bead subjects get a targeted refetch.
 
 import { describe, expect, test } from "bun:test";
-import { ALL_DOMAINS, invalidationFor, type Domain } from "../../../src/sync/invalidate.ts";
+import { ALL_DOMAINS, SESSION_LIFECYCLE, invalidationFor, type Domain } from "../../../src/sync/invalidate.ts";
 import type { TypedEventStreamEnvelope } from "../../../src/gc/types.gen.ts";
 
 let seq = 100;
@@ -22,6 +22,10 @@ describe("event type → domains", () => {
     ["session.crashed", "sc-20", ["agents", "sessions"]],
     ["session.suspended", "sc-99", ["agents", "sessions"]],
     ["session.updated", undefined, ["agents", "sessions"]],
+    ["session.created", "sc-30", ["agents", "sessions"]],
+    ["session.created", undefined, ["agents", "sessions"]],
+    ["session.closed", "sc-20", ["agents", "pending", "sessions"]],
+    ["session.closed", undefined, ["agents", "pending", "sessions"]],
     ["request.result.session.create", "req-1", ["agents", "sessions"]],
     ["request.result.session.message", "req-1", ["agents", "sessions"]],
     ["request.failed", "req-1", ["agents", "sessions"]],
@@ -51,6 +55,23 @@ describe("event type → domains", () => {
 
   test("ALL_DOMAINS lists every domain once", () => {
     expect([...ALL_DOMAINS].sort()).toEqual(["agents", "inProgress", "pending", "ready", "rigs", "sessions"]);
+  });
+});
+
+describe("session lifecycle events (session.created, session.closed)", () => {
+  test("both are handled by name, not only by the session.* prefix", () => {
+    expect([...SESSION_LIFECYCLE].sort()).toEqual(["session.closed", "session.created"]);
+  });
+
+  test("a created session's bead event is not needed to refresh sessions", () => {
+    // sc-30 is not a known session yet: only session.created can surface it.
+    expect(domains(ev("session.created", "sc-30"))).toEqual(["agents", "sessions"]);
+  });
+
+  test("a closed session's pending prompt is refetched with it", () => {
+    expect(domains(ev("session.closed", "sc-6"), ev("bead.closed", "sc-6"))).toEqual([
+      "agents", "inProgress", "pending", "ready", "sessions",
+    ]);
   });
 });
 

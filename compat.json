@@ -6,8 +6,8 @@
   },
   "gc": {
     "repo": "gastownhall/gascity",
-    "minimumCommit": "9ba215cb592bcccaa73f28d8aff1bd2317008638",
-    "minimumCommitDate": "2026-11-09T04:54:29+00:00",
+    "minimumCommit": "c7eb6d2f43ca1c0dec508f043b1e75f25470094a",
+    "minimumCommitDate": "2026-11-16T15:57:45+00:00",
     "minimumRelease": null
   }
 }
