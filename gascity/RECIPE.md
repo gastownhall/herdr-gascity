@@ -40,7 +40,7 @@ the only authority over its sessions.
   runtime: Open terminal wakes the session through gc's API first and drops
   those variables from the attach.
 - **Needs** herdr-app 0.1.14 or newer, and a gc built from
-  `gastownhall/gascity` main at or after commit `9ba215cb59` (2026-11-09):
+  `gastownhall/gascity` main at or after commit `c7eb6d2f43` (2026-11-16):
   no gc release has every API call the mod uses yet. An older gc shows "gc
   too old (needs <operation>)" in the header. The exact versions are in
   `compat.json`.

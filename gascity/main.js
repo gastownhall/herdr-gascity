@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:bf26fae794e29aef436017ac3692b5419ce8d38f79f0e7a4e1deb72acc4375c2 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:2080de9a1286f33e3108ec1f2194dd1fa3cd7ffc9c53a4d591ca1b3f61c5de62 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -4025,6 +4025,7 @@ var ALL_DOMAINS = ["rigs", "agents", "sessions", "pending", "ready", "inProgress
 var SESSION_REFRESH = /* @__PURE__ */ new Set(["request.failed", "worker.operation"]);
 var BOARD_CHANGES = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted", "bead.dead_assignee_reopened"]);
 var PENDING = /* @__PURE__ */ new Set(["session.pending", "session.pending_cleared"]);
+var SESSION_LIFECYCLE = /* @__PURE__ */ new Set(["session.created", "session.closed"]);
 function invalidationFor(events, known) {
   const inv = { domains: /* @__PURE__ */ new Set(), cities: false };
   for (const e of events) {
@@ -4032,6 +4033,10 @@ function invalidationFor(events, known) {
     const subject = e.subject;
     if (PENDING.has(t)) {
       inv.domains.add("pending");
+    } else if (SESSION_LIFECYCLE.has(t)) {
+      inv.domains.add("sessions");
+      inv.domains.add("agents");
+      if (t === "session.closed") inv.domains.add("pending");
     } else if (t.startsWith("session.") || t.startsWith("request.result.session.") || SESSION_REFRESH.has(t)) {
       inv.domains.add("sessions");
       inv.domains.add("agents");

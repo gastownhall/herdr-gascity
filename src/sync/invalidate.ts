@@ -5,9 +5,12 @@
 //
 // Every bead event that can move a bead onto, off or within the board
 // refreshes both board columns, so an event-confirmed column is never older
-// than gc's last word on it. gc emits no session.created/closed, so `bead.*`
-// on a session's bead also refreshes sessions; it emits no rig/agent
-// suspension events, so those show at the sweep.
+// than gc's last word on it. A session's start and end are session.created
+// and session.closed; a closed session's pending prompt goes with it, so
+// session.closed also refreshes pending. `bead.*` on a known session's bead
+// still refreshes sessions (gc changes session beads without a session.*
+// event, e.g. metadata). gc emits no rig/agent suspension events, so those
+// show at the sweep.
 
 import type { TypedEventStreamEnvelope } from "../gc/types.gen.ts";
 
@@ -33,6 +36,9 @@ const BOARD_CHANGES = new Set(["bead.created", "bead.updated", "bead.closed", "b
 
 const PENDING = new Set(["session.pending", "session.pending_cleared"]);
 
+/** A session starting or ending: handled by name, so a rename of either in gc fails a test. */
+export const SESSION_LIFECYCLE: ReadonlySet<string> = new Set(["session.created", "session.closed"]);
+
 /** Maps events (any order) to the refetches they call for. */
 export function invalidationFor(events: readonly TypedEventStreamEnvelope[], known: KnownIds): Invalidation {
   const inv: Invalidation = { domains: new Set(), cities: false };
@@ -41,6 +47,10 @@ export function invalidationFor(events: readonly TypedEventStreamEnvelope[], kno
     const subject = e.subject;
     if (PENDING.has(t)) {
       inv.domains.add("pending");
+    } else if (SESSION_LIFECYCLE.has(t)) {
+      inv.domains.add("sessions");
+      inv.domains.add("agents");
+      if (t === "session.closed") inv.domains.add("pending");
     } else if (t.startsWith("session.") || t.startsWith("request.result.session.") || SESSION_REFRESH.has(t)) {
       inv.domains.add("sessions");
       inv.domains.add("agents");
