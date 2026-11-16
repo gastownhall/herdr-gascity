@@ -16,10 +16,18 @@ name: Canary - Gas City end to end in the released herdr-app
 # Failure classes: every stage records its class; canary-result.json names
 # the first failing stage and its class. infra (packages, downloads, gc
 # build, the display, a step killed at its timeout) is not a product
-# failure; everything else is. Product stages are never retried. The canary
-# job runs downloaded code: it holds no secret and has read-only contents.
-# The report job, which runs no downloaded code, writes the summary and
-# files or updates one issue on a product failure.
+# failure; everything else is. Product stages are never retried.
+#
+# Privilege: nothing by default; each job declares what it needs.
+#   mirror  fills the release mirror cache (manifests and tarballs, each
+#           sha256-checked against the release manifest) and saves it. It
+#           checks out only this repo and runs nothing it downloads: it is
+#           the one job that saves a cache.
+#   canary  builds and runs gc at api/PIN, herdr's installer and herdr-app.
+#           It has no token permissions, no secret, and only restores the
+#           mirror (a miss fills from the network, sha256-checked, unsaved).
+#   report  runs no downloaded code; it reads the results as JSON, writes
+#           the summary and files or updates one issue on a product failure.
 #
 # Triggers: nightly; weekly a soak of 5 sequential runs whose product-stage
 # flake rate goes to the summary; dispatched by types-drift.yml when a new
@@ -40,8 +48,7 @@ on:
         required: false
         default: "1"
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: canary-${{ github.ref }}
@@ -66,6 +73,7 @@ jobs:
     name: Plan
     runs-on: ubuntu-24.04
     timeout-minutes: 2
+    permissions: {}
     outputs:
       runs: ${{ steps.plan.outputs.runs }}
       soak: ${{ steps.plan.outputs.soak }}
@@ -86,11 +94,49 @@ jobs:
           echo "runs=$(jq -cn --argjson n "$n" '[range(1; $n + 1)]')" >>"$GITHUB_OUTPUT"
           echo "soak=$([[ $n -gt 1 ]] && echo true || echo false)" >>"$GITHUB_OUTPUT"
 
+  mirror:
+    name: Release mirror
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve current stable release
+        id: resolve
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh resolve
+
+      - name: Restore release mirror
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: Fill release mirror (sha256-checked)
+        if: steps.restore.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        run: canary/bootstrap-linux.sh fill
+
+      - name: Save release mirror
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
   canary:
     name: Canary run ${{ matrix.run }} (ubuntu-24.04, Xvfb, lavapipe)
-    needs: plan
+    # A mirror job that failed only costs the canary a download.
+    needs: [plan, mirror]
+    if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions: {}
     strategy:
       fail-fast: false
       # A soak's runs one after another: they measure flakes, not capacity.
@@ -152,7 +198,7 @@ jobs:
           path: ${{ runner.temp }}/herdr-canary/mirror-cache
           key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
 
-      - name: S0 Fill and serve release mirror
+      - name: S0 Serve release mirror (fills a miss, unsaved)
         timeout-minutes: 5
         run: canary/bootstrap-linux.sh mirror
 
@@ -257,7 +303,6 @@ jobs:
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    # No checkout and no downloaded code: it reads the results as JSON.
     permissions:
       actions: read
       issues: write

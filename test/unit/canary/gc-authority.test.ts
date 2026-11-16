@@ -122,6 +122,23 @@ describe("auditAuthority", () => {
     expect(findings(i)).toEqual([]);
   });
 
+  test("the open pane's keep-awake pin and its release each account for their own write", () => {
+    const i = good();
+    i.probe.actions.push({ action: "session.keep-awake", state: "done", attempt: 1 }, { action: "session.keep-awake-release", state: "done", attempt: 1 });
+    i.events.push(request(4.5, "POST", `/v0/city/${CITY}/session/${SESSION}/pin`), request(9, "POST", `/v0/city/${CITY}/session/${SESSION}/unpin`));
+    expect(auditAuthority(i)).toEqual({ findings: [], writes: 7 });
+  });
+
+  test("a pin no keep-awake action shows is a finding, and a done keep-awake needs its pin", () => {
+    const i = good();
+    i.events.push(request(4.5, "POST", `/v0/city/${CITY}/session/${SESSION}/pin`));
+    i.probe.actions.push({ action: "session.keep-awake-release", state: "done", attempt: 1 });
+    expect(findings(i)).toEqual([
+      `action session.keep-awake-release is done but gc saw no POST /v0/city/${CITY}/session/{id}/unpin`,
+      `write POST /v0/city/${CITY}/session/${SESSION}/pin (200) at ${at(4.5)} is not accounted for by any action`,
+    ]);
+  });
+
   test("a write that gc refused changed nothing and needs no account", () => {
     const i = good();
     i.events.push(request(10, "POST", `/v0/city/${CITY}/beads`, 409));

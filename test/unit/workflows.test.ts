@@ -169,3 +169,54 @@ describe("smoke.yml", () => {
     for (const stage of ["package", "check", "install", "connected", "shot smoke.png"]) expect(runs).toContain(`canary/mod-linux.sh ${stage}`);
   });
 });
+
+describe("canary.yml", () => {
+  const canary = async () => {
+    const text = await readFile(join(DIR, "canary.yml"), "utf8");
+    return { text, w: Bun.YAML.parse(text) as Workflow };
+  };
+  const CACHE = /^actions\/cache(\/[a-z]+)?@/;
+  const checksOutGascity = (j: Job) => j.steps.some((s) => s.uses?.startsWith("actions/checkout@") && s.with?.["repository"] === "gastownhall/gascity");
+
+  test("only the mirror job saves a cache, and it runs no gascity code and no downloaded code", async () => {
+    const { w } = await canary();
+    const savers = Object.entries(w.jobs).filter(([, j]) => j.steps.some((s) => CACHE.test(s.uses ?? "") && !s.uses!.startsWith("actions/cache/restore@")));
+    expect(savers.map(([n]) => n)).toEqual(["mirror"]);
+    const mirror = w.jobs["mirror"]!;
+    expect(checksOutGascity(mirror)).toBe(false);
+    for (const s of mirror.steps) {
+      const uses = (s.uses ?? "").split("@")[0] ?? "";
+      if (s.uses !== undefined) {
+        expect(["actions/checkout", "actions/cache/restore", "actions/cache/save"]).toContain(uses);
+        if (uses === "actions/checkout") expect(s.with?.["repository"]).toBeUndefined();
+      } else {
+        // Only the resolve (manifests) and the sha256-checked fill: neither runs what it downloads.
+        expect(["canary/bootstrap-linux.sh resolve", "canary/bootstrap-linux.sh fill"]).toContain((s.run ?? "").trim());
+      }
+    }
+  });
+
+  test("a job that checks out gascity only restores caches", async () => {
+    const { w } = await canary();
+    const builders = Object.entries(w.jobs).filter(([, j]) => checksOutGascity(j));
+    expect(builders.map(([n]) => n)).toEqual(["canary"]);
+    for (const [job, j] of builders) {
+      for (const s of j.steps) {
+        if (CACHE.test(s.uses ?? "")) expect({ job, uses: s.uses!.split("@")[0] }).toEqual({ job, uses: "actions/cache/restore" });
+      }
+    }
+  });
+
+  test("least privilege: none by default, every job declares its own, and only the report job writes", async () => {
+    const { text, w } = await canary();
+    expect(w.permissions).toEqual({});
+    expect(text).not.toMatch(/secrets\./);
+    const perms = Object.fromEntries(Object.entries(w.jobs).map(([n, j]) => [n, j.permissions]));
+    expect(perms).toEqual({ plan: {}, mirror: { contents: "read" }, canary: {}, report: { actions: "read", issues: "write" } });
+    for (const [name, job] of Object.entries(w.jobs)) {
+      expect({ name, timeout: typeof (job as { "timeout-minutes"?: number })["timeout-minutes"] }).toEqual({ name, timeout: "number" });
+    }
+    // The job that runs downloaded code never sees a token in its environment.
+    expect(JSON.stringify(w.jobs["canary"])).not.toMatch(/github\.token|GITHUB_TOKEN|GH_TOKEN/);
+  });
+});

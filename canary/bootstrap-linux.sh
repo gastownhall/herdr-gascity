@@ -7,6 +7,10 @@
 #   bootstrap-linux.sh preflight   system packages (and $CANARY_EXTRA_APT), software
 #                                  Vulkan, runtime dir
 #   bootstrap-linux.sh resolve     current stable versions (cache key)
+#   bootstrap-linux.sh fill        fill the mirror cache only (cache misses only,
+#                                  each tarball sha256-checked); runs nothing it
+#                                  downloads, so a job that saves the cache needs
+#                                  nothing else
 #   bootstrap-linux.sh mirror      fill the mirror (cache misses only) and serve it
 #   bootstrap-linux.sh install     herdr's published install.sh against the mirror
 #   bootstrap-linux.sh display     weston --backend=headless --xwayland (or Xvfb)
@@ -105,8 +109,12 @@ resolve() {
   export_output target "$(target)"
 }
 
-mirror() {
+fill() {
   "$here/mirror.sh" fill "$RESOLVED" "$MIRROR_CACHE" "$(target)"
+}
+
+mirror() {
+  fill
   local pid
   pid=$(MIRROR_LOG="$CANARY_OUT/mirror.log" "$here/mirror.sh" serve "$RESOLVED" "$MIRROR_CACHE" "$CANARY_ROOT/mirror-root" "$MIRROR_PORT" "$(target)")
   export_env MIRROR_PID "$pid"
@@ -249,10 +257,11 @@ teardown() {
 case ${1:-} in
   preflight) run_stage preflight infra preflight ;;
   resolve) run_stage resolve infra resolve ;;
+  fill) fill ;;
   mirror) run_stage mirror infra mirror ;;
   install) run_stage install-app product install_app ;;
   display) run_stage display infra display_up ;;
   app) run_stage app product app_up ;;
   teardown) teardown ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

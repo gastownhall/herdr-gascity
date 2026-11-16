@@ -92,6 +92,7 @@ it. `compat.json` names the herdr-app and gc versions a release supports.
 | `canary/bootstrap-linux.sh`, `canary/mirror.sh`, `canary/lib.sh`, `canary/result.sh` | The released herdr-app headless on a GPU-less Linux runner (Xvfb or Weston, lavapipe), installed by herdr's published `install.sh` from a sha256-checked per-release mirror; each stage's outcome in `out/stages.jsonl`. |
 | `canary/mod-linux.sh` | The packaged mod in that app against a scratch city run by gc built at `api/PIN`: package, `herdr-app check`, `install.sh --from`, the probe connected, the shot. Run by the smoke and the preview workflows. |
 | `canary/canary-linux.sh` | The nightly canary's stages S5-S13: every step driven through `herdr-app do gascity.<command>` against the canary city, plus one real key. |
+| `canary/targets.ts` | The agent-UI target list's parser and the check that this canary is the job the list designates, every step mapped to a stage it runs; `bun canary/targets.ts --file <list.toml>` prints only this canary's entry (the list is private). |
 | `canary/gc-authority.ts` | The canary's authority audit: every gc change traces to a write the mod's probe shows, every write is accounted for, every program the mod ran is allowlisted, and the mod agrees with gc. |
 
 ## Rules the build enforces
@@ -902,7 +903,7 @@ tab selected, and the mod's probe and gc must agree on each:
 | keyboard | a real XTEST key reaches the mod (`r` refreshes) |
 | bead-input | `bead-new` creates a bead on the board; `submit` sends the agent its close line |
 | bead-closed | the agent's close, with the run's reason, in the mod's closed list and detail |
-| authority | `canary/gc-authority.ts` over gc's `supervisor.request` events and the probe |
+| authority | `canary/gc-authority.ts` over gc's `supervisor.request` events and the probe: every gc change is a write the probe shows, the detail pane's keep-awake pin and its release included |
 
 Each stage records its class (infra, product, gc, integration, ui) and each
 workflow step has a timeout longer than the stage's own deadlines; a step
@@ -916,6 +917,13 @@ soak of five sequential runs and reports the product-stage flake rate
 release appears, and it can be dispatched by hand (`reason`, `runs`). The
 canary job is read-only and gets no secret; only the report job, which runs
 no downloaded code, may write issues.
+
+Each job holds only what it needs: the workflow grants nothing by default.
+The `mirror` job checks out this repo alone, fills the release mirror
+(manifests and tarballs, each sha256-checked, nothing run) and is the only
+job that saves a cache. The canary job, which builds and runs gc, has no
+permissions and no token, and only restores that cache. The report job reads
+artifacts and writes issues.
 
 The lane today is main (the mod at the commit, gc at `api/PIN`). A
 latest-release lane (both published installers, released gc) follows the

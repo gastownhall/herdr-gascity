@@ -105,6 +105,9 @@ function rules(city: string): ReadonlyMap<string, Rule> {
     ["session.attach", { shape: `POST ${base}/session/{id}/wake`, match: sessionPath("wake"), required: false }],
     ["session.submit", submit],
     ["session.interrupt", submit],
+    // The open detail pane's keep-awake (src/sync/keepAwake.ts): its pin, and the unpin once no pane is open.
+    ["session.keep-awake", { shape: `POST ${base}/session/{id}/pin`, match: sessionPath("pin"), required: true }],
+    ["session.keep-awake-release", { shape: `POST ${base}/session/{id}/unpin`, match: sessionPath("unpin"), required: true }],
     ["bead.create", { shape: `POST ${base}/beads`, match: (p) => p === `${base}/beads`, required: true }],
   ]);
 }
