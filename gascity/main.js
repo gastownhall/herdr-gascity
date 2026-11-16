@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:2080de9a1286f33e3108ec1f2194dd1fa3cd7ffc9c53a4d591ca1b3f61c5de62 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:81fca4fb860797867d86e8a4e97286390f70fdd80d9d36a61ebae3f627969021 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -1913,6 +1913,21 @@ var SessionPendingResponseSchema = object({
   supported: boolean2(),
   pending: optional(PendingInteractionSchema)
 });
+var OutputTurnSchema = object({
+  id: optional(string2()),
+  role: string2(),
+  text: string2(),
+  timestamp: optional(string2())
+});
+var PaginationInfoSchema = object({
+  has_older_messages: boolean2()
+});
+var SessionTranscriptGetResponseSchema = object({
+  id: string2(),
+  format: enumOf(["conversation", "text"]),
+  turns: optionalNullableList(OutputTurnSchema),
+  pagination: optional(PaginationInfoSchema)
+});
 var ReadyBeadSchema = object({
   id: string2(),
   title: string2(),
@@ -2213,6 +2228,17 @@ var OPERATIONS = {
     body: null,
     success: 200,
     response: SessionPendingResponseSchema,
+    item: null
+  },
+  "get-v0-city-by-city-name-session-by-id-transcript": {
+    method: "GET",
+    path: "/v0/city/{cityName}/session/{id}/transcript",
+    pathParams: ["cityName", "id"],
+    csrf: false,
+    idempotencyKey: false,
+    body: null,
+    success: 200,
+    response: SessionTranscriptGetResponseSchema,
     item: null
   },
   "get-v0-city-by-city-name-work-ready": {
@@ -2939,6 +2965,511 @@ function mayBeOnScreen(input) {
   return input.panes.some((p) => p.mod === MOD_NAME && p.tab === focus.tab);
 }
 
+// src/actions/activity.ts
+function isPending(state) {
+  return state.kind === "sending" || state.kind === "polling" || state.kind === "watching";
+}
+function targetKey(t) {
+  switch (t.kind) {
+    case "session":
+    case "bead":
+      return `${t.kind}:${t.id}`;
+    case "new-bead":
+      return `new-bead:${t.title}`;
+    default:
+      return `${t.kind}:${t.name}`;
+  }
+}
+function targetText(t) {
+  switch (t.kind) {
+    case "session":
+    case "bead":
+      return `${t.kind} ${t.id}`;
+    case "new-bead":
+      return `new bead "${t.title}"`;
+    default:
+      return `${t.kind} ${t.name}`;
+  }
+}
+
+// src/gc/ops.ts
+var INFRASTRUCTURE_BEAD_TYPES = ["session", "message", "molecule", "gate"];
+function getHealth(c) {
+  return c.call("get-health", { path: {} });
+}
+function listCities(c) {
+  return c.call("get-v0-cities", { path: {} });
+}
+function listRigs(c, city) {
+  return c.call("get-v0-city-by-city-name-rigs", { path: { cityName: city } });
+}
+function listAgents(c, city) {
+  return c.call("get-v0-city-by-city-name-agents", { path: { cityName: city } });
+}
+function listSessions(c, city, query) {
+  return c.call("get-v0-city-by-city-name-sessions", { path: { cityName: city }, query });
+}
+function getSession(c, city, id2, query = {}) {
+  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id: id2 }, query });
+}
+function getSessionTranscript(c, city, id2, query) {
+  return c.call("get-v0-city-by-city-name-session-by-id-transcript", { path: { cityName: city, id: id2 }, query });
+}
+function listPending(c, city) {
+  return c.call("get-v0-city-by-city-name-pending", { path: { cityName: city } });
+}
+function getSessionPending(c, city, id2) {
+  return c.call("get-v0-city-by-city-name-session-by-id-pending", { path: { cityName: city, id: id2 } });
+}
+function listWork(c, city, query) {
+  return c.call("get-v0-city-by-city-name-work-ready", { path: { cityName: city }, query });
+}
+function getBead(c, city, id2) {
+  return c.call("get-v0-city-by-city-name-bead-by-id", { path: { cityName: city, id: id2 } });
+}
+function pollEvents(c, city, query) {
+  return c.call("get-v0-city-by-city-name-events", { path: { cityName: city }, query: { limit: query.limit } });
+}
+function getRequestOutcome(c, city, requestId, afterSeq) {
+  return c.call("get-request-outcome", { path: { cityName: city, requestId }, query: { after_seq: afterSeq } });
+}
+function createSession(c, city, body, idempotencyKey) {
+  return c.call("create-session", { path: { cityName: city }, body, idempotencyKey });
+}
+function submitSession(c, city, id2, body, idempotencyKey) {
+  return c.call("submit-session", { path: { cityName: city, id: id2 }, body, idempotencyKey });
+}
+function sendSessionMessage(c, city, id2, body, idempotencyKey) {
+  return c.call("send-session-message", { path: { cityName: city, id: id2 }, body, idempotencyKey });
+}
+function respondSession(c, city, id2, body, idempotencyKey) {
+  return c.call("respond-session", { path: { cityName: city, id: id2 }, body, idempotencyKey });
+}
+function wakeSession(c, city, id2, idempotencyKey) {
+  return c.call("post-v0-city-by-city-name-session-by-id-wake", { path: { cityName: city, id: id2 }, idempotencyKey });
+}
+function suspendSession(c, city, id2, idempotencyKey) {
+  return c.call("post-v0-city-by-city-name-session-by-id-suspend", { path: { cityName: city, id: id2 }, idempotencyKey });
+}
+function stopSession(c, city, id2, idempotencyKey, body) {
+  return c.call("post-v0-city-by-city-name-session-by-id-stop", { path: { cityName: city, id: id2 }, body, idempotencyKey });
+}
+function closeSession(c, city, id2, idempotencyKey, query = {}) {
+  return c.call("post-v0-city-by-city-name-session-by-id-close", { path: { cityName: city, id: id2 }, query, idempotencyKey });
+}
+function killSession(c, city, id2, idempotencyKey, query = {}) {
+  return c.call("post-v0-city-by-city-name-session-by-id-kill", { path: { cityName: city, id: id2 }, query, idempotencyKey });
+}
+function pinSession(c, city, id2) {
+  return c.call("post-v0-city-by-city-name-session-by-id-pin", { path: { cityName: city, id: id2 } });
+}
+function unpinSession(c, city, id2) {
+  return c.call("post-v0-city-by-city-name-session-by-id-unpin", { path: { cityName: city, id: id2 } });
+}
+function agentAction(c, city, agent, action) {
+  const slash = agent.lastIndexOf("/");
+  if (slash < 0) {
+    return c.call("post-v0-city-by-city-name-agent-by-base-by-action", { path: { cityName: city, base: agent, action } });
+  }
+  return c.call("post-v0-city-by-city-name-agent-by-dir-by-base-by-action", {
+    path: { cityName: city, dir: agent.slice(0, slash), base: agent.slice(slash + 1), action }
+  });
+}
+function rigAction(c, city, rig, action) {
+  return c.call("post-v0-city-by-city-name-rig-by-name-by-action", { path: { cityName: city, name: rig, action } });
+}
+function sling(c, city, body) {
+  return c.call("post-v0-city-by-city-name-sling", { path: { cityName: city }, body });
+}
+function createBead(c, city, body, idempotencyKey) {
+  return c.call("create-bead", { path: { cityName: city }, body, idempotencyKey });
+}
+function closeBead(c, city, id2, body) {
+  return c.call("post-v0-city-by-city-name-bead-by-id-close", { path: { cityName: city, id: id2 }, body });
+}
+function reopenBead(c, city, id2) {
+  return c.call("post-v0-city-by-city-name-bead-by-id-reopen", { path: { cityName: city, id: id2 } });
+}
+
+// src/actions/answers.ts
+function statusDetail(body) {
+  return `gc: ${body.status}${body.replayed ? " (replayed: gc had already done it)" : ""}`;
+}
+function sessionDetail(s) {
+  return `gc: session ${s.id} ${s.state}${s.running ? ", running" : ""}`;
+}
+function rigDetail(body) {
+  const parts = [`gc: ${body.status}`];
+  if (body.killed.length > 0) parts.push(`stopped ${body.killed.join(", ")}`);
+  if (body.failed.length > 0) parts.push(`failed ${body.failed.join(", ")}`);
+  return parts.join("; ");
+}
+function accepted(body) {
+  return { kind: "accepted", requestId: body.request_id, afterSeq: body.event_cursor };
+}
+
+// src/actions/session.ts
+var LIFECYCLE = ["sessions", "agents"];
+var INPUT = ["sessions"];
+var ANSWER = ["pending", "sessions"];
+function spec(kind, verb, id2, operationId, refresh, confirm, send) {
+  return { kind, verb, target: { kind: "session", id: id2 }, operationId, idempotent: OPERATIONS[operationId].idempotencyKey, confirm, refresh, send };
+}
+async function then(answer, read) {
+  const r = await answer;
+  return r.ok ? ok(read(r.value)) : r;
+}
+function sessionNew(agent, alias) {
+  const body = { kind: "agent", name: agent };
+  if (alias !== null && alias !== "") body.alias = alias;
+  return {
+    kind: "session.new",
+    verb: "New session",
+    target: { kind: "agent", name: agent },
+    operationId: "create-session",
+    idempotent: OPERATIONS["create-session"].idempotencyKey,
+    confirm: null,
+    refresh: LIFECYCLE,
+    send: (c, city, key) => then(createSession(c, city, body, key), accepted)
+  };
+}
+function sessionWake(id2) {
+  return spec(
+    "session.wake",
+    "Wake",
+    id2,
+    "post-v0-city-by-city-name-session-by-id-wake",
+    LIFECYCLE,
+    null,
+    (c, city, key) => then(wakeSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
+  );
+}
+function sessionSuspend(id2) {
+  return spec(
+    "session.suspend",
+    "Suspend",
+    id2,
+    "post-v0-city-by-city-name-session-by-id-suspend",
+    LIFECYCLE,
+    null,
+    (c, city, key) => then(suspendSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
+  );
+}
+function sessionStop(id2) {
+  return spec(
+    "session.stop",
+    "Stop turn",
+    id2,
+    "post-v0-city-by-city-name-session-by-id-stop",
+    LIFECYCLE,
+    null,
+    (c, city, key) => then(stopSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
+  );
+}
+function sessionClose(id2) {
+  return spec("session.close", "Close", id2, "post-v0-city-by-city-name-session-by-id-close", LIFECYCLE, {
+    question: `Close session ${id2}?`,
+    detail: "gc ends the session permanently: it stops its runtime and closes its session bead. A closed session cannot be woken again."
+  }, (c, city, key) => then(closeSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) })));
+}
+function sessionKill(id2, force) {
+  const confirm = force ? {
+    question: `Force kill session ${id2}?`,
+    detail: "gc kills its runtime now, even with live background subagents or a hung runtime lease. Its work is kept and the session is left asleep."
+  } : {
+    question: `Kill session ${id2}?`,
+    detail: "gc kills its runtime now, without waiting for the current turn. Its work is kept and the session is left asleep."
+  };
+  return spec(
+    force ? "session.kill-force" : "session.kill",
+    force ? "Force kill" : "Kill",
+    id2,
+    "post-v0-city-by-city-name-session-by-id-kill",
+    LIFECYCLE,
+    confirm,
+    (c, city, key) => {
+      const answer = force ? killSession(c, city, id2, key, { force: true }) : killSession(c, city, id2, key);
+      return then(answer, (b) => ({ kind: "done", detail: statusDetail(b) }));
+    }
+  );
+}
+function sessionPin(id2) {
+  return spec(
+    "session.pin",
+    "Pin",
+    id2,
+    "post-v0-city-by-city-name-session-by-id-pin",
+    LIFECYCLE,
+    null,
+    (c, city) => then(pinSession(c, city, id2), (s) => ({ kind: "done", detail: sessionDetail(s) }))
+  );
+}
+function keepAwakePin(id2) {
+  return { ...sessionPin(id2), kind: "session.keep-awake", verb: "Keep awake", refresh: [], refreshesDetail: false };
+}
+function keepAwakeUnpin(id2) {
+  return { ...sessionUnpin(id2), kind: "session.keep-awake-release", verb: "Release keep-awake", refresh: [], refreshesDetail: false };
+}
+function sessionUnpin(id2) {
+  return spec(
+    "session.unpin",
+    "Unpin",
+    id2,
+    "post-v0-city-by-city-name-session-by-id-unpin",
+    LIFECYCLE,
+    null,
+    (c, city) => then(unpinSession(c, city, id2), (s) => ({ kind: "done", detail: sessionDetail(s) }))
+  );
+}
+function sessionSubmit(id2, message, intent) {
+  const interrupt = intent === "interrupt_now";
+  return spec(
+    interrupt ? "session.interrupt" : "session.submit",
+    interrupt ? "Interrupt and send" : "Send",
+    id2,
+    "submit-session",
+    INPUT,
+    null,
+    (c, city, key) => then(submitSession(c, city, id2, { message, intent }, key), accepted)
+  );
+}
+function sessionMessage(id2, message) {
+  return spec(
+    "session.message",
+    "Send as message",
+    id2,
+    "send-session-message",
+    INPUT,
+    null,
+    (c, city, key) => then(sendSessionMessage(c, city, id2, { message }, key), accepted)
+  );
+}
+function sessionRespond(id2, requestId, option) {
+  return spec(
+    "session.respond",
+    option,
+    id2,
+    "respond-session",
+    ANSWER,
+    null,
+    (c, city, key) => then(
+      respondSession(c, city, id2, { action: option, request_id: requestId }, key),
+      (b) => ({ kind: "done", detail: statusDetail(b) })
+    )
+  );
+}
+
+// src/sync/keepAwake.ts
+var PIN_BOOK_KEY = "gascity.pins";
+function pinDecision(w) {
+  const s = w.session;
+  if (!w.listed || s === null) {
+    return { pin: false, why: "gc did not list it under its template, so whether it is pinned cannot be read: not pinned" };
+  }
+  if (s.reason !== void 0 && s.reason !== "") return { pin: false, why: `gc shows ${s.reason}, which hides whether it is pinned: not pinned` };
+  if (s.state !== "active") return { pin: false, why: `${s.state}: not pinned` };
+  if (!s.running) return { pin: false, why: "not running: not pinned" };
+  if (w.reasons.includes("pin")) return { pin: false, why: "already pinned in gc (not by this pane): left as it is" };
+  return { pin: true };
+}
+function isOwnPin(v) {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v;
+  return typeof o.apiUrl === "string" && typeof o.city === "string" && typeof o.session === "string";
+}
+function decodeOwnPins(raw) {
+  if (raw === void 0 || raw === null) return { pins: [], unreadable: 0 };
+  if (!Array.isArray(raw)) return { pins: [], unreadable: 1 };
+  const pins = raw.filter(isOwnPin);
+  return { pins, unreadable: raw.length - pins.length };
+}
+var HAND = "pinned or unpinned by hand: left as it is";
+var BOOK_UNREADABLE = "the keep-awake records in gascity.pins cannot be read: not pinned";
+var KeepAwake = class {
+  /** Queues the unpin of every pin of this city left from before. */
+  constructor(deps) {
+    this.deps = deps;
+    for (const p of this.ownPins()) {
+      if (this.mine(p)) this.releasing.set(p.session, { unpin: null, after: null });
+    }
+  }
+  deps;
+  kept = /* @__PURE__ */ new Map();
+  releasing = /* @__PURE__ */ new Map();
+  disposed = false;
+  /** What keep-awake did for a session's open pane; null when no pane of it is open. */
+  state(session) {
+    return this.kept.get(session)?.state ?? null;
+  }
+  /** A pane of the session opened. */
+  open(session) {
+    const k = this.kept.get(session);
+    if (k) {
+      k.refs++;
+      return;
+    }
+    const r = this.releasing.get(session);
+    if (r && r.unpin === null && this.has(session)) {
+      this.releasing.delete(session);
+      this.kept.set(session, { refs: 1, since: this.deps.clock.now(), state: r.after === null ? { kind: "pinned" } : { kind: "pinning" }, pin: r.after, checkFailed: false });
+      return;
+    }
+    this.kept.set(session, { refs: 1, since: this.deps.clock.now(), state: { kind: "checking" }, pin: null, checkFailed: false });
+  }
+  /** A pane of the session closed: once the last is gone, a pin of ours is unpinned from a live copy's tick. */
+  release(session) {
+    const k = this.kept.get(session);
+    if (!k || --k.refs > 0) return;
+    this.kept.delete(session);
+    if (k.state.kind === "pinned" || k.state.kind === "pinning") this.releasing.set(session, { unpin: null, after: k.pin });
+  }
+  /** A person pinned or unpinned the session: it is theirs now. */
+  disown(session) {
+    this.releasing.delete(session);
+    this.forget(session);
+    const k = this.kept.get(session);
+    if (k) {
+      k.state = { kind: "not-pinned", why: HAND };
+      k.pin = null;
+      k.checkFailed = false;
+    }
+  }
+  /** Called from a live copy's tick: sends what is due, in its turn, and follows outcomes. */
+  tick(owner) {
+    if (this.disposed) return;
+    for (const [session, r] of [...this.releasing]) this.stepRelease(owner, session, r);
+    for (const [session, k] of [...this.kept]) this.stepKept(owner, session, k);
+  }
+  /** The store is gone (its last copy closed): starts nothing; pins still recorded are released at the next start. */
+  dispose() {
+    this.disposed = true;
+  }
+  stepRelease(owner, session, r) {
+    if (r.unpin === null) {
+      if (r.after !== null) {
+        const pin = this.deps.action(r.after);
+        if (pin && isPending(pin.state)) return;
+        r.after = null;
+        if (pin && (pin.state.kind === "failed" || pin.state.kind === "not-sent")) {
+          this.forget(session);
+          this.released(session);
+          return;
+        }
+      }
+      if (!this.has(session)) {
+        this.released(session);
+        return;
+      }
+      r.unpin = this.deps.start(owner, keepAwakeUnpin(session));
+      return;
+    }
+    const a = this.deps.action(r.unpin);
+    if (a && isPending(a.state)) return;
+    if (!a || a.state.kind === "done" || a.state.kind === "failed") this.forget(session);
+    this.released(session);
+  }
+  /**
+   * A release ended. A pane of the session opened meanwhile has waited in
+   * checking; the wake reasons it has may predate the unpin, so it decides on
+   * a read asked from now on.
+   */
+  released(session) {
+    this.releasing.delete(session);
+    const k = this.kept.get(session);
+    if (k?.state.kind !== "checking") return;
+    k.since = this.deps.clock.now();
+    this.deps.refreshWake(session);
+  }
+  stepKept(owner, session, k) {
+    if (k.checkFailed && this.deps.wake(session)?.held === false) {
+      k.checkFailed = false;
+      k.state = { kind: "checking" };
+    }
+    if (k.state.kind === "checking") {
+      if (this.releasing.has(session)) return;
+      const w = this.deps.wake(session);
+      if (!w || w.value === null || w.fetchedAt === null || w.fetchedAt < k.since) {
+        if (w?.held && w.error !== null) {
+          k.state = { kind: "failed", error: w.error };
+          k.checkFailed = true;
+        }
+        return;
+      }
+      if (!this.bookWritable()) {
+        k.state = { kind: "not-pinned", why: BOOK_UNREADABLE };
+        return;
+      }
+      const d = pinDecision(w.value);
+      if (!d.pin && this.has(session)) {
+        k.state = { kind: "pinned" };
+        return;
+      }
+      if (!d.pin) {
+        k.state = { kind: "not-pinned", why: d.why };
+        return;
+      }
+      this.remember(session);
+      k.pin = this.deps.start(owner, keepAwakePin(session));
+      k.state = { kind: "pinning" };
+      return;
+    }
+    if (k.state.kind !== "pinning" || k.pin === null) return;
+    const a = this.deps.action(k.pin);
+    if (a && isPending(a.state)) return;
+    k.pin = null;
+    if (!a || a.state.kind === "done" || a.state.kind === "unknown") {
+      k.state = { kind: "pinned" };
+    } else if (a.state.kind === "failed") {
+      this.forget(session);
+      k.state = { kind: "failed", error: a.state.error };
+    } else if (a.state.kind === "not-sent") {
+      this.forget(session);
+      k.state = { kind: "not-pinned", why: `the pin was not sent: ${a.state.reason}` };
+    }
+  }
+  mine(p) {
+    return p.apiUrl === this.deps.key.apiUrl && p.city === this.deps.key.city;
+  }
+  pin(session) {
+    return { apiUrl: this.deps.key.apiUrl, city: this.deps.key.city, session };
+  }
+  ownPins() {
+    const { pins, unreadable: unreadable2 } = decodeOwnPins(this.deps.book.read());
+    if (unreadable2 > 0) this.deps.onUnreadable(unreadable2);
+    return pins;
+  }
+  has(session) {
+    return this.ownPins().some((p) => this.mine(p) && p.session === session);
+  }
+  /** The stored value is a list (or nothing yet): one that is not is someone else's, never overwritten. */
+  bookWritable() {
+    const raw = this.deps.book.read();
+    if (raw === void 0 || raw === null || Array.isArray(raw)) return true;
+    this.deps.onUnreadable(1);
+    return false;
+  }
+  /** The stored list as an array, entries that cannot be read kept as they are; null when the stored value is not a list. */
+  stored() {
+    const raw = this.deps.book.read();
+    if (raw === void 0 || raw === null) return [];
+    return Array.isArray(raw) ? [...raw] : null;
+  }
+  same(v, session) {
+    return isOwnPin(v) && this.mine(v) && v.session === session;
+  }
+  remember(session) {
+    const list = this.stored();
+    if (list === null) return;
+    this.deps.book.write([...list.filter((v) => !this.same(v, session)), this.pin(session)]);
+  }
+  forget(session) {
+    const list = this.stored();
+    if (list === null) return;
+    const next = list.filter((v) => !this.same(v, session));
+    if (next.length !== list.length) this.deps.book.write(next);
+  }
+};
+
 // src/host.ts
 var REQUIRED_HOST_EXPORTS = [
   "theme",
@@ -3053,6 +3584,12 @@ function readWindowOpen() {
 }
 function setWindowOpen(open) {
   herdr.setShared(WINDOW_KEY, open ? windowFlag(Date.now()) : false);
+}
+function readOwnPins() {
+  return herdr.shared(PIN_BOOK_KEY);
+}
+function writeOwnPins(value) {
+  herdr.setShared(PIN_BOOK_KEY, value);
 }
 function readFocusTarget() {
   return herdr.shared(FOCUS_KEY);
@@ -3236,119 +3773,6 @@ function sharedCommandBook() {
   return shared2;
 }
 
-// src/gc/ops.ts
-var INFRASTRUCTURE_BEAD_TYPES = ["session", "message", "molecule", "gate"];
-function getHealth(c) {
-  return c.call("get-health", { path: {} });
-}
-function listCities(c) {
-  return c.call("get-v0-cities", { path: {} });
-}
-function listRigs(c, city) {
-  return c.call("get-v0-city-by-city-name-rigs", { path: { cityName: city } });
-}
-function listAgents(c, city) {
-  return c.call("get-v0-city-by-city-name-agents", { path: { cityName: city } });
-}
-function listSessions(c, city, query) {
-  return c.call("get-v0-city-by-city-name-sessions", { path: { cityName: city }, query });
-}
-function getSession(c, city, id2, query = {}) {
-  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id: id2 }, query });
-}
-function listPending(c, city) {
-  return c.call("get-v0-city-by-city-name-pending", { path: { cityName: city } });
-}
-function getSessionPending(c, city, id2) {
-  return c.call("get-v0-city-by-city-name-session-by-id-pending", { path: { cityName: city, id: id2 } });
-}
-function listWork(c, city, query) {
-  return c.call("get-v0-city-by-city-name-work-ready", { path: { cityName: city }, query });
-}
-function getBead(c, city, id2) {
-  return c.call("get-v0-city-by-city-name-bead-by-id", { path: { cityName: city, id: id2 } });
-}
-function pollEvents(c, city, query) {
-  return c.call("get-v0-city-by-city-name-events", { path: { cityName: city }, query: { limit: query.limit } });
-}
-function getRequestOutcome(c, city, requestId, afterSeq) {
-  return c.call("get-request-outcome", { path: { cityName: city, requestId }, query: { after_seq: afterSeq } });
-}
-function createSession(c, city, body, idempotencyKey) {
-  return c.call("create-session", { path: { cityName: city }, body, idempotencyKey });
-}
-function submitSession(c, city, id2, body, idempotencyKey) {
-  return c.call("submit-session", { path: { cityName: city, id: id2 }, body, idempotencyKey });
-}
-function sendSessionMessage(c, city, id2, body, idempotencyKey) {
-  return c.call("send-session-message", { path: { cityName: city, id: id2 }, body, idempotencyKey });
-}
-function respondSession(c, city, id2, body, idempotencyKey) {
-  return c.call("respond-session", { path: { cityName: city, id: id2 }, body, idempotencyKey });
-}
-function wakeSession(c, city, id2, idempotencyKey) {
-  return c.call("post-v0-city-by-city-name-session-by-id-wake", { path: { cityName: city, id: id2 }, idempotencyKey });
-}
-function suspendSession(c, city, id2, idempotencyKey) {
-  return c.call("post-v0-city-by-city-name-session-by-id-suspend", { path: { cityName: city, id: id2 }, idempotencyKey });
-}
-function stopSession(c, city, id2, idempotencyKey, body) {
-  return c.call("post-v0-city-by-city-name-session-by-id-stop", { path: { cityName: city, id: id2 }, body, idempotencyKey });
-}
-function closeSession(c, city, id2, idempotencyKey, query = {}) {
-  return c.call("post-v0-city-by-city-name-session-by-id-close", { path: { cityName: city, id: id2 }, query, idempotencyKey });
-}
-function killSession(c, city, id2, idempotencyKey, query = {}) {
-  return c.call("post-v0-city-by-city-name-session-by-id-kill", { path: { cityName: city, id: id2 }, query, idempotencyKey });
-}
-function pinSession(c, city, id2) {
-  return c.call("post-v0-city-by-city-name-session-by-id-pin", { path: { cityName: city, id: id2 } });
-}
-function unpinSession(c, city, id2) {
-  return c.call("post-v0-city-by-city-name-session-by-id-unpin", { path: { cityName: city, id: id2 } });
-}
-function agentAction(c, city, agent, action) {
-  const slash = agent.lastIndexOf("/");
-  if (slash < 0) {
-    return c.call("post-v0-city-by-city-name-agent-by-base-by-action", { path: { cityName: city, base: agent, action } });
-  }
-  return c.call("post-v0-city-by-city-name-agent-by-dir-by-base-by-action", {
-    path: { cityName: city, dir: agent.slice(0, slash), base: agent.slice(slash + 1), action }
-  });
-}
-function rigAction(c, city, rig, action) {
-  return c.call("post-v0-city-by-city-name-rig-by-name-by-action", { path: { cityName: city, name: rig, action } });
-}
-function sling(c, city, body) {
-  return c.call("post-v0-city-by-city-name-sling", { path: { cityName: city }, body });
-}
-function createBead(c, city, body, idempotencyKey) {
-  return c.call("create-bead", { path: { cityName: city }, body, idempotencyKey });
-}
-function closeBead(c, city, id2, body) {
-  return c.call("post-v0-city-by-city-name-bead-by-id-close", { path: { cityName: city, id: id2 }, body });
-}
-function reopenBead(c, city, id2) {
-  return c.call("post-v0-city-by-city-name-bead-by-id-reopen", { path: { cityName: city, id: id2 } });
-}
-
-// src/actions/answers.ts
-function statusDetail(body) {
-  return `gc: ${body.status}${body.replayed ? " (replayed: gc had already done it)" : ""}`;
-}
-function sessionDetail(s) {
-  return `gc: session ${s.id} ${s.state}${s.running ? ", running" : ""}`;
-}
-function rigDetail(body) {
-  const parts = [`gc: ${body.status}`];
-  if (body.killed.length > 0) parts.push(`stopped ${body.killed.join(", ")}`);
-  if (body.failed.length > 0) parts.push(`failed ${body.failed.join(", ")}`);
-  return parts.join("; ");
-}
-function accepted(body) {
-  return { kind: "accepted", requestId: body.request_id, afterSeq: body.event_cursor };
-}
-
 // src/actions/agent.ts
 function operationFor(name) {
   return name.includes("/") ? "post-v0-city-by-city-name-agent-by-dir-by-base-by-action" : "post-v0-city-by-city-name-agent-by-base-by-action";
@@ -3400,151 +3824,6 @@ function rigResume(name) {
   return rigAction2(name, "resume");
 }
 
-// src/actions/session.ts
-var LIFECYCLE = ["sessions", "agents"];
-var INPUT = ["sessions"];
-var ANSWER = ["pending", "sessions"];
-function spec(kind, verb, id2, operationId, refresh, confirm, send) {
-  return { kind, verb, target: { kind: "session", id: id2 }, operationId, idempotent: OPERATIONS[operationId].idempotencyKey, confirm, refresh, send };
-}
-async function then(answer, read) {
-  const r = await answer;
-  return r.ok ? ok(read(r.value)) : r;
-}
-function sessionNew(agent, alias) {
-  const body = { kind: "agent", name: agent };
-  if (alias !== null && alias !== "") body.alias = alias;
-  return {
-    kind: "session.new",
-    verb: "New session",
-    target: { kind: "agent", name: agent },
-    operationId: "create-session",
-    idempotent: OPERATIONS["create-session"].idempotencyKey,
-    confirm: null,
-    refresh: LIFECYCLE,
-    send: (c, city, key) => then(createSession(c, city, body, key), accepted)
-  };
-}
-function sessionWake(id2) {
-  return spec(
-    "session.wake",
-    "Wake",
-    id2,
-    "post-v0-city-by-city-name-session-by-id-wake",
-    LIFECYCLE,
-    null,
-    (c, city, key) => then(wakeSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
-  );
-}
-function sessionSuspend(id2) {
-  return spec(
-    "session.suspend",
-    "Suspend",
-    id2,
-    "post-v0-city-by-city-name-session-by-id-suspend",
-    LIFECYCLE,
-    null,
-    (c, city, key) => then(suspendSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
-  );
-}
-function sessionStop(id2) {
-  return spec(
-    "session.stop",
-    "Stop turn",
-    id2,
-    "post-v0-city-by-city-name-session-by-id-stop",
-    LIFECYCLE,
-    null,
-    (c, city, key) => then(stopSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
-  );
-}
-function sessionClose(id2) {
-  return spec("session.close", "Close", id2, "post-v0-city-by-city-name-session-by-id-close", LIFECYCLE, {
-    question: `Close session ${id2}?`,
-    detail: "gc ends the session permanently: it stops its runtime and closes its session bead. A closed session cannot be woken again."
-  }, (c, city, key) => then(closeSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) })));
-}
-function sessionKill(id2, force) {
-  const confirm = force ? {
-    question: `Force kill session ${id2}?`,
-    detail: "gc kills its runtime now, even with live background subagents or a hung runtime lease. Its work is kept and the session is left asleep."
-  } : {
-    question: `Kill session ${id2}?`,
-    detail: "gc kills its runtime now, without waiting for the current turn. Its work is kept and the session is left asleep."
-  };
-  return spec(
-    force ? "session.kill-force" : "session.kill",
-    force ? "Force kill" : "Kill",
-    id2,
-    "post-v0-city-by-city-name-session-by-id-kill",
-    LIFECYCLE,
-    confirm,
-    (c, city, key) => {
-      const answer = force ? killSession(c, city, id2, key, { force: true }) : killSession(c, city, id2, key);
-      return then(answer, (b) => ({ kind: "done", detail: statusDetail(b) }));
-    }
-  );
-}
-function sessionPin(id2) {
-  return spec(
-    "session.pin",
-    "Pin",
-    id2,
-    "post-v0-city-by-city-name-session-by-id-pin",
-    LIFECYCLE,
-    null,
-    (c, city) => then(pinSession(c, city, id2), (s) => ({ kind: "done", detail: sessionDetail(s) }))
-  );
-}
-function sessionUnpin(id2) {
-  return spec(
-    "session.unpin",
-    "Unpin",
-    id2,
-    "post-v0-city-by-city-name-session-by-id-unpin",
-    LIFECYCLE,
-    null,
-    (c, city) => then(unpinSession(c, city, id2), (s) => ({ kind: "done", detail: sessionDetail(s) }))
-  );
-}
-function sessionSubmit(id2, message, intent) {
-  const interrupt = intent === "interrupt_now";
-  return spec(
-    interrupt ? "session.interrupt" : "session.submit",
-    interrupt ? "Interrupt and send" : "Send",
-    id2,
-    "submit-session",
-    INPUT,
-    null,
-    (c, city, key) => then(submitSession(c, city, id2, { message, intent }, key), accepted)
-  );
-}
-function sessionMessage(id2, message) {
-  return spec(
-    "session.message",
-    "Send as message",
-    id2,
-    "send-session-message",
-    INPUT,
-    null,
-    (c, city, key) => then(sendSessionMessage(c, city, id2, { message }, key), accepted)
-  );
-}
-function sessionRespond(id2, requestId, option) {
-  return spec(
-    "session.respond",
-    option,
-    id2,
-    "respond-session",
-    ANSWER,
-    null,
-    (c, city, key) => then(
-      respondSession(c, city, id2, { action: option, request_id: requestId }, key),
-      (b) => ({ kind: "done", detail: statusDetail(b) })
-    )
-  );
-}
-
 // src/commands.ts
 var id = (name) => ({ name, kind: "id" });
 var text = (name) => ({ name, kind: "text" });
@@ -3577,6 +3856,7 @@ var GRAMMAR = {
     build: (a) => ({ verb: "probe", on: at2(a, 0) === "on" })
   },
   cancel: { mutating: false, args: [], summary: "close the open question or form without acting (Cancel)", build: () => ({ verb: "cancel" }) },
+  back: { mutating: false, args: [], summary: "close the open session's detail (as Esc does when no question or form is open)", build: () => ({ verb: "back" }) },
   "set-gc-bin": {
     mutating: false,
     args: [id("gc-bin")],
@@ -4026,6 +4306,7 @@ var SESSION_REFRESH = /* @__PURE__ */ new Set(["request.failed", "worker.operati
 var BOARD_CHANGES = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted", "bead.dead_assignee_reopened"]);
 var PENDING = /* @__PURE__ */ new Set(["session.pending", "session.pending_cleared"]);
 var SESSION_LIFECYCLE = /* @__PURE__ */ new Set(["session.created", "session.closed"]);
+var HANDLED_BY_NAME = [...SESSION_REFRESH, ...BOARD_CHANGES, ...PENDING, ...SESSION_LIFECYCLE];
 function invalidationFor(events, known) {
   const inv = { domains: /* @__PURE__ */ new Set(), cities: false };
   for (const e of events) {
@@ -4053,33 +4334,6 @@ function invalidationFor(events, known) {
     }
   }
   return inv;
-}
-
-// src/actions/activity.ts
-function isPending(state) {
-  return state.kind === "sending" || state.kind === "polling" || state.kind === "watching";
-}
-function targetKey(t) {
-  switch (t.kind) {
-    case "session":
-    case "bead":
-      return `${t.kind}:${t.id}`;
-    case "new-bead":
-      return `new-bead:${t.title}`;
-    default:
-      return `${t.kind}:${t.name}`;
-  }
-}
-function targetText(t) {
-  switch (t.kind) {
-    case "session":
-    case "bead":
-      return `${t.kind} ${t.id}`;
-    case "new-bead":
-      return `new bead "${t.title}"`;
-    default:
-      return `${t.kind} ${t.name}`;
-  }
 }
 
 // src/vm/errorText.ts
@@ -4663,7 +4917,7 @@ var ActionLedger = class {
   refreshAfter(rec) {
     this.deps.refresh(rec.spec.refresh);
     const t = rec.spec.target;
-    if (t.kind === "session") this.deps.refreshDetail(t.id);
+    if (t.kind === "session" && rec.spec.refreshesDetail !== false) this.deps.refreshDetail(t.id);
     if (t.kind === "bead") this.deps.refreshBead(t.id);
   }
   /** Drops the oldest finished actions beyond ACTIVITY_LIMIT. */
@@ -4923,6 +5177,38 @@ function freshness(slot, now, input) {
   return { kind: "fresh", ageMs };
 }
 
+// src/sync/transcript.ts
+var MAX_TURNS = 200;
+var PEEK_LINES = 40;
+function peekTranscript(r) {
+  const text2 = r.last_output ?? "";
+  return { format: "text", turns: text2 === "" ? [] : [{ role: "output", text: text2 }], olderHidden: false, bounded: true };
+}
+function tooLarge(e) {
+  return e.kind === "too-large" && e.direction === "response";
+}
+function transcriptQuery(cur) {
+  const last = cur?.format === "conversation" ? cur.turns.at(-1)?.id : void 0;
+  return last !== void 0 && last !== "" ? { after: last } : { tail: "1" };
+}
+function newest(turns, olderHidden) {
+  if (turns.length <= MAX_TURNS) return { turns, olderHidden };
+  return { turns: turns.slice(turns.length - MAX_TURNS), olderHidden: true };
+}
+function mergeTranscript(cur, after, r) {
+  const format = isUnrecognized(r.format) ? "text" : r.format;
+  if (cur !== null && after !== null && format === "conversation" && cur.format === "conversation") {
+    const known = new Set(cur.turns.map((t) => t.id).filter((id2) => id2 !== void 0));
+    const fresh = r.turns.filter((t) => t.id === void 0 || !known.has(t.id));
+    if (fresh.length === 0) return cur;
+    return { format, ...newest([...cur.turns, ...fresh], cur.olderHidden), bounded: false };
+  }
+  return { format, ...newest(r.turns, r.pagination?.has_older_messages === true), bounded: false };
+}
+function cursorInvalidated(e) {
+  return e.kind === "http" && e.status === 409 && e.problem?.code === "transcript-cursor-invalidated";
+}
+
 // src/sync/watcher.ts
 var EVENT_PAGE_LIMIT = 50;
 function readEventPage(cursor, page) {
@@ -4941,10 +5227,10 @@ function readEventPage(cursor, page) {
     above = page.items[next++]?.seq ?? above;
   }
   const newer = page.items.filter((e) => e.seq > cursor).sort((a, b) => a.seq - b.seq);
-  const newest = newer.at(-1)?.seq ?? cursor;
+  const newest2 = newer.at(-1)?.seq ?? cursor;
   const hole = newer.length > 0 && (newer[0]?.seq ?? 0) > cursor + 1;
-  if (unreadableNew) return { cursor: Math.max(newest, page.total), newer, resync: "gap" };
-  return { cursor: newest, newer, resync: hole ? "gap" : null };
+  if (unreadableNew) return { cursor: Math.max(newest2, page.total), newer, resync: "gap" };
+  return { cursor: newest2, newer, resync: hole ? "gap" : null };
 }
 
 // src/sync/store.ts
@@ -4954,7 +5240,6 @@ var BOARD_LIMIT = 50;
 var MAX_CLOSED_RECENT = 20;
 var BEAD_FETCHES_PER_STEP = 10;
 var ERROR_RING = 100;
-var PEEK_LINES = 40;
 var STEP_STALL_MS = 4 * RECLAIM_AFTER_MS;
 var EMPTY_SLOT = { value: null, fetchedAt: null, error: null, dirty: true, held: false };
 var EVENT_DRIVEN = /* @__PURE__ */ new Set(["rigs", "agents", "ready", "inProgress"]);
@@ -5080,7 +5365,7 @@ var CityStore = class {
     }
     this.commit();
   }
-  /** Starts (or joins) watching a session's detail: output, wake reasons, pending prompt; returns the release. */
+  /** Starts (or joins) watching a session's detail: transcript, wake reasons, pending prompt; returns the release. */
   watchPeek(sessionId) {
     const p = this.peeks.get(sessionId);
     if (p) p.refs++;
@@ -5089,6 +5374,8 @@ var CityStore = class {
         ...freshSlot(),
         refs: 1,
         due: true,
+        restart: false,
+        bounded: false,
         wake: onDemand(),
         pending: { ...onDemand(), key: this.pendingKey(sessionId) }
       });
@@ -5123,7 +5410,7 @@ var CityStore = class {
       this.commit();
     };
   }
-  /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
+  /** Refetches a watched session's transcript, wake reasons and pending prompt at the next tick. */
   refreshDetail(sessionId) {
     const w = this.peeks.get(sessionId);
     if (!w) return;
@@ -5131,6 +5418,18 @@ var CityStore = class {
       part.held = false;
       part.due = true;
     }
+    this.commit();
+  }
+  /**
+   * Rereads a watched session's wake reasons at the next tick, even while a
+   * read is in flight: keep-awake asks after its unpin lands, so the read it
+   * decides on was asked after that.
+   */
+  refreshWake(sessionId) {
+    const w = this.peeks.get(sessionId);
+    if (!w) return;
+    w.wake.held = false;
+    w.wake.due = true;
     this.commit();
   }
   /** Refetches a bead fetched by id (a watched or active bead) at the next tick; a bead the store does not fetch by id is left alone. */
@@ -5259,9 +5558,12 @@ var CityStore = class {
     await this.fetchClosed(step2);
     await this.fetchLookups(step2);
     for (const [id2, w] of [...this.peeks]) {
-      if (w.wake.due && !w.wake.held && this.templateOf(id2) !== void 0) {
-        if (!this.gateOpen(step2)) return;
-        await this.fetchWake(step2, id2);
+      if (w.wake.due && !w.wake.held) {
+        if (this.templateOf(id2) === void 0) this.unlisted(w);
+        else {
+          if (!this.gateOpen(step2)) return;
+          await this.fetchWake(step2, id2);
+        }
       }
       if (w.pending.due && !w.pending.held) {
         if (!this.gateOpen(step2)) return;
@@ -5272,7 +5574,7 @@ var CityStore = class {
       for (const [id2, q] of [...this.peeks]) {
         if (!q.due || q.held) continue;
         if (!this.gateOpen(step2)) return;
-        await this.fetchPeek(step2, id2);
+        await this.fetchTranscript(step2, id2);
       }
     }
   }
@@ -5562,16 +5864,50 @@ var CityStore = class {
       this.commit();
     }
   }
-  async fetchPeek(step2, id2) {
+  async fetchTranscript(step2, id2) {
+    const q = this.peeks.get(id2);
+    if (!q) return;
+    if (q.bounded) return this.fetchBoundedPeek(step2, id2, q);
+    const query = q.restart ? { tail: "1" } : transcriptQuery(q.value);
+    const after = "after" in query ? query.after : null;
+    const r = await getSessionTranscript(this.deps.endpoint.client("peek", step2), this.key.city, id2, query);
+    if (!this.current(step2)) return;
+    this.progress(step2);
+    if (this.peeks.get(id2) !== q) return;
+    if (!r.ok && tooLarge(r.error)) {
+      this.settle(r, `transcript:${id2}`);
+      q.bounded = true;
+      q.due = true;
+      this.commit();
+      return;
+    }
+    if (!r.ok && after !== null && cursorInvalidated(r.error)) {
+      q.restart = true;
+      q.due = true;
+      this.commit();
+      return;
+    }
+    const ok2 = this.settle(r, `transcript:${id2}`);
+    q.due = false;
+    if (ok2 && r.ok) {
+      q.value = mergeTranscript(q.restart ? null : q.value, q.restart ? null : after, r.value);
+      q.restart = false;
+      q.fetchedAt = this.deps.clock.now();
+      q.error = null;
+    } else if (!r.ok) {
+      this.failOnDemand(q, r.error);
+    }
+    this.commit();
+  }
+  async fetchBoundedPeek(step2, id2, q) {
     const r = await getSession(this.deps.endpoint.client("peek", step2), this.key.city, id2, { peek: true, peek_lines: PEEK_LINES });
     if (!this.current(step2)) return;
     this.progress(step2);
+    if (this.peeks.get(id2) !== q) return;
     const ok2 = this.settle(r, `peek:${id2}`);
-    const q = this.peeks.get(id2);
-    if (!q) return;
     q.due = false;
     if (ok2 && r.ok) {
-      q.value = r.value;
+      q.value = peekTranscript(r.value);
       q.fetchedAt = this.deps.clock.now();
       q.error = null;
     } else if (!r.ok) {
@@ -5596,20 +5932,33 @@ var CityStore = class {
   templateOf(id2) {
     return this.slots.sessions.value?.items.find((x) => x.id === id2)?.template;
   }
+  /**
+   * A watched session missing from the session list has no template to ask
+   * its wake reasons by: it reads as not listed, and is asked once a list
+   * carries it (it stays due).
+   */
+  unlisted(w) {
+    if (this.slots.sessions.value === null || w.wake.value !== null) return;
+    w.wake.value = { listed: false, reasons: [], session: null };
+    w.wake.fetchedAt = this.deps.clock.now();
+    w.wake.error = null;
+    this.commit();
+  }
   async fetchWake(step2, id2) {
     const template = this.templateOf(id2);
-    if (template === void 0) return;
+    const w = this.peeks.get(id2);
+    if (template === void 0 || !w) return;
+    w.wake.due = false;
+    const asked = this.deps.clock.now();
     const r = await listSessions(this.deps.endpoint.client("peek", step2), this.key.city, { limit: SESSION_PAGE, template, wake_reasons: true });
     if (!this.current(step2)) return;
     this.progress(step2);
     const ok2 = this.settle(r, `wake-reasons:${id2}`);
-    const w = this.peeks.get(id2);
-    if (!w) return;
-    w.wake.due = false;
+    if (this.peeks.get(id2) !== w) return;
     if (ok2 && r.ok) {
       const listed = r.value.items.find((x) => x.id === id2);
-      w.wake.value = { listed: listed !== void 0, reasons: listed?.wake_reasons ?? [] };
-      w.wake.fetchedAt = this.deps.clock.now();
+      w.wake.value = { listed: listed !== void 0, reasons: listed?.wake_reasons ?? [], session: listed ?? null };
+      w.wake.fetchedAt = asked;
       w.wake.error = null;
     } else if (!r.ok) {
       this.failOnDemand(w.wake, r.error);
@@ -5617,12 +5966,13 @@ var CityStore = class {
     this.commit();
   }
   async fetchSessionPending(step2, id2) {
+    const w = this.peeks.get(id2);
+    if (!w) return;
     const r = await getSessionPending(this.deps.endpoint.client("peek", step2), this.key.city, id2);
     if (!this.current(step2)) return;
     this.progress(step2);
     const ok2 = this.settle(r, `pending:${id2}`);
-    const w = this.peeks.get(id2);
-    if (!w) return;
+    if (this.peeks.get(id2) !== w) return;
     w.pending.due = false;
     if (ok2 && r.ok) {
       w.pending.value = r.value;
@@ -5708,7 +6058,7 @@ var CityStore = class {
       ready: this.slotOf(this.slots.ready, dirty("ready")),
       inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
       closed: { seed: this.seedSlot(), recent: this.closed.recent(), incomplete: this.incomplete, hidden: this.closed.hidden() },
-      peeks: new Map([...this.peeks].map(([id2, s]) => [id2, this.slotOf(s, s.due)])),
+      transcripts: new Map([...this.peeks].map(([id2, s]) => [id2, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id2, w]) => [id2, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
       beads: new Map([...this.lookups].map(([id2, b]) => [id2, this.slotOf(b, b.due)])),
       errors: this.errors,
@@ -6077,9 +6427,9 @@ function onBoard(s, id2) {
     const hit = list?.items.find((b) => b.id === id2);
     if (hit) return hit;
   }
-  let newest;
-  for (const c of s.closed.recent) if (c.bead.id === id2 && (!newest || c.seq > newest.seq)) newest = c;
-  return newest?.bead ?? s.closed.seed.value?.items.find((b) => b.id === id2);
+  let newest2;
+  for (const c of s.closed.recent) if (c.bead.id === id2 && (!newest2 || c.seq > newest2.seq)) newest2 = c;
+  return newest2?.bead ?? s.closed.seed.value?.items.find((b) => b.id === id2);
 }
 function detailFacts(b, state) {
   const out = [["status", state]];
@@ -6153,6 +6503,21 @@ function resolveBinding(input) {
 }
 
 // src/vm/detail.ts
+function keepAwakeText(k) {
+  if (k === null) return "Keep awake: not watched";
+  switch (k.kind) {
+    case "checking":
+      return "Keep awake: reading gc's wake reasons";
+    case "pinning":
+      return "Keep awake: pinning";
+    case "pinned":
+      return "Keep awake: pinned by this pane until it closes";
+    case "not-pinned":
+      return `Keep awake: ${cleanLine(k.why)}`;
+    case "failed":
+      return `Keep awake: failed: ${errorText(k.error)}`;
+  }
+}
 function capabilities(c) {
   const names = [];
   if (c.supports_follow_up) names.push("follow-up");
@@ -6192,15 +6557,29 @@ function pendingView(s) {
     answer: { requestId: p.request_id, options: [...p.options] }
   };
 }
+function turnViews(t) {
+  return t.turns.map((x, i) => ({
+    key: x.id !== void 0 && x.id !== "" ? cleanLine(x.id) : String(i),
+    role: t.format === "text" ? null : cleanLine(x.role),
+    time: x.timestamp === void 0 ? null : cleanLine(x.timestamp),
+    lines: cleanText(x.text).split("\n")
+  }));
+}
+function outputView(t, now) {
+  const f = t ? freshness(t, now, { intervalMs: CADENCE.peek.onScreenMs, confirmedAt: null }) : { kind: "never", error: null };
+  const region = regionModel([["output", f]]);
+  if (!t?.value) return { turns: null, text: null, olderHidden: false, bounded: null, region };
+  const turns = turnViews(t.value);
+  const text2 = turns.map((x) => x.lines.join("\n")).join("\n");
+  const bounded = t.value.bounded ? `the conversation is too large to read here; showing the terminal's last ${PEEK_LINES} lines` : null;
+  return { turns, text: text2 === "" ? "(no output)" : text2, olderHidden: t.value.olderHidden, bounded, region };
+}
 function detailModel(input) {
   const { snapshot: s, now, selected } = input;
   if (selected === null) return { kind: "none" };
   const x = s.sessions.value?.items.find((i) => i.id === selected);
   if (!x) return { kind: "gone", id: cleanLine(selected), text: `session ${cleanLine(selected)} is no longer listed by gc` };
   const p = s.pending.value?.items.find((i) => i.session_id === x.id);
-  const peek = s.peeks.get(x.id);
-  const peekFreshness = peek ? freshness(peek, now, { intervalMs: CADENCE.peek.onScreenMs, confirmedAt: null }) : { kind: "never", error: null };
-  const output = peek?.value ? cleanText(peek.value.last_output ?? "") : null;
   const label2 = x.alias ?? x.display_name ?? (x.title !== "" ? x.title : x.session_name);
   const detail = s.details.get(x.id);
   return {
@@ -6210,8 +6589,9 @@ function detailModel(input) {
     title: cleanLine(`${x.agent_name ?? x.template} / ${label2}`),
     status: sessionStatus(x, p ? { kind: p.kind, requestId: p.request_id } : null),
     facts: facts(x),
-    output: { text: output === null ? null : output === "" ? "(no output)" : output, region: regionModel([["output", peekFreshness]]) },
+    output: outputView(s.transcripts.get(x.id), now),
     wakeReasons: wakeText(detail?.wakeReasons),
+    keepAwake: keepAwakeText(input.keepAwake ?? null),
     pending: pendingView(detail?.pending),
     canInterrupt: x.submission_capabilities?.supports_interrupt_now === true,
     noTerminal: attachRefusal(x.transport)
@@ -6232,6 +6612,8 @@ function syncErrorText(e) {
       return `discovery made no progress for ${Math.round(e.idleMs / 1e3)} s and was started again`;
     case "tick-crashed":
       return cleanLine(`a periodic update failed: ${e.message}`);
+    case "pin-book-unreadable":
+      return `${e.entries} of the keep-awake pin records could not be read and were left as they are`;
     case "step-stalled":
       return `a refresh step made no progress for ${Math.round(e.idleMs / 1e3)} s and was abandoned`;
     default:
@@ -6723,6 +7105,7 @@ var CopyController = class {
     this.followFocus();
     this.followDetail();
     this.followBead();
+    this.city?.tick();
     const s = this.city?.snapshot();
     if (s && running !== null) {
       for (const slot of [s.rigs, s.agents, s.sessions, s.pending, s.events]) {
@@ -6747,7 +7130,8 @@ var CopyController = class {
       this.notice ?? "",
       this.gascityTabs.join(","),
       this.focusShown?.session ?? "",
-      this.focusNext?.session ?? ""
+      this.focusNext?.session ?? "",
+      this.selected !== null ? JSON.stringify(this.city?.keepAwake(this.selected) ?? null) : ""
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -6782,7 +7166,7 @@ var CopyController = class {
       agents,
       board,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
-      detail: s ? detailModel({ snapshot: s, now, selected: this.selected }) : { kind: "none" },
+      detail: s ? detailModel({ snapshot: s, now, selected: this.selected, keepAwake: this.selected !== null ? this.city?.keepAwake(this.selected) ?? null : null }) : { kind: "none" },
       activity: this.city ? activityModel(this.city.activity(), s, now) : null,
       dialog: this.dialog(),
       notice: this.notice,
@@ -7158,6 +7542,9 @@ var CopyController = class {
       case "cancel":
         this.cancelDialog();
         return "cancelled";
+      case "back":
+        this.selectSession(null);
+        return "closed";
       case "set-gc-bin": {
         const stored = this.deps.host.setGcBin(c.gcBin);
         if (!stored.ok) {
@@ -7573,7 +7960,6 @@ var CopyController = class {
       if (this.lastCity !== id2) this.selectedBead = null;
       this.lastCity = id2;
     }
-    this.city?.tick();
   }
   followDetail() {
     const want = this.city !== null ? this.selected : null;
@@ -8483,9 +8869,19 @@ function originOf2(url) {
 function storeId(apiUrl, city) {
   return `${apiUrl}\0${city}`;
 }
+function memoryBook() {
+  let value;
+  return {
+    read: () => value,
+    write: (v) => {
+      value = v;
+    }
+  };
+}
 var SyncRegistry = class {
   constructor(deps) {
     this.deps = deps;
+    this.pins = deps.pins ?? memoryBook();
     this.clock = deps.clock ?? systemClock;
     this.budget = new FetchBudget(deps.fetch, this.clock);
     this.random = deps.random ?? Math.random;
@@ -8499,6 +8895,7 @@ var SyncRegistry = class {
   pollers = /* @__PURE__ */ new Map();
   listeners = /* @__PURE__ */ new Set();
   onScreen = false;
+  pins;
   /** Subscribes a copy to a city on a loopback gc API; `not-loopback` otherwise. */
   subscribe(key) {
     const endpoint = this.endpointFor(key.apiUrl);
@@ -8527,11 +8924,21 @@ var SyncRegistry = class {
         refreshBead: (beadId) => store.refreshBead(beadId),
         newKey: this.deps.newKey ?? (() => newIdempotencyKey())
       });
-      entry = { store, ledger, notifier: new NeedsYouNotifier(key.city), subs: 0 };
+      const keepAwake = new KeepAwake({
+        key: store.key,
+        book: this.pins,
+        clock: this.clock,
+        start: (owner, spec2) => ledger.start(owner, spec2),
+        action: (actionId) => ledger.snapshot().entries.find((e) => e.id === actionId),
+        wake: (sessionId) => store.snapshot().details.get(sessionId)?.wakeReasons,
+        refreshWake: (sessionId) => store.refreshWake(sessionId),
+        onUnreadable: (entries) => store.noteError("keep-awake", { kind: "pin-book-unreadable", entries })
+      });
+      entry = { store, ledger, notifier: new NeedsYouNotifier(key.city), keepAwake, subs: 0 };
       this.stores.set(id2, entry);
     }
     entry.subs++;
-    return ok(this.subscription(id2, entry.store, entry.ledger, entry.notifier, endpoint.value));
+    return ok(this.subscription(id2, entry, endpoint.value));
   }
   /** Subscribes a copy to a loopback gc API's shared city list; `not-loopback` otherwise. */
   subscribeCities(apiUrl) {
@@ -8630,7 +9037,8 @@ var SyncRegistry = class {
     endpoint.dispose();
     this.endpoints.delete(endpoint.baseUrl);
   }
-  subscription(id2, store, ledger, notifier, endpoint) {
+  subscription(id2, entry, endpoint) {
+    const { store, ledger, notifier, keepAwake } = entry;
     const owner = {};
     const watches = /* @__PURE__ */ new Set();
     let active = true;
@@ -8641,13 +9049,16 @@ var SyncRegistry = class {
       watches.clear();
       ledger.ownerGone(owner);
       store.abandonStartedBy(owner);
-      const entry = this.stores.get(id2);
-      if (entry && --entry.subs <= 0) {
+      if (this.stores.get(id2) === entry && --entry.subs <= 0) {
         this.stores.delete(id2);
+        keepAwake.dispose();
         ledger.dispose();
         store.dispose();
         this.releaseEndpoint(endpoint, store);
       }
+    };
+    const disownOnPin = (spec2) => {
+      if ((spec2.kind === "session.pin" || spec2.kind === "session.unpin") && spec2.target.kind === "session") keepAwake.disown(spec2.target.id);
     };
     const watch = (release2) => {
       const once = () => {
@@ -8665,6 +9076,7 @@ var SyncRegistry = class {
           this.budget.reclaim();
           store.tick(owner);
           ledger.tick(owner);
+          keepAwake.tick(owner);
           const s = store.snapshot();
           const now = this.clock.now();
           const batch = notifier.observe(s.pending.value, s.sessions.value, now);
@@ -8676,8 +9088,17 @@ var SyncRegistry = class {
         }
         return store.snapshot().rev;
       },
-      watchPeek: (sessionId) => active ? watch(store.watchPeek(sessionId)) : () => {
+      watchPeek: (sessionId) => {
+        if (!active) return () => {
+        };
+        const release2 = store.watchPeek(sessionId);
+        keepAwake.open(sessionId);
+        return watch(() => {
+          release2();
+          keepAwake.release(sessionId);
+        });
       },
+      keepAwake: (sessionId) => keepAwake.state(sessionId),
       watchBead: (beadId) => active ? watch(store.watchBead(beadId)) : () => {
       },
       refreshDetail: (sessionId) => {
@@ -8690,8 +9111,17 @@ var SyncRegistry = class {
         if (active) store.refresh(domains);
       },
       client: () => endpoint.client("mutation"),
-      act: (spec2, key) => active ? ledger.start(owner, spec2, key) : -1,
-      retryAction: (actionId) => active ? ledger.retry(owner, actionId, store.snapshot()) : err("this view has closed"),
+      act: (spec2, key) => {
+        if (!active) return -1;
+        disownOnPin(spec2);
+        return ledger.start(owner, spec2, key);
+      },
+      retryAction: (actionId) => {
+        if (!active) return err("this view has closed");
+        const spec2 = ledger.snapshot().entries.find((e) => e.id === actionId)?.spec;
+        if (spec2) disownOnPin(spec2);
+        return ledger.retry(owner, actionId, store.snapshot());
+      },
       refreshAction: (actionId) => {
         if (active) ledger.refreshFor(actionId);
       },
@@ -9041,7 +9471,7 @@ function renderDetail(m, theme2, actions, ctx) {
   if (m.kind === "none") return null;
   const close = div4().id("gascity-detail-close").on_click((_, cx) => actions.close(cx)).child("Close");
   if (m.kind === "gone") return v_flex4().id("gascity-detail").gap(4).child(label("gascity-detail-gone", m.text)).child(close);
-  let el = v_flex4().id("gascity-detail").gap(4).child(h_flex4().id("gascity-detail-head").gap(8).child(label("gascity-detail-title", `Detail: ${m.title}`)).child(close)).child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`)).child(actionBar(m.ref, m.noTerminal, ctx, theme2, actions)).child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2)).child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`));
+  let el = v_flex4().id("gascity-detail").gap(4).child(h_flex4().id("gascity-detail-head").gap(8).child(label("gascity-detail-title", `Detail: ${m.title}`)).child(close)).child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`)).child(actionBar(m.ref, m.noTerminal, ctx, theme2, actions)).child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme2)).child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`)).child(label("gascity-detail-keep-awake", m.keepAwake));
   pendingText(m.pending).forEach((t, i) => {
     el = el.child(label(`gascity-detail-pending-${i}`, t));
   });
@@ -9052,10 +9482,18 @@ function renderDetail(m, theme2, actions, ctx) {
   let output = v_flex4().id("gascity-detail-output").gap(0);
   if (out.region.age !== null) output = output.child(muted(label("gascity-detail-output-age", `output, ${out.region.age}`), theme2));
   if (out.region.error !== null) output = output.child(label("gascity-detail-output-error", out.region.error));
-  if (out.text === null) {
+  if (out.bounded !== null) output = output.child(muted(label("gascity-detail-output-bounded", out.bounded), theme2));
+  if (out.turns === null) {
     output = output.child(muted(label("gascity-detail-output-loading", out.region.kind === "failed" ? "no output" : "loading output…"), theme2));
+  } else if (out.turns.length === 0) {
+    output = output.child(muted(label("gascity-detail-output-empty", "(no output)"), theme2));
   } else {
-    output = output.children(out.text.split("\n").map((line, i) => label(`gascity-detail-line-${i}`, line)));
+    if (out.olderHidden) output = output.child(muted(label("gascity-detail-older", "older turns are not shown"), theme2));
+    let line = 0;
+    out.turns.forEach((t, i) => {
+      if (t.role !== null) output = output.child(muted(label(`gascity-detail-turn-${i}`, t.time === null ? t.role : `${t.role} · ${t.time}`), theme2));
+      for (const text2 of t.lines) output = output.child(label(`gascity-detail-line-${line++}`, text2));
+    });
   }
   return el.child(greyedIf(output, out.region.stale, theme2));
 }
@@ -9167,7 +9605,8 @@ function registry2() {
   return sharedRegistry(() => new SyncRegistry({
     fetch: hostFetch,
     onError: (key, entry) => logError(`gascity: ${key.city}: ${entry.source}: ${syncErrorText(entry.error)}`),
-    onNeedsYou: postNeedsYou
+    onNeedsYou: postNeedsYou,
+    pins: { read: readOwnPins, write: writeOwnPins }
   }));
 }
 function visibility() {

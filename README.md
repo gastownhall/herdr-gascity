@@ -313,7 +313,7 @@ promise never settles. The engine is built around that rule:
   |---|---|---|
   | events | 2 s | 10 s |
   | sessions + pending | 5 s | 30 s |
-  | detail peek | 2 s | paused |
+  | detail transcript | 2 s | paused |
   | sweep (everything) | 60 s | 60 s |
 
   The event poll keeps running while hidden, so app-wide listeners (toasts)
@@ -375,10 +375,52 @@ it unsubscribes and starts nothing; the other copies keep updating.
   fetched by id (at most 10 per step, again on an event about it, after an
   event gap, when gc comes back and on "retry now", but not at every sweep,
   whose cost would grow with the city); it is never guessed.
-- **Detail pane.** Clicking a session opens it: gc's facts, the output (40
-  lines, refreshed every 2 s while the pane is open and on screen), the wake
-  reasons (fetched when it opens and on "retry now", because gc probes the
-  runtime for each session), and the pending prompt with gc's own options.
+- **Detail pane.** Clicking a session opens it: gc's facts, its
+  conversation, the wake reasons (fetched when it opens and on "retry now",
+  because gc probes the runtime for each session), a keep-awake line, and
+  the pending prompt with gc's own options. The raw terminal stays in the
+  attach tab (Open terminal).
+- **Conversation** (`sync/transcript.ts`). Read from gc's per-session
+  transcript, every 2 s while the pane is open and on screen, paused while
+  hidden, at peek priority under the fetch budget. A session with a log
+  (format `conversation`) is read once from its last compaction segment
+  (`tail=1`) and then followed with `after=<last turn id>`, so each poll
+  carries only new turns, each shown under its role and time; gc's 409
+  `transcript-cursor-invalidated` starts again from the tail. A session
+  without one (format `text`) is a capture of its terminal, read whole each
+  time. At most 200 turns are kept; older ones are said to be hidden. A log
+  with no compaction (Codex writes none) is read whole from the tail; past
+  herdr's 8 MiB cap the pane falls back to gc's bounded peek of the
+  terminal (its last 40 lines), says so, and reads only that until it is
+  reopened. A read started for an earlier pane of the session is dropped
+  when it lands on a reopened one. The
+  session's SSE stream is not used: herdr's `fetch` reads a whole body under
+  a 30 s total timeout, and that stream never ends.
+- **Keep awake** (`sync/keepAwake.ts`). While a session's pane is open in
+  any copy, the mod pins it in gc so it is not put to sleep, and unpins it
+  when the last pane of it closes. It only ever unpins a pin it made: it
+  pins only a session the pane's wake-reasons read shows as listed, active,
+  running, without a lifecycle reason and without the `pin` reason, and
+  says why it did not otherwise. A person's own Pin or Unpin of the session
+  takes it over. The pins it made are kept in herdr's shared value
+  `gascity.pins` (written before the pin is sent), so a pin left by a crash,
+  or by a copy that closed with its pane open, is released at the next
+  start; a pane that opens while its session is still recorded (an unpin
+  that did not land, say while gc was unreachable) holds that pin as its
+  own. A pane that opens while the session's release is in flight (a gc
+  restart, or switching city and back, with the pane open) waits for it to
+  land and then decides on a wake-reasons read asked after it; a copy
+  places its open pane before a new store's first tick, so a store restart
+  keeps the recorded pin instead of releasing it. A `gascity.pins` value
+  that is not a list is never overwritten: it is reported, and the pane does
+  not pin. A failed wake-reasons read is decided again on the pane's
+  refresh. Its pins and unpins are actions of their own kinds in the
+  activity log ("Keep awake", "Release keep-awake"), so retrying one is not
+  a person's Pin, and refetch nothing; a pin that failed or was not sent is
+  forgotten without an unpin. gc's pin is one ownerless flag
+  that the session itself does not report, so a pin a person makes outside
+  this mod between the pane's read and its pin is taken for the mod's and
+  is released when the pane closes.
 - **Errors and staleness.** Each region says how old its data is; on a
   failure it keeps the last data, greyed, with the error above it. The header
   says connected, connecting, reconnecting in N s (with the cause), city
@@ -597,7 +639,7 @@ arguments separated by `:`; each argument is percent-encoded
   with the same text, keeps it claimed for 10 minutes, and becomes the
   Idempotency-Key where gc declares one. A copy that refuses a delivery gives
   its claim up. Commands that only change what a copy shows (`focus`,
-  `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) and `set-gc-bin`
+  `city`, `session`, `bead`, `cancel`, `back`, `refresh`, `probe`) and `set-gc-bin`
   (which stores the same value whichever copy runs it) run in each copy that
   gets them.
 - **Retrying a scripted command.** Sending the same nonce again within 10
@@ -648,6 +690,7 @@ arguments separated by `:`; each argument is percent-encoded
 | `refresh` | refetch everything now (Retry now; the r key) |
 | `probe:<on-or-off>` | turn the probe file on or off (shared for every copy) |
 | `cancel` | close the open question or form without acting (Cancel) |
+| `back` | close the open session's detail (as Esc does when no question or form is open) |
 | `set-gc-bin:<gc-bin>` | store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it) |
 | `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
 | `wake:<city>:<session>` | wake a session (Wake) |

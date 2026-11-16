@@ -26,7 +26,7 @@
 //      cadence and maps new events to stale domains (invalidate.ts),
 //      debounced 300 ms; a gap or a reset log refetches every domain;
 //   3. marks sessions + pending stale at their cadence, everything at the
-//      sweep, and the watched detail peeks at theirs;
+//      sweep, and the watched details' transcripts at the peek cadence;
 //   4. refetches stale domains one request at a time (one request in flight
 //      per domain; a failing endpoint stops the step), then, for the closed
 //      list, the beads whose event carried no readable bead (at most 10 per
@@ -41,7 +41,8 @@
 // BEAD_FETCHES_PER_STEP per step, and the seed once (one request), since a
 // seeded bead may have been reopened, or a dropped one closed again, unseen.
 //
-// An open detail (watchPeek) also gets, on demand: the session's wake
+// An open detail (watchPeek) polls the session's transcript (transcript.ts)
+// at the peek cadence while on screen, and also gets, on demand: the session's wake
 // reasons (gc probes the runtime for each session it lists with them, so they
 // are fetched when the detail opens and on refreshDetail only) and its pending
 // prompt (when the detail opens and whenever the city's pending list changes
@@ -83,6 +84,9 @@ import { ClosedList, type ClosedBead } from "./closedList.ts";
 import { ALL_DOMAINS, invalidationFor, type Domain } from "./invalidate.ts";
 import { DEBOUNCE_MS, intervalOf, plan, type TaskTimes } from "./scheduler.ts";
 import { freshness, type Freshness } from "./staleness.ts";
+import { PEEK_LINES, cursorInvalidated, mergeTranscript, peekTranscript, tooLarge, transcriptQuery, type Transcript } from "./transcript.ts";
+
+export { PEEK_LINES };
 import { EVENT_PAGE_LIMIT, readEventPage, type Resync } from "./watcher.ts";
 
 /** Sessions are fetched in pages of this size… */
@@ -97,8 +101,6 @@ export const MAX_CLOSED_RECENT = 20;
 export const BEAD_FETCHES_PER_STEP = 10;
 /** Diagnostics ring size. */
 export const ERROR_RING = 100;
-/** Lines of output a detail peek asks for. */
-export const PEEK_LINES = 40;
 /**
  * A step with no progress for this long is abandoned. Every request it awaits
  * settles within RECLAIM_AFTER_MS (the budget reclaims a cancelled one), so
@@ -174,7 +176,9 @@ export type SyncError =
   /** A copy's discovery made no progress (its host calls were taken with another copy) and was started again. */
   | { kind: "discovery-stalled"; idleMs: number }
   /** The probe document was over herdr's file limit and was cut down (probe.ts): what it lost. */
-  | { kind: "probe-truncated"; limitBytes: number; dropped: string[] };
+  | { kind: "probe-truncated"; limitBytes: number; dropped: string[] }
+  /** Entries of the kept-awake pin records (keepAwake.ts) that could not be read; left as they are. */
+  | { kind: "pin-book-unreadable"; entries: number };
 
 /** One diagnostics entry: when, where (a domain, "events", "bead:<id>", "listener", "step", …) and what. */
 export interface ErrorEntry {
@@ -187,9 +191,11 @@ export interface ErrorEntry {
 export interface WakeReasons {
   readonly listed: boolean;
   readonly reasons: readonly string[];
+  /** The session as the same read listed it (state, lifecycle reason, running), or null when not listed. */
+  readonly session: T.SessionResponse | null;
 }
 
-/** The on-demand parts of an open detail (the output is in `peeks`). */
+/** The on-demand parts of an open detail (the conversation is in `transcripts`). */
 export interface DetailState {
   readonly wakeReasons: Slot<WakeReasons>;
   readonly pending: Slot<T.SessionPendingResponse>;
@@ -209,8 +215,8 @@ export interface CitySnapshot {
   readonly ready: Slot<WorkList>;
   readonly inProgress: Slot<WorkList>;
   readonly closed: ClosedState;
-  /** Watched sessions with their output (`last_output`). */
-  readonly peeks: ReadonlyMap<string, Slot<T.SessionResponse>>;
+  /** Watched sessions' conversations (transcript.ts), polled while on screen. */
+  readonly transcripts: ReadonlyMap<string, Slot<Transcript>>;
   /** Watched sessions' wake reasons and pending prompt. */
   readonly details: ReadonlyMap<string, DetailState>;
   /** Active beads that are not on the board, fetched by id. */
@@ -291,9 +297,13 @@ function onDemand<V>(): OnDemand<V> {
   return { ...freshSlot<V>(), due: true };
 }
 
-interface Watch extends MutableSlot<T.SessionResponse> {
+interface Watch extends MutableSlot<Transcript> {
   refs: number;
   due: boolean;
+  /** gc no longer has the last turn's entry: the next read starts again from the tail. */
+  restart: boolean;
+  /** The conversation was over herdr's body cap: gc's bounded peek is read instead, until the pane reopens. */
+  bounded: boolean;
   wake: OnDemand<WakeReasons>;
   /** `key` is the request id the city's pending list showed for the session when it was last fetched. */
   pending: OnDemand<T.SessionPendingResponse> & { key: string | null };
@@ -416,13 +426,13 @@ export class CityStore implements EndpointListener {
     this.commit();
   }
 
-  /** Starts (or joins) watching a session's detail: output, wake reasons, pending prompt; returns the release. */
+  /** Starts (or joins) watching a session's detail: transcript, wake reasons, pending prompt; returns the release. */
   watchPeek(sessionId: string): () => void {
     const p = this.peeks.get(sessionId);
     if (p) p.refs++;
     else {
       this.peeks.set(sessionId, {
-        ...freshSlot<T.SessionResponse>(), refs: 1, due: true, wake: onDemand(), pending: { ...onDemand(), key: this.pendingKey(sessionId) },
+        ...freshSlot<Transcript>(), refs: 1, due: true, restart: false, bounded: false, wake: onDemand(), pending: { ...onDemand(), key: this.pendingKey(sessionId) },
       });
       this.commit();
     }
@@ -457,7 +467,7 @@ export class CityStore implements EndpointListener {
     };
   }
 
-  /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
+  /** Refetches a watched session's transcript, wake reasons and pending prompt at the next tick. */
   refreshDetail(sessionId: string): void {
     const w = this.peeks.get(sessionId);
     if (!w) return;
@@ -465,6 +475,19 @@ export class CityStore implements EndpointListener {
       part.held = false;
       part.due = true;
     }
+    this.commit();
+  }
+
+  /**
+   * Rereads a watched session's wake reasons at the next tick, even while a
+   * read is in flight: keep-awake asks after its unpin lands, so the read it
+   * decides on was asked after that.
+   */
+  refreshWake(sessionId: string): void {
+    const w = this.peeks.get(sessionId);
+    if (!w) return;
+    w.wake.held = false;
+    w.wake.due = true;
     this.commit();
   }
 
@@ -612,9 +635,12 @@ export class CityStore implements EndpointListener {
     await this.fetchClosed(step);
     await this.fetchLookups(step);
     for (const [id, w] of [...this.peeks]) {
-      if (w.wake.due && !w.wake.held && this.templateOf(id) !== undefined) {
-        if (!this.gateOpen(step)) return;
-        await this.fetchWake(step, id);
+      if (w.wake.due && !w.wake.held) {
+        if (this.templateOf(id) === undefined) this.unlisted(w);
+        else {
+          if (!this.gateOpen(step)) return;
+          await this.fetchWake(step, id);
+        }
       }
       if (w.pending.due && !w.pending.held) {
         if (!this.gateOpen(step)) return;
@@ -625,7 +651,7 @@ export class CityStore implements EndpointListener {
       for (const [id, q] of [...this.peeks]) {
         if (!q.due || q.held) continue;
         if (!this.gateOpen(step)) return;
-        await this.fetchPeek(step, id);
+        await this.fetchTranscript(step, id);
       }
     }
   }
@@ -935,16 +961,53 @@ export class CityStore implements EndpointListener {
     }
   }
 
-  private async fetchPeek(step: Step, id: string): Promise<void> {
+  private async fetchTranscript(step: Step, id: string): Promise<void> {
+    const q = this.peeks.get(id);
+    if (!q) return;
+    if (q.bounded) return this.fetchBoundedPeek(step, id, q);
+    const query = q.restart ? { tail: "1" } : transcriptQuery(q.value);
+    const after = "after" in query ? query.after : null;
+    const r = await ops.getSessionTranscript(this.deps.endpoint.client("peek", step), this.key.city, id, query);
+    if (!this.current(step)) return;
+    this.progress(step);
+    if (this.peeks.get(id) !== q) return; // released (or reopened) while in flight: not this pane's read
+    if (!r.ok && tooLarge(r.error)) {
+      // Recorded in the diagnostics; the pane shows gc's bounded peek from the next tick on.
+      this.settle(r, `transcript:${id}`);
+      q.bounded = true;
+      q.due = true;
+      this.commit();
+      return;
+    }
+    if (!r.ok && after !== null && cursorInvalidated(r.error)) {
+      // Not a failure: the log moved on (rotated, replaced). Read it again from the tail at the next tick.
+      q.restart = true;
+      q.due = true;
+      this.commit();
+      return;
+    }
+    const ok = this.settle(r, `transcript:${id}`);
+    q.due = false;
+    if (ok && r.ok) {
+      q.value = mergeTranscript(q.restart ? null : q.value, q.restart ? null : after, r.value);
+      q.restart = false;
+      q.fetchedAt = this.deps.clock.now();
+      q.error = null;
+    } else if (!r.ok) {
+      this.failOnDemand(q, r.error);
+    }
+    this.commit();
+  }
+
+  private async fetchBoundedPeek(step: Step, id: string, q: Watch): Promise<void> {
     const r = await ops.getSession(this.deps.endpoint.client("peek", step), this.key.city, id, { peek: true, peek_lines: PEEK_LINES });
     if (!this.current(step)) return;
     this.progress(step);
+    if (this.peeks.get(id) !== q) return;
     const ok = this.settle(r, `peek:${id}`);
-    const q = this.peeks.get(id);
-    if (!q) return; // released while in flight
     q.due = false;
     if (ok && r.ok) {
-      q.value = r.value;
+      q.value = peekTranscript(r.value);
       q.fetchedAt = this.deps.clock.now();
       q.error = null;
     } else if (!r.ok) {
@@ -972,20 +1035,36 @@ export class CityStore implements EndpointListener {
     return this.slots.sessions.value?.items.find((x) => x.id === id)?.template;
   }
 
+  /**
+   * A watched session missing from the session list has no template to ask
+   * its wake reasons by: it reads as not listed, and is asked once a list
+   * carries it (it stays due).
+   */
+  private unlisted(w: Watch): void {
+    if (this.slots.sessions.value === null || w.wake.value !== null) return;
+    w.wake.value = { listed: false, reasons: [], session: null };
+    w.wake.fetchedAt = this.deps.clock.now();
+    w.wake.error = null;
+    this.commit();
+  }
+
   private async fetchWake(step: Step, id: string): Promise<void> {
     const template = this.templateOf(id);
-    if (template === undefined) return;
+    const w = this.peeks.get(id);
+    if (template === undefined || !w) return;
+    // Cleared before the read, so a refresh asked while it is in flight reads again.
+    w.wake.due = false;
+    const asked = this.deps.clock.now();
     const r = await ops.listSessions(this.deps.endpoint.client("peek", step), this.key.city, { limit: SESSION_PAGE, template, wake_reasons: true });
     if (!this.current(step)) return;
     this.progress(step);
     const ok = this.settle(r, `wake-reasons:${id}`);
-    const w = this.peeks.get(id);
-    if (!w) return;
-    w.wake.due = false;
+    if (this.peeks.get(id) !== w) return; // released (or reopened) while in flight
     if (ok && r.ok) {
       const listed = r.value.items.find((x) => x.id === id);
-      w.wake.value = { listed: listed !== undefined, reasons: listed?.wake_reasons ?? [] };
-      w.wake.fetchedAt = this.deps.clock.now();
+      w.wake.value = { listed: listed !== undefined, reasons: listed?.wake_reasons ?? [], session: listed ?? null };
+      // As of when it was asked: keep-awake compares it with when its own unpin landed.
+      w.wake.fetchedAt = asked;
       w.wake.error = null;
     } else if (!r.ok) {
       this.failOnDemand(w.wake, r.error);
@@ -994,12 +1073,13 @@ export class CityStore implements EndpointListener {
   }
 
   private async fetchSessionPending(step: Step, id: string): Promise<void> {
+    const w = this.peeks.get(id);
+    if (!w) return;
     const r = await ops.getSessionPending(this.deps.endpoint.client("peek", step), this.key.city, id);
     if (!this.current(step)) return;
     this.progress(step);
     const ok = this.settle(r, `pending:${id}`);
-    const w = this.peeks.get(id);
-    if (!w) return;
+    if (this.peeks.get(id) !== w) return; // released (or reopened) while in flight
     w.pending.due = false;
     if (ok && r.ok) {
       w.pending.value = r.value;
@@ -1093,7 +1173,7 @@ export class CityStore implements EndpointListener {
       ready: this.slotOf(this.slots.ready, dirty("ready")),
       inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
       closed: { seed: this.seedSlot(), recent: this.closed.recent(), incomplete: this.incomplete, hidden: this.closed.hidden() },
-      peeks: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
+      transcripts: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
       beads: new Map([...this.lookups].map(([id, b]) => [id, this.slotOf(b, b.due)])),
       errors: this.errors,

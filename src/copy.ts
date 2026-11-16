@@ -318,6 +318,10 @@ export class CopyController {
     this.followFocus();
     this.followDetail();
     this.followBead();
+    // Ticked once the copy's watches are placed: a new store (gc restarted, or
+    // the city switched away and back) sees the open pane before its first
+    // tick, so keep-awake keeps the pane's pin instead of releasing it.
+    this.city?.tick();
 
     const s = this.city?.snapshot();
     if (s && running !== null) {
@@ -338,6 +342,7 @@ export class CopyController {
     const signature = [
       this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.city?.activity().rev ?? -1, this.onScreen, this.selected,
       this.selectedBead, this.notice ?? "", this.gascityTabs.join(","), this.focusShown?.session ?? "", this.focusNext?.session ?? "",
+      this.selected !== null ? JSON.stringify(this.city?.keepAwake(this.selected) ?? null) : "",
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -374,7 +379,7 @@ export class CopyController {
       agents,
       board,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
-      detail: s ? detailModel({ snapshot: s, now, selected: this.selected }) : { kind: "none" },
+      detail: s ? detailModel({ snapshot: s, now, selected: this.selected, keepAwake: this.selected !== null ? this.city?.keepAwake(this.selected) ?? null : null }) : { kind: "none" },
       activity: this.city ? activityModel(this.city.activity(), s, now) : null,
       dialog: this.dialog(),
       notice: this.notice,
@@ -793,6 +798,9 @@ export class CopyController {
       case "cancel":
         this.cancelDialog();
         return "cancelled";
+      case "back":
+        this.selectSession(null);
+        return "closed";
       case "set-gc-bin": {
         const stored = this.deps.host.setGcBin(c.gcBin);
         if (!stored.ok) {
@@ -1249,7 +1257,6 @@ export class CopyController {
       if (this.lastCity !== id) this.selectedBead = null;
       this.lastCity = id;
     }
-    this.city?.tick();
   }
 
   private followDetail(): void {

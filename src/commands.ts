@@ -50,6 +50,7 @@ export type Command =
   | { verb: "refresh" }
   | { verb: "probe"; on: boolean }
   | { verb: "cancel" }
+  | { verb: "back" }
   /** Stores the gc program in the machine-wide settings (the installer sends it). */
   | { verb: "set-gc-bin"; gcBin: string }
   | InCity<{ verb: "session-new"; agent: string; alias: string | null }>
@@ -128,6 +129,7 @@ export const GRAMMAR: Readonly<Record<string, VerbSpec>> = {
     build: (a) => ({ verb: "probe", on: at(a, 0) === "on" }),
   },
   cancel: { mutating: false, args: [], summary: "close the open question or form without acting (Cancel)", build: () => ({ verb: "cancel" }) },
+  back: { mutating: false, args: [], summary: "close the open session's detail (as Esc does when no question or form is open)", build: () => ({ verb: "back" }) },
   "set-gc-bin": {
     mutating: false, args: [id("gc-bin")],
     summary: "store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it)",
@@ -313,6 +315,7 @@ export function formatCommand(c: Command, nonce: string | null = null): string {
       case "focus":
       case "refresh":
       case "cancel":
+      case "back":
         return [c.verb];
       case "focus-session":
         return ["focus", c.city, c.session];

@@ -92,7 +92,7 @@ async function play(op: OperationId, status: number, body: unknown) {
  * handler source at the pin. They are validated against the pin like the
  * recorded ones; any other fixture must be recorded.
  */
-const SYNTHESIZED = ["respond-session/accepted"];
+const SYNTHESIZED = ["get-v0-city-by-city-name-session-by-id-transcript/conversation", "respond-session/accepted"];
 
 /** What each recorded error fixture must decode to. */
 const EXPECTED_ERRORS: Record<string, (e: GcError) => void> = {
@@ -101,6 +101,7 @@ const EXPECTED_ERRORS: Record<string, (e: GcError) => void> = {
   "csrf-missing": (e) => expect(e).toEqual({ kind: "csrf-rejected" }),
   "validation-failed": (e) => expect(e).toMatchObject({ kind: "http", status: 422, problem: { code: "validation-failed" } }),
   "no-pending": (e) => expect(e).toMatchObject({ kind: "http", status: 501, problem: { code: "not-implemented" } }),
+  "cursor-invalidated": (e) => expect(e).toMatchObject({ kind: "http", status: 409, problem: { code: "transcript-cursor-invalidated" } }),
   "closed-session-conflict": (e) => expect(e).toMatchObject({ kind: "http", status: 409, problem: { code: "session-conflict" } }),
 };
 

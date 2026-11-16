@@ -2,7 +2,9 @@
 // and which bead subjects get a targeted refetch.
 
 import { describe, expect, test } from "bun:test";
-import { ALL_DOMAINS, SESSION_LIFECYCLE, invalidationFor, type Domain } from "../../../src/sync/invalidate.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { ALL_DOMAINS, HANDLED_BY_NAME, SESSION_LIFECYCLE, invalidationFor, type Domain } from "../../../src/sync/invalidate.ts";
 import type { TypedEventStreamEnvelope } from "../../../src/gc/types.gen.ts";
 
 let seq = 100;
@@ -55,6 +57,19 @@ describe("event type → domains", () => {
 
   test("ALL_DOMAINS lists every domain once", () => {
     expect([...ALL_DOMAINS].sort()).toEqual(["agents", "inProgress", "pending", "ready", "rigs", "sessions"]);
+  });
+});
+
+describe("event types handled by name", () => {
+  test("each is one of gc's event names in the pinned spec, so a rename in gc fails here at the re-pin", () => {
+    const spec = JSON.parse(readFileSync(join(import.meta.dir, "../../../api/openapi.pinned.json"), "utf8")) as {
+      components: { schemas: { TypedEventStreamEnvelopeCustom: { properties: { type: { not: { enum: string[] } } } } } };
+    };
+    // gc's typed envelope lists every known event type here (the custom envelope is "any type but these").
+    const known = new Set(spec.components.schemas.TypedEventStreamEnvelopeCustom.properties.type.not.enum);
+    expect(known.size).toBeGreaterThan(0);
+    expect(HANDLED_BY_NAME.filter((t) => !known.has(t))).toEqual([]);
+    expect(HANDLED_BY_NAME).toContain("session.created");
   });
 });
 

@@ -482,7 +482,7 @@ export class ActionLedger {
   private refreshAfter(rec: ActionRecord): void {
     this.deps.refresh(rec.spec.refresh);
     const t = rec.spec.target;
-    if (t.kind === "session") this.deps.refreshDetail(t.id);
+    if (t.kind === "session" && rec.spec.refreshesDetail !== false) this.deps.refreshDetail(t.id);
     if (t.kind === "bead") this.deps.refreshBead(t.id);
   }
 

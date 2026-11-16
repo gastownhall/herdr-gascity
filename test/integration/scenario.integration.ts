@@ -383,6 +383,27 @@ describe("the mod against a scratch gc city", () => {
       return d?.session === sessionId && d.output?.includes(`CANARY DONE ${card.id} ${runId}`) ? d.output : null;
     }, 250);
     expect(output).toContain(`CANARY WORKING ${card.id}`);
+    // Keep awake: the open pane pinned the session in gc, and gc now lists "pin" among its wake reasons.
+    const pin = await waitFor("keep-awake's pin", 30_000, () => {
+      const x = newestAction(readProbe(main()), "session.keep-awake");
+      return x && x.state !== "pending" ? x : null;
+    }, 200);
+    expect(pin.state).toBe("done");
+    expect(pin.title).toContain("Keep awake");
+    const listed = await city.api("GET", city.cityPath("/sessions?wake_reasons=true&limit=200"));
+    const row = (listed.body as { items: { id: string; wake_reasons?: string[] }[] }).items.find((x) => x.id === sessionId);
+    expect(row?.wake_reasons).toContain("pin");
+    // Closing the pane releases the pin: no keep-awake pin is left for the tests that follow (or for gc).
+    send(app, "back");
+    const unpin = await waitFor("keep-awake's release", 30_000, () => {
+      const x = newestAction(readProbe(main()), "session.keep-awake-release");
+      return x && x.state !== "pending" ? x : null;
+    }, 200);
+    expect(unpin.state).toBe("done");
+    expect(unpin.title).toContain("Release keep-awake");
+    const relisted = await city.api("GET", city.cityPath("/sessions?wake_reasons=true&limit=200"));
+    const after = (relisted.body as { items: { id: string; wake_reasons?: string[] }[] }).items.find((x) => x.id === sessionId);
+    expect(after?.wake_reasons ?? []).not.toContain("pin");
     const event = await eventTime("bead.closed", card.id, cursor);
     expect(event).not.toBeNull();
     const lag = firstSeen - event!.ts;

@@ -209,6 +209,27 @@ export interface SessionPendingResponse {
   pending?: PendingInteraction | undefined;
 }
 
+/** The fields of OutputTurn this mod uses, decoded from gc's OutputTurn. */
+export interface OutputTurn {
+  id?: string | undefined;
+  role: string;
+  text: string;
+  timestamp?: string | undefined;
+}
+
+/** The fields of PaginationInfo this mod uses, decoded from gc's PaginationInfo. */
+export interface PaginationInfo {
+  has_older_messages: boolean;
+}
+
+/** The fields of SessionTranscriptGetResponse this mod uses, decoded from gc's SessionTranscriptGetResponse. */
+export interface SessionTranscriptGetResponse {
+  id: string;
+  format: Drift<"conversation" | "text">;
+  turns: OutputTurn[];
+  pagination?: PaginationInfo | undefined;
+}
+
 /** The fields of ReadyBead this mod uses, decoded from gc's ReadyBead. */
 export interface ReadyBead {
   id: string;

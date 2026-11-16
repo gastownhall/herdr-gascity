@@ -37,6 +37,9 @@ export type ActionKind =
   | "session.kill-force"
   | "session.pin"
   | "session.unpin"
+  /** Keep-awake's own pin and its release: never a person's, so never a takeover (see sync/keepAwake.ts). */
+  | "session.keep-awake"
+  | "session.keep-awake-release"
   | "session.submit"
   | "session.interrupt"
   | "session.message"
@@ -148,6 +151,8 @@ export interface ActionSpec {
   readonly confirm: Confirmation | null;
   /** The city data to refetch after the action, and before a retry when its outcome is unknown. */
   readonly refresh: readonly Domain[];
+  /** Refetches the target session's open detail after it; default true. */
+  readonly refreshesDetail?: boolean;
   /** Sends the request; `key` goes out only where gc declares Idempotency-Key. Never throws, never retries. */
   send(c: GcClient, city: string, key: string): Promise<Result<Sent, GcError>>;
   /** Sent once this action is done (FollowUp). */

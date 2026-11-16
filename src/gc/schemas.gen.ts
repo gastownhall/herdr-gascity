@@ -188,6 +188,24 @@ export const SessionPendingResponseSchema: z.ZodMiniType<T.SessionPendingRespons
   pending: z.optional(PendingInteractionSchema),
 });
 
+export const OutputTurnSchema: z.ZodMiniType<T.OutputTurn> = z.object({
+  id: z.optional(z.string()),
+  role: z.string(),
+  text: z.string(),
+  timestamp: z.optional(z.string()),
+});
+
+export const PaginationInfoSchema: z.ZodMiniType<T.PaginationInfo> = z.object({
+  has_older_messages: z.boolean(),
+});
+
+export const SessionTranscriptGetResponseSchema: z.ZodMiniType<T.SessionTranscriptGetResponse> = z.object({
+  id: z.string(),
+  format: enumOf(["conversation","text"]),
+  turns: optionalNullableList(OutputTurnSchema),
+  pagination: z.optional(PaginationInfoSchema),
+});
+
 export const ReadyBeadSchema: z.ZodMiniType<T.ReadyBead> = z.object({
   id: z.string(),
   title: z.string(),

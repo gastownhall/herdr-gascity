@@ -142,13 +142,13 @@ describe("a copy", () => {
     expect(gc.seen.length).toBe(seen);
   });
 
-  test("selecting a session watches its detail (output, wake reasons, pending prompt); deselecting releases it", async () => {
+  test("selecting a session watches its detail (transcript, wake reasons, pending prompt); deselecting releases it", async () => {
     const { host, gc, open } = setup();
     const a = await open();
     await host.advance(3000);
     a.copy.selectSession("sc-20");
     await host.advance(3000);
-    expect(gc.count("/session/sc-20")).toBeGreaterThan(0);
+    expect(gc.count("/session/sc-20/transcript")).toBeGreaterThan(0);
     expect(gc.count("/session/sc-20/pending")).toBe(1);
     expect(gc.paths().filter((p) => p.includes("wake_reasons=true")).length).toBe(1);
     const detail = a.copy.view(host.now()).detail;
@@ -157,7 +157,7 @@ describe("a copy", () => {
     await host.advance(TICK_MS);
     const seen = gc.seen.length;
     await host.advance(10_000);
-    expect(gc.count("/session/sc-20", seen)).toBe(0);
+    expect(gc.count("/session/sc-20/transcript", seen)).toBe(0);
   });
 
   test("renders the work board from the shared snapshot: columns without infrastructure beads, the closed seed by creation time, a bead in Ready not listed as closed", async () => {
@@ -232,6 +232,32 @@ describe("a copy", () => {
     expect(a.copy.view(host.now()).header.city).toBe("other");
     expect(a.copy.view(host.now()).beadDetail).toEqual({ kind: "none" });
     expect(gc.count("/v0/city/other/bead/sc-74")).toBe(0);
+  });
+
+  test("switching city and back with a session pane open keeps it pinned: the new store sees the open pane before its first tick", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => {
+      if (req.path === "/v0/cities") return { status: 200, body: { items: [{ name: "scratch", path: "/s", running: true }, { name: "other", path: "/o", running: true }], total: 2 } };
+      if (req.method === "POST" && req.path.endsWith("/pin")) return { status: 200, body: fixtureBody("post-v0-city-by-city-name-session-by-id-pin", "ok") };
+      if (req.method === "POST" && req.path.endsWith("/unpin")) return { status: 200, body: fixtureBody("post-v0-city-by-city-name-session-by-id-unpin", "ok") };
+      return undefined;
+    };
+    const a = await open({ pinned: undefined });
+    a.copy.selectCity("scratch");
+    await host.advance(3000);
+    a.copy.selectSession("sc-20");
+    await host.advance(3000);
+    const posts = (path: string) => gc.seen.filter((r) => r.method === "POST" && r.path === path).length;
+    expect(posts("/v0/city/scratch/session/sc-20/pin")).toBe(1);
+    a.copy.selectCity("other");
+    await host.advance(3000);
+    a.copy.selectCity("scratch");
+    await host.advance(3000);
+    expect(a.copy.view(host.now()).header.city).toBe("scratch");
+    expect(posts("/v0/city/scratch/session/sc-20/unpin")).toBe(0);
+    expect(posts("/v0/city/scratch/session/sc-20/pin")).toBe(1);
+    const d = a.copy.view(host.now()).detail;
+    expect(d.kind === "session" ? d.keepAwake : null).toBe("Keep awake: pinned by this pane until it closes");
   });
 
   test("a city call answering 'not running' moves the copy to city stopped and ends its subscription", async () => {

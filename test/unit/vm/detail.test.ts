@@ -1,9 +1,10 @@
-// The detail pane of the selected session: facts, output (peek) as plain
-// text, wake reasons fetched on demand, and the pending prompt with gc's own
+// The detail pane of the selected session: facts, its conversation
+// (transcript) as plain text, wake reasons fetched on demand, and the pending prompt with gc's own
 // option list.
 
 import { describe, expect, test } from "bun:test";
-import type { DetailState } from "../../../src/sync/store.ts";
+import type { DetailState, Slot } from "../../../src/sync/store.ts";
+import { PEEK_LINES, type Transcript } from "../../../src/sync/transcript.ts";
 import { detailModel } from "../../../src/vm/detail.ts";
 import { EMPTY, NOW, failed, agent, list, session, sessions, slot, snapshot } from "./snap.ts";
 
@@ -39,20 +40,80 @@ describe("detailModel", () => {
     ]);
   });
 
-  test("output is plain text with control characters removed, and says how old it is", () => {
-    const peek = slot({ ...S1, last_output: "\u001b[1mCANARY READY\u001b[0m\r\nline two\u0007" }, { ageMs: 2_000 });
-    const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), peeks: new Map([["s-1", peek]]) }), now: NOW, selected: "s-1" });
+  test("a terminal capture is plain text with control characters removed, and says how old it is", () => {
+    const t = slot<Transcript>({ format: "text", turns: [{ role: "output", text: "\u001b[1mCANARY READY\u001b[0m\r\nline two\u0007" }], olderHidden: false, bounded: false }, { ageMs: 2_000 });
+    const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
     if (m.kind !== "session") throw new Error(m.kind);
-    expect(m.output).toEqual({ text: "CANARY READY\nline two", region: { kind: "ok", age: "data 2 s old", stale: false, error: null } });
+    expect(m.output).toEqual({
+      turns: [{ key: "0", role: null, time: null, lines: ["CANARY READY", "line two"] }],
+      text: "CANARY READY\nline two",
+      olderHidden: false,
+      bounded: null,
+      region: { kind: "ok", age: "data 2 s old", stale: false, error: null },
+    });
   });
 
-  test("no output yet is loading; output gc does not give is said", () => {
+  test("a conversation shows each turn under its role, cleaned, oldest first; older turns not kept are said", () => {
+    const t = slot<Transcript>({
+      format: "conversation",
+      turns: [
+        { id: "u1", role: "user", text: "fix\u0007 the test", timestamp: "2026-11-16T17:20:00Z" },
+        { id: "a1", role: "assistant\u001b[31m", text: "Looking.\n[Bash]" },
+      ],
+      olderHidden: true,
+      bounded: false,
+    });
+    const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
+    if (m.kind !== "session") throw new Error(m.kind);
+    expect(m.output.turns).toEqual([
+      { key: "u1", role: "user", time: "2026-11-16T17:20:00Z", lines: ["fix the test"] },
+      { key: "a1", role: "assistant", time: null, lines: ["Looking.", "[Bash]"] },
+    ]);
+    expect(m.output.text).toBe("fix the test\nLooking.\n[Bash]");
+    expect(m.output.olderHidden).toBe(true);
+  });
+
+  test("updating: new turns appear as the store appends them", () => {
+    const at = (turns: Transcript["turns"]) => {
+      const t = slot<Transcript>({ format: "conversation", turns, olderHidden: false, bounded: false });
+      const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
+      if (m.kind !== "session") throw new Error(m.kind);
+      return m.output.turns?.map((x) => x.key);
+    };
+    expect(at([{ id: "u1", role: "user", text: "hi" }])).toEqual(["u1"]);
+    expect(at([{ id: "u1", role: "user", text: "hi" }, { id: "a1", role: "assistant", text: "hello" }])).toEqual(["u1", "a1"]);
+  });
+
+  test("a conversation too large to read shows gc's bounded peek and says why", () => {
+    const t = slot<Transcript>({ format: "text", turns: [{ role: "output", text: "$ make" }], olderHidden: false, bounded: true });
+    const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
+    if (m.kind !== "session") throw new Error(m.kind);
+    expect(m.output.text).toBe("$ make");
+    expect(m.output.bounded).toBe(`the conversation is too large to read here; showing the terminal's last ${PEEK_LINES} lines`);
+  });
+
+  test("empty: no read yet is loading; an empty transcript says so", () => {
     let m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])) }), now: NOW, selected: "s-1" });
     if (m.kind !== "session") throw new Error(m.kind);
     expect(m.output.region.kind).toBe("loading");
-    m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), peeks: new Map([["s-1", slot(S1)]]) }), now: NOW, selected: "s-1" });
+    expect(m.output.turns).toBeNull();
+    const empty = slot<Transcript>({ format: "conversation", turns: [], olderHidden: false, bounded: false });
+    m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", empty]]) }), now: NOW, selected: "s-1" });
     if (m.kind !== "session") throw new Error(m.kind);
+    expect(m.output.turns).toEqual([]);
     expect(m.output.text).toBe("(no output)");
+  });
+
+  test("error and stale: a failed read keeps the last turns, greyed, with the error", () => {
+    const t: Slot<Transcript> = {
+      ...slot<Transcript>({ format: "text", turns: [{ role: "output", text: "last seen" }], olderHidden: false, bounded: false }, { ageMs: 30_000 }),
+      error: { kind: "http", status: 404, problem: null, raw: "gone" },
+    };
+    const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
+    if (m.kind !== "session") throw new Error(m.kind);
+    expect(m.output.text).toBe("last seen");
+    expect(m.output.region.stale).toBe(true);
+    expect(m.output.region.error).toContain("404");
   });
 
   test("wake reasons: listed, not listed, loading, failed", () => {
@@ -61,11 +122,22 @@ describe("detailModel", () => {
       if (m.kind !== "session") throw new Error(m.kind);
       return m.wakeReasons;
     };
-    expect(at({ wakeReasons: slot({ listed: true, reasons: ["session", "config\u0007"] }) })).toBe("session, config");
-    expect(at({ wakeReasons: slot({ listed: true, reasons: [] }) })).toBe("none");
-    expect(at({ wakeReasons: slot({ listed: false, reasons: [] }) })).toBe("gc did not list this session under its template");
+    expect(at({ wakeReasons: slot({ listed: true, reasons: ["session", "config\u0007"], session: null }) })).toBe("session, config");
+    expect(at({ wakeReasons: slot({ listed: true, reasons: [], session: null }) })).toBe("none");
+    expect(at({ wakeReasons: slot({ listed: false, reasons: [], session: null }) })).toBe("gc did not list this session under its template");
     expect(at({})).toBe("loading");
     expect(at({ wakeReasons: failed({ kind: "http", status: 500, problem: null, raw: "x" }) })).toBe("unavailable: gc answered 500: x");
+  });
+
+  test("keep awake: the pane says what it did for the session", () => {
+    const at = (k: Parameters<typeof detailModel>[0]["keepAwake"]) => {
+      const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])) }), now: NOW, selected: "s-1", keepAwake: k });
+      return m.kind === "session" ? m.keepAwake : null;
+    };
+    expect(at(undefined)).toBe("Keep awake: not watched");
+    expect(at({ kind: "pinned" })).toBe("Keep awake: pinned by this pane until it closes");
+    expect(at({ kind: "not-pinned", why: "already pinned in gc (not by this pane): left as it is\u0007" }))
+      .toBe("Keep awake: already pinned in gc (not by this pane): left as it is");
   });
 
   test("a pending prompt shows its text and gc's options, in gc's order", () => {

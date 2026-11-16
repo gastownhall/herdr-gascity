@@ -155,6 +155,8 @@ export async function record(a: Args): Promise<string[]> {
   await r.send("get-v0-city-by-city-name-session-by-id", "peek", "GET", `${c}/session/${encodeURIComponent(a.session)}`, { query: "peek=true&peek_lines=40" });
   await r.send("get-v0-city-by-city-name-session-by-id", "not-found", "GET", `${c}/session/no-such-session-${nonce}`);
   await r.send("get-v0-city-by-city-name-pending", "ok", "GET", `${c}/pending`);
+  await r.send("get-v0-city-by-city-name-session-by-id-transcript", "text", "GET", `${c}/session/${encodeURIComponent(a.session)}/transcript`, { query: "tail=1" });
+  await r.send("get-v0-city-by-city-name-session-by-id-transcript", "cursor-invalidated", "GET", `${c}/session/${encodeURIComponent(a.session)}/transcript`, { query: "after=no-such-entry" });
   await r.send("get-v0-city-by-city-name-session-by-id-pending", "none", "GET", `${c}/session/${encodeURIComponent(a.session)}/pending`);
   await r.send("get-v0-city-by-city-name-events", "ok", "GET", `${c}/events`, { query: "limit=50" });
   await r.send("get-v0-city-by-city-name-events", "cursor", "GET", `${c}/events`, { query: "limit=1" });
