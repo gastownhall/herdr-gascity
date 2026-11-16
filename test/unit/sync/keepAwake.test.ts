@@ -11,7 +11,7 @@ import { decodeOwnPins, pinDecision, type OwnPin } from "../../../src/sync/keepA
 import { keepAwakeText } from "../../../src/vm/detail.ts";
 import { SyncRegistry, TICK_MS, type Subscription } from "../../../src/sync/registry.ts";
 import type { WakeReasons } from "../../../src/sync/store.ts";
-import { FakeGc, FakeHost, fixtureBody, type Owner } from "./fakes.ts";
+import { FakeGc, FakeHost, fixtureBody, type FakeReply, type Owner } from "./fakes.ts";
 
 const API = "http://127.0.0.1:8372";
 const CITY = "scratch";
@@ -92,9 +92,9 @@ interface SetupOpts {
   stored?: unknown;
   wakeReasons?: string[];
   row?: Partial<T.SessionResponse>;
-  pin?: { status: number; body: unknown };
-  /** gc's answer to an unpin; read at the time of each request. */
-  unpin?: { reject: string };
+  /** gc's answer to a pin or an unpin; read at the time of each request. */
+  pin?: FakeReply;
+  unpin?: FakeReply;
 }
 
 function setup(opts: SetupOpts = {}) {
@@ -144,7 +144,7 @@ function setup(opts: SetupOpts = {}) {
   const inTurn = (c: Copy, body: () => void) => host.run(c.owner, body);
   const close = (c: Copy) => host.close(c.owner, () => c.sub.unsubscribe());
   const posts = (suffix: string, since = 0) => gc.seen.slice(since).filter((r) => r.method === "POST" && r.path.endsWith(suffix)).length;
-  return { host, gc, open, inTurn, close, posts, stored: () => stored, writes };
+  return { host, gc, open, inTurn, close, posts, stored: () => stored, writes, reg };
 }
 
 describe("keep-awake through the registry", () => {
@@ -355,5 +355,135 @@ describe("keep-awake through the registry", () => {
     await t.inTurn(b, () => rb());
     await t.host.advance(2000);
     expect(t.posts("/unpin")).toBe(1);
+  });
+
+  const UNPINNED = ["session", "config"];
+  const PINNED = ["session", "pin"];
+  const unpinOk = () => fixtureBody("post-v0-city-by-city-name-session-by-id-unpin", "ok");
+
+  test("a store restarted with the pane still open keeps the session pinned: the leftover unpin lands, then the pane pins it again", async () => {
+    const opts: SetupOpts = {};
+    const t = setup(opts);
+    const a = await t.open();
+    await t.host.advance(1000);
+    await t.inTurn(a, () => void a.sub.watchPeek("sc-20"));
+    await t.host.advance(2000);
+    expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "pinned" });
+    // gc restarts (or the city is switched away and back): the store goes, the pane stays selected.
+    opts.wakeReasons = PINNED;
+    await t.close(a);
+    live = [];
+    opts.unpin = { hold: true };
+    // The new store queues the leftover unpin and its first tick sends it, before the pane is opened on it.
+    const b = await t.open();
+    await t.inTurn(b, () => void b.sub.watchPeek("sc-20"));
+    await t.host.advance(2000);
+    expect(t.posts("/unpin")).toBe(1);
+    expect(b.sub.keepAwake("sc-20")).toEqual({ kind: "checking" });
+    // A wake read taken before the unpin landed still shows the mod's pin: it must not decide.
+    opts.wakeReasons = UNPINNED;
+    delete opts.unpin;
+    t.gc.release(200, unpinOk());
+    await t.host.advance(3000);
+    expect(b.sub.keepAwake("sc-20")).toEqual({ kind: "pinned" });
+    expect(t.posts("/pin")).toBe(2);
+    expect(t.stored()).toEqual([{ apiUrl: API, city: CITY, session: "sc-20" }]);
+  });
+
+  test("leaving the pane and coming back while its unpin is in flight pins it again once the unpin lands", async () => {
+    const opts: SetupOpts = {};
+    const t = setup(opts);
+    const a = await t.open();
+    await t.host.advance(1000);
+    let release!: () => void;
+    await t.inTurn(a, () => {
+      release = a.sub.watchPeek("sc-20");
+    });
+    await t.host.advance(2000);
+    opts.wakeReasons = PINNED;
+    opts.unpin = { hold: true };
+    await t.inTurn(a, () => release());
+    await t.host.advance(1000);
+    expect(t.posts("/unpin")).toBe(1);
+    await t.inTurn(a, () => {
+      release = a.sub.watchPeek("sc-20");
+    });
+    await t.host.advance(2000);
+    expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "checking" });
+    opts.wakeReasons = UNPINNED;
+    delete opts.unpin;
+    t.gc.release(200, unpinOk());
+    await t.host.advance(3000);
+    expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "pinned" });
+    expect(t.posts("/pin")).toBe(2);
+  });
+
+  test("a pane closed while its pin is in flight, when that pin fails, sends no unpin and forgets the record", async () => {
+    const opts: SetupOpts = { pin: { hold: true } };
+    const t = setup(opts);
+    const a = await t.open();
+    await t.host.advance(1000);
+    let release!: () => void;
+    await t.inTurn(a, () => {
+      release = a.sub.watchPeek("sc-20");
+    });
+    await t.host.advance(2000);
+    expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "pinning" });
+    await t.inTurn(a, () => release());
+    await t.host.advance(1000);
+    t.gc.release(409, { title: "Conflict", status: 409, detail: "session is closed", code: "session-conflict" });
+    await t.host.advance(2000);
+    expect(t.posts("/unpin")).toBe(0);
+    expect(t.stored()).toEqual([]);
+  });
+
+  test("retrying keep-awake's own pin from the activity log does not hand the session to a person", async () => {
+    const opts: SetupOpts = { pin: { reject: "connection refused" } };
+    const t = setup(opts);
+    const a = await t.open();
+    await t.host.advance(1000);
+    let release!: () => void;
+    await t.inTurn(a, () => {
+      release = a.sub.watchPeek("sc-20");
+    });
+    await t.host.advance(2000);
+    const entry = a.sub.activity().entries.find((e) => e.spec.kind === "session.keep-awake");
+    expect(entry).toBeDefined();
+    delete opts.pin;
+    await t.inTurn(a, () => void a.sub.retryAction(entry!.id));
+    await t.host.advance(2000);
+    expect(t.posts("/pin")).toBe(2);
+    // Still the pane's: closing it unpins.
+    await t.inTurn(a, () => release());
+    await t.host.advance(2000);
+    expect(t.posts("/unpin")).toBe(1);
+  });
+
+  test("a gascity.pins value that is not a list is left as it is and reported; the pane does not pin", async () => {
+    const t = setup({ stored: { note: "someone else's" } });
+    const a = await t.open();
+    await t.host.advance(1000);
+    await t.inTurn(a, () => void a.sub.watchPeek("sc-20"));
+    await t.host.advance(2000);
+    expect(t.stored()).toEqual({ note: "someone else's" });
+    expect(t.writes).toEqual([]);
+    expect(t.posts("/pin")).toBe(0);
+    expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "not-pinned", why: "the keep-awake records in gascity.pins cannot be read: not pinned" });
+  });
+
+  test("a wake reasons read that failed is retried with the pane's refresh, and the pane then pins", async () => {
+    const t = setup();
+    const a = await t.open();
+    await t.host.advance(1000);
+    const base = t.gc.override!;
+    t.gc.override = (req) => (req.query.get("wake_reasons") === "true" ? { status: 400, body: { title: "Bad Request", status: 400, detail: "bad template" } } : base(req));
+    await t.inTurn(a, () => void a.sub.watchPeek("sc-20"));
+    await t.host.advance(2000);
+    expect(a.sub.keepAwake("sc-20")).toMatchObject({ kind: "failed" });
+    t.gc.override = base;
+    await t.inTurn(a, () => a.sub.refreshDetail("sc-20"));
+    await t.host.advance(2000);
+    expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "pinned" });
+    expect(t.posts("/pin")).toBe(1);
   });
 });

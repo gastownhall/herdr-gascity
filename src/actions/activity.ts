@@ -37,6 +37,9 @@ export type ActionKind =
   | "session.kill-force"
   | "session.pin"
   | "session.unpin"
+  /** Keep-awake's own pin and its release: never a person's, so never a takeover (see sync/keepAwake.ts). */
+  | "session.keep-awake"
+  | "session.keep-awake-release"
   | "session.submit"
   | "session.interrupt"
   | "session.message"

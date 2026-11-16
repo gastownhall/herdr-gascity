@@ -149,6 +149,7 @@ export const SessionResponseSchema: z.ZodMiniType<T.SessionResponse> = z.object(
   submission_capabilities: z.optional(SubmissionCapabilitiesSchema),
   created_at: z.string(),
   last_active: z.optional(z.string()),
+  last_output: z.optional(z.string()),
   wake_reasons: z.optional(nullableList(z.string())),
 });
 

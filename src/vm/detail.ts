@@ -12,7 +12,7 @@ import { CADENCE } from "../sync/scheduler.ts";
 import { freshness } from "../sync/staleness.ts";
 import type { KeepAwakeState } from "../sync/keepAwake.ts";
 import type { CitySnapshot, Slot } from "../sync/store.ts";
-import type { Transcript } from "../sync/transcript.ts";
+import { PEEK_LINES, type Transcript } from "../sync/transcript.ts";
 import { errorText } from "./errorText.ts";
 import { regionModel, type RegionModel } from "./region.ts";
 import { cleanLine, cleanText } from "./sanitize.ts";
@@ -54,6 +54,8 @@ export interface OutputView {
   text: string | null;
   /** Older turns exist that the pane does not show. */
   olderHidden: boolean;
+  /** Why the pane shows the terminal instead of the conversation, or null when it shows the conversation. */
+  bounded: string | null;
   region: RegionModel;
 }
 
@@ -160,10 +162,11 @@ function turnViews(t: Transcript): TurnView[] {
 function outputView(t: Slot<Transcript> | undefined, now: number): OutputView {
   const f = t ? freshness(t, now, { intervalMs: CADENCE.peek.onScreenMs, confirmedAt: null }) : ({ kind: "never", error: null } as const);
   const region = regionModel([["output", f]]);
-  if (!t?.value) return { turns: null, text: null, olderHidden: false, region };
+  if (!t?.value) return { turns: null, text: null, olderHidden: false, bounded: null, region };
   const turns = turnViews(t.value);
   const text = turns.map((x) => x.lines.join("\n")).join("\n");
-  return { turns, text: text === "" ? "(no output)" : text, olderHidden: t.value.olderHidden, region };
+  const bounded = t.value.bounded ? `the conversation is too large to read here; showing the terminal's last ${PEEK_LINES} lines` : null;
+  return { turns, text: text === "" ? "(no output)" : text, olderHidden: t.value.olderHidden, bounded, region };
 }
 
 /** The detail pane for the selected session. */

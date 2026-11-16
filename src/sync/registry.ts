@@ -221,6 +221,7 @@ export class SyncRegistry {
         start: (owner, spec) => ledger.start(owner, spec),
         action: (actionId) => ledger.snapshot().entries.find((e) => e.id === actionId),
         wake: (sessionId) => store.snapshot().details.get(sessionId)?.wakeReasons,
+        refreshWake: (sessionId) => store.refreshWake(sessionId),
         onUnreadable: (entries) => store.noteError("keep-awake", { kind: "pin-book-unreadable", entries }),
       });
       entry = { store, ledger, notifier: new NeedsYouNotifier(key.city), keepAwake, subs: 0 };

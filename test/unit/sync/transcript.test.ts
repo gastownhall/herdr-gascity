@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { GcError } from "../../../src/gc/errors.ts";
 import type * as T from "../../../src/gc/types.gen.ts";
-import { MAX_TURNS, cursorInvalidated, mergeTranscript, transcriptQuery, type Transcript } from "../../../src/sync/transcript.ts";
+import { MAX_TURNS, cursorInvalidated, mergeTranscript, peekTranscript, tooLarge, transcriptQuery, type Transcript } from "../../../src/sync/transcript.ts";
 
 function turn(id: string | undefined, text: string, role = "assistant"): T.OutputTurn {
   return id === undefined ? { role, text } : { id, role, text };
@@ -42,7 +42,7 @@ describe("mergeTranscript", () => {
   test("a read without a cursor replaces what was kept", () => {
     const first = mergeTranscript(null, null, conversation([turn("a1", "one")]));
     const again = mergeTranscript(first, null, conversation([turn("a2", "two")], true));
-    expect(again).toEqual({ format: "conversation", turns: [turn("a2", "two")], olderHidden: true });
+    expect(again).toEqual({ format: "conversation", turns: [turn("a2", "two")], olderHidden: true, bounded: false });
   });
 
   test("a read after a cursor appends the new turns, skipping any it already has", () => {
@@ -59,7 +59,7 @@ describe("mergeTranscript", () => {
 
   test("a text answer to a cursor read (the session log went away) replaces the conversation", () => {
     const first = mergeTranscript(null, null, conversation([turn("a1", "hello")]));
-    expect(mergeTranscript(first, "a1", text("$ prompt"))).toEqual({ format: "text", turns: [turn(undefined, "$ prompt", "output")], olderHidden: false });
+    expect(mergeTranscript(first, "a1", text("$ prompt"))).toEqual({ format: "text", turns: [turn(undefined, "$ prompt", "output")], olderHidden: false, bounded: false });
   });
 
   test(`at most ${MAX_TURNS} turns are kept, the newest; dropping some says older turns are hidden`, () => {
@@ -91,5 +91,22 @@ describe("cursorInvalidated", () => {
     expect(cursorInvalidated({ kind: "http", status: 409, problem: { status: 409, code: "session-conflict", errors: [] } })).toBe(false);
     expect(cursorInvalidated({ kind: "http", status: 500, problem: null })).toBe(false);
     expect(cursorInvalidated({ kind: "timeout", url: "u", ms: 30_000 })).toBe(false);
+  });
+});
+
+describe("the bounded fallback", () => {
+  const session = { id: "s-1", template: "worker", state: "active", running: true } as T.SessionResponse;
+
+  test("gc's peek becomes one output turn, marked bounded", () => {
+    expect(peekTranscript({ ...session, last_output: "$ make\nok" })).toEqual({ format: "text", turns: [turn(undefined, "$ make\nok", "output")], olderHidden: false, bounded: true });
+  });
+
+  test("a peek without output (a provider with no terminal) has no turns", () => {
+    expect(peekTranscript(session)).toEqual({ format: "text", turns: [], olderHidden: false, bounded: true });
+  });
+
+  test("only a response over herdr's cap falls back; a request over it is our bug", () => {
+    expect(tooLarge({ kind: "too-large", url: "http://127.0.0.1:8372/x", direction: "response", limitBytes: 8388608 })).toBe(true);
+    expect(tooLarge({ kind: "too-large", url: "http://127.0.0.1:8372/x", direction: "request", limitBytes: 8388608 })).toBe(false);
   });
 });

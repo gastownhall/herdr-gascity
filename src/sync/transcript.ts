@@ -13,6 +13,12 @@
 // rotated or replaced): the next read starts again from the tail. A session
 // without a log (format "text") is a capture of its terminal with no ids: it
 // is read whole each time.
+//
+// `tail=1` is bounded only by the log's compaction segments, and a reader that
+// marks none (Codex's) answers with the whole log. Past herdr's 8 MiB body cap
+// the read fails too-large: the pane then shows gc's bounded peek of the
+// terminal (GET …/session/{id}?peek=true&peek_lines=PEEK_LINES) instead, until
+// it is reopened.
 
 import { isUnrecognized } from "../gc/decode.ts";
 import type { GcError } from "../gc/errors.ts";
@@ -28,6 +34,22 @@ export interface Transcript {
   readonly turns: readonly T.OutputTurn[];
   /** Older turns exist that are not kept (gc said so, or MAX_TURNS dropped some). */
   readonly olderHidden: boolean;
+  /** The conversation was over herdr's body cap: this is the terminal's last PEEK_LINES lines (gc's peek). */
+  readonly bounded: boolean;
+}
+
+/** Lines of the bounded peek shown when the conversation is too large to read. */
+export const PEEK_LINES = 40;
+
+/** The bounded peek, shown as a terminal capture. */
+export function peekTranscript(r: T.SessionResponse): Transcript {
+  const text = r.last_output ?? "";
+  return { format: "text", turns: text === "" ? [] : [{ role: "output", text }], olderHidden: false, bounded: true };
+}
+
+/** A read too large for herdr's fetch to take. */
+export function tooLarge(e: GcError): boolean {
+  return e.kind === "too-large" && e.direction === "response";
 }
 
 /** The query of the next read: follow a conversation from its last turn id, else read from the tail. */
@@ -36,7 +58,7 @@ export function transcriptQuery(cur: Transcript | null): { tail: string } | { af
   return last !== undefined && last !== "" ? { after: last } : { tail: "1" };
 }
 
-function bounded(turns: readonly T.OutputTurn[], olderHidden: boolean): Pick<Transcript, "turns" | "olderHidden"> {
+function newest(turns: readonly T.OutputTurn[], olderHidden: boolean): Pick<Transcript, "turns" | "olderHidden"> {
   if (turns.length <= MAX_TURNS) return { turns, olderHidden };
   return { turns: turns.slice(turns.length - MAX_TURNS), olderHidden: true };
 }
@@ -48,9 +70,9 @@ export function mergeTranscript(cur: Transcript | null, after: string | null, r:
     const known = new Set(cur.turns.map((t) => t.id).filter((id) => id !== undefined));
     const fresh = r.turns.filter((t) => t.id === undefined || !known.has(t.id));
     if (fresh.length === 0) return cur;
-    return { format, ...bounded([...cur.turns, ...fresh], cur.olderHidden) };
+    return { format, ...newest([...cur.turns, ...fresh], cur.olderHidden), bounded: false };
   }
-  return { format, ...bounded(r.turns, r.pagination?.has_older_messages === true) };
+  return { format, ...newest(r.turns, r.pagination?.has_older_messages === true), bounded: false };
 }
 
 /** gc no longer has the entry an `after` read named. */

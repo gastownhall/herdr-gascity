@@ -111,12 +111,12 @@ export function sessionPin(id: string): ActionSpec {
  * cost gc a runtime probe.
  */
 export function keepAwakePin(id: string): ActionSpec {
-  return { ...sessionPin(id), verb: "Keep awake", refresh: [], refreshesDetail: false };
+  return { ...sessionPin(id), kind: "session.keep-awake", verb: "Keep awake", refresh: [], refreshesDetail: false };
 }
 
 /** Keep-awake's unpin of a session it pinned, once no pane of it is open. Refetches nothing. */
 export function keepAwakeUnpin(id: string): ActionSpec {
-  return { ...sessionUnpin(id), verb: "Release keep-awake", refresh: [], refreshesDetail: false };
+  return { ...sessionUnpin(id), kind: "session.keep-awake-release", verb: "Release keep-awake", refresh: [], refreshesDetail: false };
 }
 
 /** Clears the session's pin. gc declares no Idempotency-Key here. */

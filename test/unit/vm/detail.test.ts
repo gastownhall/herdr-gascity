@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { DetailState, Slot } from "../../../src/sync/store.ts";
-import type { Transcript } from "../../../src/sync/transcript.ts";
+import { PEEK_LINES, type Transcript } from "../../../src/sync/transcript.ts";
 import { detailModel } from "../../../src/vm/detail.ts";
 import { EMPTY, NOW, failed, agent, list, session, sessions, slot, snapshot } from "./snap.ts";
 
@@ -41,13 +41,14 @@ describe("detailModel", () => {
   });
 
   test("a terminal capture is plain text with control characters removed, and says how old it is", () => {
-    const t = slot<Transcript>({ format: "text", turns: [{ role: "output", text: "\u001b[1mCANARY READY\u001b[0m\r\nline two\u0007" }], olderHidden: false }, { ageMs: 2_000 });
+    const t = slot<Transcript>({ format: "text", turns: [{ role: "output", text: "\u001b[1mCANARY READY\u001b[0m\r\nline two\u0007" }], olderHidden: false, bounded: false }, { ageMs: 2_000 });
     const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
     if (m.kind !== "session") throw new Error(m.kind);
     expect(m.output).toEqual({
       turns: [{ key: "0", role: null, time: null, lines: ["CANARY READY", "line two"] }],
       text: "CANARY READY\nline two",
       olderHidden: false,
+      bounded: null,
       region: { kind: "ok", age: "data 2 s old", stale: false, error: null },
     });
   });
@@ -60,6 +61,7 @@ describe("detailModel", () => {
         { id: "a1", role: "assistant\u001b[31m", text: "Looking.\n[Bash]" },
       ],
       olderHidden: true,
+      bounded: false,
     });
     const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
     if (m.kind !== "session") throw new Error(m.kind);
@@ -73,7 +75,7 @@ describe("detailModel", () => {
 
   test("updating: new turns appear as the store appends them", () => {
     const at = (turns: Transcript["turns"]) => {
-      const t = slot<Transcript>({ format: "conversation", turns, olderHidden: false });
+      const t = slot<Transcript>({ format: "conversation", turns, olderHidden: false, bounded: false });
       const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
       if (m.kind !== "session") throw new Error(m.kind);
       return m.output.turns?.map((x) => x.key);
@@ -82,12 +84,20 @@ describe("detailModel", () => {
     expect(at([{ id: "u1", role: "user", text: "hi" }, { id: "a1", role: "assistant", text: "hello" }])).toEqual(["u1", "a1"]);
   });
 
+  test("a conversation too large to read shows gc's bounded peek and says why", () => {
+    const t = slot<Transcript>({ format: "text", turns: [{ role: "output", text: "$ make" }], olderHidden: false, bounded: true });
+    const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });
+    if (m.kind !== "session") throw new Error(m.kind);
+    expect(m.output.text).toBe("$ make");
+    expect(m.output.bounded).toBe(`the conversation is too large to read here; showing the terminal's last ${PEEK_LINES} lines`);
+  });
+
   test("empty: no read yet is loading; an empty transcript says so", () => {
     let m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])) }), now: NOW, selected: "s-1" });
     if (m.kind !== "session") throw new Error(m.kind);
     expect(m.output.region.kind).toBe("loading");
     expect(m.output.turns).toBeNull();
-    const empty = slot<Transcript>({ format: "conversation", turns: [], olderHidden: false });
+    const empty = slot<Transcript>({ format: "conversation", turns: [], olderHidden: false, bounded: false });
     m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", empty]]) }), now: NOW, selected: "s-1" });
     if (m.kind !== "session") throw new Error(m.kind);
     expect(m.output.turns).toEqual([]);
@@ -96,7 +106,7 @@ describe("detailModel", () => {
 
   test("error and stale: a failed read keeps the last turns, greyed, with the error", () => {
     const t: Slot<Transcript> = {
-      ...slot<Transcript>({ format: "text", turns: [{ role: "output", text: "last seen" }], olderHidden: false }, { ageMs: 30_000 }),
+      ...slot<Transcript>({ format: "text", turns: [{ role: "output", text: "last seen" }], olderHidden: false, bounded: false }, { ageMs: 30_000 }),
       error: { kind: "http", status: 404, problem: null, raw: "gone" },
     };
     const m = detailModel({ snapshot: snapshot({ sessions: slot(sessions([S1])), transcripts: new Map([["s-1", t]]) }), now: NOW, selected: "s-1" });

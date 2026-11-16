@@ -318,6 +318,10 @@ export class CopyController {
     this.followFocus();
     this.followDetail();
     this.followBead();
+    // Ticked once the copy's watches are placed: a new store (gc restarted, or
+    // the city switched away and back) sees the open pane before its first
+    // tick, so keep-awake keeps the pane's pin instead of releasing it.
+    this.city?.tick();
 
     const s = this.city?.snapshot();
     if (s && running !== null) {
@@ -1253,7 +1257,6 @@ export class CopyController {
       if (this.lastCity !== id) this.selectedBead = null;
       this.lastCity = id;
     }
-    this.city?.tick();
   }
 
   private followDetail(): void {

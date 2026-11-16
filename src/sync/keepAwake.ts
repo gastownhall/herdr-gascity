@@ -19,6 +19,13 @@
 // own (an unpin that did not land, e.g. while gc was unreachable), rather
 // than taking gc's "pin" for a person's.
 //
+// A pane that opens while its session's release is in flight waits for it,
+// then decides on a wake-reasons read asked after the release ended: one
+// asked before it may still show the mod's own pin.
+//
+// A stored value that is not a list is someone else's: it is never
+// overwritten, and the pane does not pin.
+//
 // A person's own pin or unpin of the session (the panel's actions) takes it
 // over: the mod forgets the pin and never unpins it.
 //
@@ -86,6 +93,7 @@ export function decodeOwnPins(raw: unknown): { pins: OwnPin[]; unreadable: numbe
 }
 
 const HAND = "pinned or unpinned by hand: left as it is";
+const BOOK_UNREADABLE = "the keep-awake records in gascity.pins cannot be read: not pinned";
 
 export interface KeepAwakeDeps {
   readonly key: CityKey;
@@ -97,6 +105,8 @@ export interface KeepAwakeDeps {
   action(id: number): ActionEntry | undefined;
   /** The open pane's wake reasons slot. */
   wake(session: string): Slot<WakeReasons> | undefined;
+  /** Asks the open pane's wake reasons again. */
+  refreshWake(session: string): void;
   /** The stored pins hold `n` entries that cannot be read. */
   onUnreadable(n: number): void;
 }
@@ -108,6 +118,8 @@ interface Kept {
   state: KeepAwakeState;
   /** The pin in flight (state pinning). */
   pin: number | null;
+  /** The failure is the wake reasons read's: a later read (the pane's refresh) decides again. */
+  checkFailed: boolean;
 }
 
 interface Release {
@@ -146,10 +158,10 @@ export class KeepAwake {
     if (r && r.unpin === null && this.has(session)) {
       // Its unpin was not sent yet: the pin stays, and stays ours.
       this.releasing.delete(session);
-      this.kept.set(session, { refs: 1, since: this.deps.clock.now(), state: r.after === null ? { kind: "pinned" } : { kind: "pinning" }, pin: r.after });
+      this.kept.set(session, { refs: 1, since: this.deps.clock.now(), state: r.after === null ? { kind: "pinned" } : { kind: "pinning" }, pin: r.after, checkFailed: false });
       return;
     }
-    this.kept.set(session, { refs: 1, since: this.deps.clock.now(), state: { kind: "checking" }, pin: null });
+    this.kept.set(session, { refs: 1, since: this.deps.clock.now(), state: { kind: "checking" }, pin: null, checkFailed: false });
   }
 
   /** A pane of the session closed: once the last is gone, a pin of ours is unpinned from a live copy's tick. */
@@ -168,6 +180,7 @@ export class KeepAwake {
     if (k) {
       k.state = { kind: "not-pinned", why: HAND };
       k.pin = null;
+      k.checkFailed = false;
     }
   }
 
@@ -189,9 +202,15 @@ export class KeepAwake {
         const pin = this.deps.action(r.after);
         if (pin && isPending(pin.state)) return;
         r.after = null;
+        if (pin && (pin.state.kind === "failed" || pin.state.kind === "not-sent")) {
+          // The pin never took: there is nothing to unpin.
+          this.forget(session);
+          this.released(session);
+          return;
+        }
       }
       if (!this.has(session)) {
-        this.releasing.delete(session);
+        this.released(session);
         return;
       }
       r.unpin = this.deps.start(owner, keepAwakeUnpin(session));
@@ -199,18 +218,43 @@ export class KeepAwake {
     }
     const a = this.deps.action(r.unpin);
     if (a && isPending(a.state)) return;
-    this.releasing.delete(session);
     // Done or refused: nothing of ours is left. Unknown or not sent: it may still
     // be pinned, so it stays recorded for the next start.
     if (!a || a.state.kind === "done" || a.state.kind === "failed") this.forget(session);
+    this.released(session);
+  }
+
+  /**
+   * A release ended. A pane of the session opened meanwhile has waited in
+   * checking; the wake reasons it has may predate the unpin, so it decides on
+   * a read asked from now on.
+   */
+  private released(session: string): void {
+    this.releasing.delete(session);
+    const k = this.kept.get(session);
+    if (k?.state.kind !== "checking") return;
+    k.since = this.deps.clock.now();
+    this.deps.refreshWake(session);
   }
 
   private stepKept(owner: object, session: string, k: Kept): void {
+    if (k.checkFailed && this.deps.wake(session)?.held === false) {
+      // The read is asked again: check once more.
+      k.checkFailed = false;
+      k.state = { kind: "checking" };
+    }
     if (k.state.kind === "checking") {
       if (this.releasing.has(session)) return;
       const w = this.deps.wake(session);
       if (!w || w.value === null || w.fetchedAt === null || w.fetchedAt < k.since) {
-        if (w?.held && w.error !== null) k.state = { kind: "failed", error: w.error };
+        if (w?.held && w.error !== null) {
+          k.state = { kind: "failed", error: w.error };
+          k.checkFailed = true;
+        }
+        return;
+      }
+      if (!this.bookWritable()) {
+        k.state = { kind: "not-pinned", why: BOOK_UNREADABLE };
         return;
       }
       const d = pinDecision(w.value);
@@ -263,10 +307,19 @@ export class KeepAwake {
     return this.ownPins().some((p) => this.mine(p) && p.session === session);
   }
 
-  /** The stored list as an array, entries that cannot be read kept as they are. */
-  private stored(): unknown[] {
+  /** The stored value is a list (or nothing yet): one that is not is someone else's, never overwritten. */
+  private bookWritable(): boolean {
     const raw = this.deps.book.read();
-    return Array.isArray(raw) ? [...raw] : [];
+    if (raw === undefined || raw === null || Array.isArray(raw)) return true;
+    this.deps.onUnreadable(1);
+    return false;
+  }
+
+  /** The stored list as an array, entries that cannot be read kept as they are; null when the stored value is not a list. */
+  private stored(): unknown[] | null {
+    const raw = this.deps.book.read();
+    if (raw === undefined || raw === null) return [];
+    return Array.isArray(raw) ? [...raw] : null;
   }
 
   private same(v: unknown, session: string): boolean {
@@ -274,12 +327,14 @@ export class KeepAwake {
   }
 
   private remember(session: string): void {
-    const list = this.stored().filter((v) => !this.same(v, session));
-    this.deps.book.write([...list, this.pin(session)]);
+    const list = this.stored();
+    if (list === null) return;
+    this.deps.book.write([...list.filter((v) => !this.same(v, session)), this.pin(session)]);
   }
 
   private forget(session: string): void {
     const list = this.stored();
+    if (list === null) return;
     const next = list.filter((v) => !this.same(v, session));
     if (next.length !== list.length) this.deps.book.write(next);
   }

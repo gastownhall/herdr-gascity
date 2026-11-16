@@ -6,7 +6,7 @@
     "get-v0-city-by-city-name-rigs": "rigs panel",
     "get-v0-city-by-city-name-agents": "agents panel",
     "get-v0-city-by-city-name-sessions": "sessions with program_status, active bead, attached, transport (cursor pages; wake_reasons on detail open only, also read by keep-awake)",
-    "get-v0-city-by-city-name-session-by-id": "one session; wake-before-attach polling",
+    "get-v0-city-by-city-name-session-by-id": "one session; wake-before-attach polling; the bounded peek (last_output) when a pane's conversation is over herdr's body cap",
     "get-v0-city-by-city-name-pending": "city-wide pending interactions (needs-you badges)",
     "get-v0-city-by-city-name-session-by-id-pending": "a session's pending prompt and its options",
     "get-v0-city-by-city-name-session-by-id-transcript": "the open session pane's conversation, polled while the pane is open and on screen (herdr's fetch cannot read the session stream)",
@@ -51,7 +51,7 @@
     "SessionInfo": { "fields": ["name", "attached", "last_activity"] },
 
     "ListBodySessionResponse": { "fields": ["items", "total", "next_cursor", "partial", "partial_errors"], "itemLevel": "items" },
-    "SessionResponse": { "fields": ["id", "alias", "title", "display_name", "template", "agent_name", "session_name", "rig", "pool", "kind", "provider", "transport", "state", "reason", "running", "attached", "active_bead", "activity", "activity_source", "program_status", "submission_capabilities", "created_at", "last_active", "wake_reasons"], "keepAbsent": ["wake_reasons"] },
+    "SessionResponse": { "fields": ["id", "alias", "title", "display_name", "template", "agent_name", "session_name", "rig", "pool", "kind", "provider", "transport", "state", "reason", "running", "attached", "active_bead", "activity", "activity_source", "program_status", "submission_capabilities", "created_at", "last_active", "last_output", "wake_reasons"], "keepAbsent": ["wake_reasons"] },
     "SessionProgramStatus": { "fields": ["state", "kind", "progress", "app", "since", "quiet_since", "working_children"] },
     "SubmissionCapabilities": { "fields": ["supports_follow_up", "supports_interrupt_now", "supports_steer"] },
 

@@ -36,8 +36,15 @@ const BOARD_CHANGES = new Set(["bead.created", "bead.updated", "bead.closed", "b
 
 const PENDING = new Set(["session.pending", "session.pending_cleared"]);
 
-/** A session starting or ending: handled by name, so a rename of either in gc fails a test. */
+/** A session starting or ending. */
 export const SESSION_LIFECYCLE: ReadonlySet<string> = new Set(["session.created", "session.closed"]);
+
+/**
+ * Every event type handled by its exact name (not by a prefix): a test checks
+ * each against gc's event names in the pinned spec, so a rename in gc fails it
+ * at the next re-pin.
+ */
+export const HANDLED_BY_NAME: readonly string[] = [...SESSION_REFRESH, ...BOARD_CHANGES, ...PENDING, ...SESSION_LIFECYCLE];
 
 /** Maps events (any order) to the refetches they call for. */
 export function invalidationFor(events: readonly TypedEventStreamEnvelope[], known: KnownIds): Invalidation {

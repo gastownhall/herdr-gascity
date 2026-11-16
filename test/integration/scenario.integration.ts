@@ -385,7 +385,7 @@ describe("the mod against a scratch gc city", () => {
     expect(output).toContain(`CANARY WORKING ${card.id}`);
     // Keep awake: the open pane pinned the session in gc, and gc now lists "pin" among its wake reasons.
     const pin = await waitFor("keep-awake's pin", 30_000, () => {
-      const x = newestAction(readProbe(main()), "session.pin");
+      const x = newestAction(readProbe(main()), "session.keep-awake");
       return x && x.state !== "pending" ? x : null;
     }, 200);
     expect(pin.state).toBe("done");
@@ -396,7 +396,7 @@ describe("the mod against a scratch gc city", () => {
     // Closing the pane releases the pin: no keep-awake pin is left for the tests that follow (or for gc).
     send(app, "back");
     const unpin = await waitFor("keep-awake's release", 30_000, () => {
-      const x = newestAction(readProbe(main()), "session.unpin");
+      const x = newestAction(readProbe(main()), "session.keep-awake-release");
       return x && x.state !== "pending" ? x : null;
     }, 200);
     expect(unpin.state).toBe("done");

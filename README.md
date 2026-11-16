@@ -388,7 +388,12 @@ it unsubscribes and starts nothing; the other copies keep updating.
   carries only new turns, each shown under its role and time; gc's 409
   `transcript-cursor-invalidated` starts again from the tail. A session
   without one (format `text`) is a capture of its terminal, read whole each
-  time. At most 200 turns are kept; older ones are said to be hidden. The
+  time. At most 200 turns are kept; older ones are said to be hidden. A log
+  with no compaction (Codex writes none) is read whole from the tail; past
+  herdr's 8 MiB cap the pane falls back to gc's bounded peek of the
+  terminal (its last 40 lines), says so, and reads only that until it is
+  reopened. A read started for an earlier pane of the session is dropped
+  when it lands on a reopened one. The
   session's SSE stream is not used: herdr's `fetch` reads a whole body under
   a 30 s total timeout, and that stream never ends.
 - **Keep awake** (`sync/keepAwake.ts`). While a session's pane is open in
@@ -402,8 +407,17 @@ it unsubscribes and starts nothing; the other copies keep updating.
   or by a copy that closed with its pane open, is released at the next
   start; a pane that opens while its session is still recorded (an unpin
   that did not land, say while gc was unreachable) holds that pin as its
-  own. Its pins and unpins are actions in the activity log ("Keep awake",
-  "Release keep-awake") and refetch nothing. gc's pin is one ownerless flag
+  own. A pane that opens while the session's release is in flight (a gc
+  restart, or switching city and back, with the pane open) waits for it to
+  land and then decides on a wake-reasons read asked after it; a copy
+  places its open pane before a new store's first tick, so a store restart
+  keeps the recorded pin instead of releasing it. A `gascity.pins` value
+  that is not a list is never overwritten: it is reported, and the pane does
+  not pin. A failed wake-reasons read is decided again on the pane's
+  refresh. Its pins and unpins are actions of their own kinds in the
+  activity log ("Keep awake", "Release keep-awake"), so retrying one is not
+  a person's Pin, and refetch nothing; a pin that failed or was not sent is
+  forgotten without an unpin. gc's pin is one ownerless flag
   that the session itself does not report, so a pin a person makes outside
   this mod between the pane's read and its pin is taken for the mod's and
   is released when the pane closes.

@@ -163,6 +163,7 @@ export interface SessionResponse {
   submission_capabilities?: SubmissionCapabilities | undefined;
   created_at: string;
   last_active?: string | undefined;
+  last_output?: string | undefined;
   wake_reasons?: string[] | undefined;
 }
 

@@ -113,6 +113,55 @@ describe("an open detail", () => {
     expect(a.sub.snapshot().details.get("sc-20")?.pending.value?.pending?.options).toEqual(["approve", "deny"]);
   });
 
+  test("wake reasons read for the previous pane are dropped after a reopen: the new pane reads its own", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    gc.override = (req) => (req.query.get("wake_reasons") === "true" ? { hold: true } : undefined);
+    let release = a.sub.watchPeek("sc-20");
+    await host.advance(TICK_MS * 4);
+    expect(gc.heldCount()).toBe(1);
+    release();
+    release = a.sub.watchPeek("sc-20");
+    gc.override = null;
+    const start = gc.seen.length;
+    // The stale read lands saying pinned: the new pane must not take it as its own read.
+    const row = (fixtureBody("get-v0-city-by-city-name-sessions", "wake-reasons") as { items: object[] }).items[0];
+    gc.release(200, { items: [{ ...row, wake_reasons: ["pin"] }], total: 1 });
+    await host.advance(TICK_MS * 4);
+    expect(gc.paths(start).filter((p) => p.includes("wake_reasons=true"))).toHaveLength(1);
+    expect(a.sub.snapshot().details.get("sc-20")?.wakeReasons.value?.reasons).toEqual(["session", "config"]);
+    release();
+  });
+
+  test("a pending prompt read for the previous pane is dropped after a reopen: the new pane reads its own", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    gc.override = (req) => (req.path.endsWith("/session/sc-20/pending") ? { hold: true } : undefined);
+    let release = a.sub.watchPeek("sc-20");
+    await host.advance(TICK_MS * 4);
+    expect(gc.heldCount()).toBe(1);
+    release();
+    release = a.sub.watchPeek("sc-20");
+    gc.override = (req) => (req.path.endsWith("/session/sc-20/pending") ? { status: 200, body: { supported: true } } : undefined);
+    const start = gc.seen.length;
+    gc.release(200, { supported: true, pending: { request_id: "stale", kind: "permission", options: [] } });
+    await host.advance(TICK_MS * 4);
+    expect(gc.count("/session/sc-20/pending", start)).toBe(1);
+    expect(a.sub.snapshot().details.get("sc-20")?.pending.value).toEqual({ supported: true });
+    release();
+  });
+
+  test("a session missing from gc's session list has no template to ask by: its wake reasons say it is not listed", async () => {
+    const { host, open } = setup();
+    const a = await open();
+    await host.advance(1000);
+    a.sub.watchPeek("sc-404");
+    await host.advance(2000);
+    expect(a.sub.snapshot().details.get("sc-404")?.wakeReasons.value).toEqual({ listed: false, reasons: [], session: null });
+  });
+
   test("releasing the last watch drops the detail", async () => {
     const { host, open } = setup();
     const a = await open();

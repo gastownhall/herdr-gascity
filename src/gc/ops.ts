@@ -58,9 +58,14 @@ export function listSessions(
   return c.call("get-v0-city-by-city-name-sessions", { path: { cityName: city }, query });
 }
 
-/** GET one session. */
-export function getSession(c: GcClient, city: string, id: string) {
-  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id } });
+/** GET one session; `peek` adds its last output (bounded by `peek_lines`). */
+export function getSession(
+  c: GcClient,
+  city: string,
+  id: string,
+  query: Pick<Query<"get-v0-city-by-city-name-session-by-id">, "peek" | "peek_lines"> = {},
+) {
+  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id }, query });
 }
 
 /**

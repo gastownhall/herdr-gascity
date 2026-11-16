@@ -8,6 +8,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { pinSession } from "../../../src/gc/ops.ts";
 import { RECLAIM_AFTER_MS } from "../../../src/sync/budget.ts";
 import { SyncRegistry, TICK_MS, type Subscription } from "../../../src/sync/registry.ts";
+import { PEEK_LINES } from "../../../src/sync/store.ts";
 import {
   ERROR_RING, MAX_CLOSED_RECENT, MAX_SESSION_ROWS, SESSION_PAGE, STEP_STALL_MS, domainFreshness, type EventBatch,
 } from "../../../src/sync/store.ts";
@@ -845,6 +846,49 @@ describe("visibility", () => {
     const t = a.sub.snapshot().transcripts.get("sc-20");
     expect(t?.value?.turns).toHaveLength(2);
     expect(t?.error).toMatchObject({ kind: "http", status: 404 });
+  });
+
+  test("a transcript read that started for the previous pane is dropped after a reopen: the new pane reads from the tail", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    let release = a.sub.watchPeek("sc-20");
+    await host.advance(TICK_MS);
+    gc.override = (req) => (req.path.endsWith("/transcript") && req.query.get("after") !== null ? { hold: true } : undefined);
+    await host.advance(2000);
+    expect(gc.heldCount()).toBe(1);
+    release();
+    release = a.sub.watchPeek("sc-20");
+    gc.override = null;
+    const start = gc.seen.length;
+    gc.release(200, { id: "sc-20", template: "worker", provider: "claude", format: "conversation", turns: [{ id: "a3", role: "assistant", text: "done" }] });
+    await host.advance(TICK_MS * 2);
+    expect(gc.paths(start).filter((p) => p.includes("/transcript"))).toEqual(["/v0/city/scratch/session/sc-20/transcript?tail=1"]);
+    expect(a.sub.snapshot().transcripts.get("sc-20")?.value?.turns.map((t) => t.id)).toEqual(["4f0b2c1e-0000-4000-8000-000000000001", "4f0b2c1e-0000-4000-8000-000000000002"]);
+    release();
+  });
+
+  test("a conversation over herdr's 8 MiB cap falls back to gc's bounded peek, which is polled until the pane reopens", async () => {
+    const { host, gc, open } = setup();
+    gc.override = (req) => (req.path.endsWith("/transcript") ? { reject: `response body from http://127.0.0.1:8372${req.path} exceeded the 8388608 byte limit` } : undefined);
+    const a = await open();
+    let release = a.sub.watchPeek("sc-20");
+    await host.advance(TICK_MS * 2);
+    const t = a.sub.snapshot().transcripts.get("sc-20");
+    expect(t?.value).toMatchObject({ format: "text", bounded: true });
+    // The recorded peek is from the subprocess provider, which has no terminal to show: no turns, no error.
+    expect(t?.value?.turns).toEqual([]);
+    expect(t?.error).toBeNull();
+    let start = gc.seen.length;
+    await host.advance(6000);
+    expect(gc.count("/session/sc-20/transcript", start)).toBe(0);
+    expect(gc.paths(start).filter((p) => p.startsWith("/v0/city/scratch/session/sc-20?"))).toEqual(Array(3).fill(`/v0/city/scratch/session/sc-20?peek=true&peek_lines=${PEEK_LINES}`));
+    release();
+    gc.override = null;
+    release = a.sub.watchPeek("sc-20");
+    start = gc.seen.length;
+    await host.advance(TICK_MS);
+    expect(gc.paths(start).filter((p) => p.includes("/session/sc-20"))).toContain("/v0/city/scratch/session/sc-20/transcript?tail=1");
+    release();
   });
 
   test("a transcript watched by two copies is released only when both release it", async () => {

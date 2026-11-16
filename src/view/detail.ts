@@ -123,6 +123,7 @@ export function renderDetail(m: DetailModel, theme: ThemeRead, actions: DetailAc
   let output = v_flex().id("gascity-detail-output").gap(0);
   if (out.region.age !== null) output = output.child(muted(label("gascity-detail-output-age", `output, ${out.region.age}`), theme));
   if (out.region.error !== null) output = output.child(label("gascity-detail-output-error", out.region.error));
+  if (out.bounded !== null) output = output.child(muted(label("gascity-detail-output-bounded", out.bounded), theme));
   if (out.turns === null) {
     output = output.child(muted(label("gascity-detail-output-loading", out.region.kind === "failed" ? "no output" : "loading output…"), theme));
   } else if (out.turns.length === 0) {
