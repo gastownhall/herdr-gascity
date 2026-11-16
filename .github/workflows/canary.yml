@@ -278,8 +278,9 @@ jobs:
           REASON: ${{ inputs.reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          shopt -s nullglob
-          files=(results/*/canary-result.json)
+          # One artifact lands directly in results/, several in a directory each.
+          shopt -s nullglob globstar
+          files=(results/**/canary-result.json)
           runs=$(jq -cn '[]')
           [[ ${#files[@]} -eq 0 ]] || runs=$(jq -cs . "${files[@]}")
           expected=$(jq length <<<"$PLANNED")

@@ -45,9 +45,14 @@ uri() { jq -rn --arg v "$1" '$v | @uri'; }
 keep() { mod_probe >"$CANARY_OUT/gascity-probe-$1.json" || true; }
 
 # The mod's tab, selected and on screen: a hidden copy gets no commands.
-select_mod() {
+select_tab() {
   [[ -n ${GASCITY_TAB:-} ]] || die "no GASCITY_TAB (run mod-linux.sh install)"
   do_ok 15 tab.select --id "$GASCITY_TAB" >/dev/null || die "tab.select back to the Gas City tab failed"
+}
+# select_mod: select the Gas City tab and wait for the probe (on since
+# discover) to show the mod on screen.
+select_mod() {
+  select_tab
   # shellcheck disable=SC2317 # a poll predicate, called by name
   on_screen() { shows '.visibility.on_screen == true'; }
   poll 15 "the mod on screen" on_screen || die "the mod is not on screen after tab.select"
@@ -74,7 +79,8 @@ newest() { mod_probe | jq -c --arg k "$1" 'first(.actions[] | select(.action == 
 
 discover() {
   export_env CANARY_SINCE "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
-  select_mod
+  # The probe is off until probe:on, so discover waits for on_screen in found.
+  select_tab
   do_ok 15 gascity.probe:on >/dev/null || die "gascity.probe:on was not accepted"
   # shellcheck disable=SC2016,SC2317 # a jq variable; a poll predicate called by name
   found() { shows --arg c "$CITY" '.connection.text == "connected" and .city == $c and .city_phase == "city-running" and .visibility.on_screen == true'; }
