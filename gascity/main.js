@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:59ebdb7aafadb69d73f0fe033796732be6dcfdfb0c9c57235defd6b1b064530b over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:fd3519d78caecabee2359640bda447bec49375a43150030b48b5d6632173ee46 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -3369,6 +3369,10 @@ var KeepAwake = class {
         return;
       }
       const d = pinDecision(w.value);
+      if (!d.pin && this.has(session)) {
+        k.state = { kind: "pinned" };
+        return;
+      }
       if (!d.pin) {
         k.state = { kind: "not-pinned", why: d.why };
         return;
@@ -3811,6 +3815,7 @@ var GRAMMAR = {
     build: (a) => ({ verb: "probe", on: at2(a, 0) === "on" })
   },
   cancel: { mutating: false, args: [], summary: "close the open question or form without acting (Cancel)", build: () => ({ verb: "cancel" }) },
+  back: { mutating: false, args: [], summary: "close the open session's detail (as Esc does when no question or form is open)", build: () => ({ verb: "back" }) },
   "set-gc-bin": {
     mutating: false,
     args: [id("gc-bin")],
@@ -7432,6 +7437,9 @@ var CopyController = class {
       case "cancel":
         this.cancelDialog();
         return "cancelled";
+      case "back":
+        this.selectSession(null);
+        return "closed";
       case "set-gc-bin": {
         const stored = this.deps.host.setGcBin(c.gcBin);
         if (!stored.ok) {

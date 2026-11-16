@@ -15,6 +15,9 @@
 // them: a pin left by a crash, or by a copy that closed with its pane open
 // (a closing copy's turn can send nothing: herdr never settles its requests),
 // is released at the next start.
+// A pane that opens while its session is still recorded holds that pin as its
+// own (an unpin that did not land, e.g. while gc was unreachable), rather
+// than taking gc's "pin" for a person's.
 //
 // A person's own pin or unpin of the session (the panel's actions) takes it
 // over: the mod forgets the pin and never unpins it.
@@ -211,6 +214,11 @@ export class KeepAwake {
         return;
       }
       const d = pinDecision(w.value);
+      if (!d.pin && this.has(session)) {
+        // Still recorded as ours (an unpin that did not land): whatever pin gc shows is the mod's, held until the pane closes.
+        k.state = { kind: "pinned" };
+        return;
+      }
       if (!d.pin) {
         k.state = { kind: "not-pinned", why: d.why };
         return;

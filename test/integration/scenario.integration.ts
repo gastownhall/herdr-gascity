@@ -393,6 +393,17 @@ describe("the mod against a scratch gc city", () => {
     const listed = await city.api("GET", city.cityPath("/sessions?wake_reasons=true&limit=200"));
     const row = (listed.body as { items: { id: string; wake_reasons?: string[] }[] }).items.find((x) => x.id === sessionId);
     expect(row?.wake_reasons).toContain("pin");
+    // Closing the pane releases the pin: no keep-awake pin is left for the tests that follow (or for gc).
+    send(app, "back");
+    const unpin = await waitFor("keep-awake's release", 30_000, () => {
+      const x = newestAction(readProbe(main()), "session.unpin");
+      return x && x.state !== "pending" ? x : null;
+    }, 200);
+    expect(unpin.state).toBe("done");
+    expect(unpin.title).toContain("Release keep-awake");
+    const relisted = await city.api("GET", city.cityPath("/sessions?wake_reasons=true&limit=200"));
+    const after = (relisted.body as { items: { id: string; wake_reasons?: string[] }[] }).items.find((x) => x.id === sessionId);
+    expect(after?.wake_reasons ?? []).not.toContain("pin");
     const event = await eventTime("bead.closed", card.id, cursor);
     expect(event).not.toBeNull();
     const lag = firstSeen - event!.ts;

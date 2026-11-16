@@ -717,6 +717,24 @@ describe("keep awake", () => {
     expect(activity(mod).some((row) => row.includes("Keep awake"))).toBe(true);
     expect(activity(mod).some((row) => row.includes("Release keep-awake"))).toBe(true);
   });
+
+  test("back closes the open detail, as Esc does, and that releases the pane's pin", async () => {
+    const w = world();
+    const mod = await running({ route: (url, req) => {
+      if ((req as Req).method === "POST" && /\/session\/[^/]+\/(pin|unpin)$/.test(new URL(url).pathname)) {
+        return { status: 200, body: fixtureBody(`post-v0-city-by-city-name-session-by-id-${new URL(url).pathname.endsWith("/unpin") ? "unpin" : "pin"}`, "ok") };
+      }
+      return w.route(url, req as Req);
+    } });
+    const sc5 = ids(mod.render()).filter((id) => /^gascity-agent-\d+-\d+-session-\d+$/.test(id)).find((id) => id !== "gascity-agent-0-1-session-0");
+    mod.click(sc5!);
+    await ticks(mod, 8);
+    expect(text(mod.render(), "gascity-detail-keep-awake")).toBe("Keep awake: pinned by this pane until it closes");
+    await mod.command("back");
+    await ticks(mod, 8);
+    expect(findById(mod.render(), "gascity-detail-title")).toBeUndefined();
+    expect(mutations(mod).map((m) => m.path).filter((p) => p.endsWith("/unpin"))).toHaveLength(1);
+  });
 });
 
 describe("a draft belongs to its session", () => {

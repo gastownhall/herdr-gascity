@@ -88,7 +88,16 @@ afterEach(() => {
   live = [];
 });
 
-function setup(opts: { stored?: unknown; wakeReasons?: string[]; row?: Partial<T.SessionResponse>; pin?: { status: number; body: unknown } } = {}) {
+interface SetupOpts {
+  stored?: unknown;
+  wakeReasons?: string[];
+  row?: Partial<T.SessionResponse>;
+  pin?: { status: number; body: unknown };
+  /** gc's answer to an unpin; read at the time of each request. */
+  unpin?: { reject: string };
+}
+
+function setup(opts: SetupOpts = {}) {
   const host = new FakeHost();
   const gc = new FakeGc(host);
   gc.emit({ type: "order.fired", subject: "gate-sweep" });
@@ -96,7 +105,7 @@ function setup(opts: { stored?: unknown; wakeReasons?: string[]; row?: Partial<T
   const writes: unknown[] = [];
   gc.override = (req) => {
     if (req.method === "POST" && req.path.endsWith("/pin")) return opts.pin ?? { status: 200, body: fixtureBody("post-v0-city-by-city-name-session-by-id-pin", "ok") };
-    if (req.method === "POST" && req.path.endsWith("/unpin")) return { status: 200, body: fixtureBody("post-v0-city-by-city-name-session-by-id-unpin", "ok") };
+    if (req.method === "POST" && req.path.endsWith("/unpin")) return opts.unpin ?? { status: 200, body: fixtureBody("post-v0-city-by-city-name-session-by-id-unpin", "ok") };
     if (req.query.get("wake_reasons") === "true" && (opts.wakeReasons || opts.row)) {
       const body = fixtureBody("get-v0-city-by-city-name-sessions", "wake-reasons") as { items: T.SessionResponse[] };
       return { status: 200, body: { ...body, items: body.items.map((x) => ({ ...x, ...opts.row, wake_reasons: opts.wakeReasons ?? x.wake_reasons })) } };
@@ -223,6 +232,40 @@ describe("keep-awake through the registry", () => {
     expect(t.posts("/pin")).toBe(1);
     expect(t.posts("/unpin")).toBe(0);
     expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "pinned" });
+  });
+
+  test("an unpin that did not land leaves the pin ours: reopening the pane reclaims it, and no later start unpins it under the open pane", async () => {
+    const opts: SetupOpts = {};
+    const t = setup(opts);
+    const a = await t.open();
+    await t.host.advance(1000);
+    let release!: () => void;
+    await t.inTurn(a, () => {
+      release = a.sub.watchPeek("sc-20");
+    });
+    await t.host.advance(2000);
+    expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "pinned" });
+    // gc now lists the pin; the pane closes while gc cannot be reached, so the unpin does not land.
+    opts.wakeReasons = ["session", "pin"];
+    opts.unpin = { reject: "connection refused" };
+    await t.inTurn(a, () => release());
+    await t.host.advance(2000);
+    expect(t.posts("/unpin")).toBe(1);
+    expect(t.stored()).toEqual([{ apiUrl: API, city: CITY, session: "sc-20" }]);
+    // gc is back and the pane reopens: gc's "pin" is the mod's own, so the pane holds it as pinned.
+    delete opts.unpin;
+    await t.inTurn(a, () => {
+      release = a.sub.watchPeek("sc-20");
+    });
+    await t.host.advance(3000);
+    expect(a.sub.keepAwake("sc-20")).toEqual({ kind: "pinned" });
+    expect(t.posts("/pin")).toBe(1);
+    expect(t.posts("/unpin")).toBe(1);
+    // Closing it now releases it.
+    await t.inTurn(a, () => release());
+    await t.host.advance(2000);
+    expect(t.posts("/unpin")).toBe(2);
+    expect(t.stored()).toEqual([]);
   });
 
   test("the person pinning or unpinning the session takes it over: the pane no longer unpins it", async () => {

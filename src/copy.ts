@@ -794,6 +794,9 @@ export class CopyController {
       case "cancel":
         this.cancelDialog();
         return "cancelled";
+      case "back":
+        this.selectSession(null);
+        return "closed";
       case "set-gc-bin": {
         const stored = this.deps.host.setGcBin(c.gcBin);
         if (!stored.ok) {

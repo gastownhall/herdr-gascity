@@ -32,6 +32,7 @@ const EXAMPLES: Command[] = [
   { verb: "probe", on: true },
   { verb: "probe", on: false },
   { verb: "cancel" },
+  { verb: "back" },
   { verb: "set-gc-bin", gcBin: "/opt/my gc:100%/bin/gc" },
   { verb: "set-gc-bin", gcBin: "gc" },
   { verb: "session-new", city: "scratch", agent: "frontend/builder", alias: null },
@@ -83,7 +84,7 @@ describe("round trip", () => {
       if (isMutating(c)) expect(usage(verb)).toStartWith(`${verb}:<city>`);
     }
     expect(Object.entries(GRAMMAR).filter(([, s]) => !s.mutating).map(([v]) => v).sort())
-      .toEqual(["bead", "cancel", "city", "focus", "probe", "refresh", "session", "set-gc-bin"]);
+      .toEqual(["back", "bead", "cancel", "city", "focus", "probe", "refresh", "session", "set-gc-bin"]);
   });
 
   test("the canary's commands read as written", () => {

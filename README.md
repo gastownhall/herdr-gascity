@@ -400,7 +400,9 @@ it unsubscribes and starts nothing; the other copies keep updating.
   takes it over. The pins it made are kept in herdr's shared value
   `gascity.pins` (written before the pin is sent), so a pin left by a crash,
   or by a copy that closed with its pane open, is released at the next
-  start. Its pins and unpins are actions in the activity log ("Keep awake",
+  start; a pane that opens while its session is still recorded (an unpin
+  that did not land, say while gc was unreachable) holds that pin as its
+  own. Its pins and unpins are actions in the activity log ("Keep awake",
   "Release keep-awake") and refetch nothing. gc's pin is one ownerless flag
   that the session itself does not report, so a pin a person makes outside
   this mod between the pane's read and its pin is taken for the mod's and
@@ -623,7 +625,7 @@ arguments separated by `:`; each argument is percent-encoded
   with the same text, keeps it claimed for 10 minutes, and becomes the
   Idempotency-Key where gc declares one. A copy that refuses a delivery gives
   its claim up. Commands that only change what a copy shows (`focus`,
-  `city`, `session`, `bead`, `cancel`, `refresh`, `probe`) and `set-gc-bin`
+  `city`, `session`, `bead`, `cancel`, `back`, `refresh`, `probe`) and `set-gc-bin`
   (which stores the same value whichever copy runs it) run in each copy that
   gets them.
 - **Retrying a scripted command.** Sending the same nonce again within 10
@@ -674,6 +676,7 @@ arguments separated by `:`; each argument is percent-encoded
 | `refresh` | refetch everything now (Retry now; the r key) |
 | `probe:<on-or-off>` | turn the probe file on or off (shared for every copy) |
 | `cancel` | close the open question or form without acting (Cancel) |
+| `back` | close the open session's detail (as Esc does when no question or form is open) |
 | `set-gc-bin:<gc-bin>` | store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it) |
 | `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
 | `wake:<city>:<session>` | wake a session (Wake) |
