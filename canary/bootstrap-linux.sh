@@ -4,7 +4,8 @@
 # Vulkan, herdr's published installer for the app and its core (served from a
 # per-release local mirror). After herdr-app's own `scripts/sandbox`.
 #
-#   bootstrap-linux.sh preflight   system packages, software Vulkan, runtime dir
+#   bootstrap-linux.sh preflight   system packages (and $CANARY_EXTRA_APT), software
+#                                  Vulkan, runtime dir
 #   bootstrap-linux.sh resolve     current stable versions (cache key)
 #   bootstrap-linux.sh mirror      fill the mirror (cache misses only) and serve it
 #   bootstrap-linux.sh install     herdr's published install.sh against the mirror
@@ -33,14 +34,42 @@ target() {
   esac
 }
 
+# Each apt attempt's update and install get this long (seconds) before they
+# are killed and the attempt retried: at most 3 x 210 s plus 30 s of backoff,
+# inside the canary's preflight step timeout.
+APT_UPDATE_TIMEOUT=60
+APT_INSTALL_TIMEOUT=150
+APT_OPTIONS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+# The runner's apt mirror (azure.archive.ubuntu.com on GitHub's images) has
+# hung a whole step; the last attempt goes to the main archive instead.
+APT_FALLBACK_MIRROR=http://archive.ubuntu.com/ubuntu
+
+apt_install() {
+  # shellcheck disable=SC2206 # CANARY_EXTRA_APT is a space-separated package list
+  local packages=("${APT_PACKAGES[@]}" ${CANARY_EXTRA_APT:-})
+  sudo timeout "$APT_UPDATE_TIMEOUT" apt-get "${APT_OPTIONS[@]}" update -qq &&
+    sudo DEBIAN_FRONTEND=noninteractive timeout "$APT_INSTALL_TIMEOUT" apt-get "${APT_OPTIONS[@]}" install -y -qq --no-install-recommends "${packages[@]}"
+}
+
+# Points apt at the fallback mirror: both the deb822 and the one-line sources.
+apt_fallback_mirror() {
+  local f
+  for f in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+    [[ -f $f ]] || continue
+    sudo sed -E -i "s#https?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu/?#$APT_FALLBACK_MIRROR/#g" "$f"
+  done
+  log "apt: switched to $APT_FALLBACK_MIRROR"
+}
+
 preflight() {
   local attempt
   for attempt in 1 2 3; do
-    if sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"; then
+    (( attempt < 3 )) || apt_fallback_mirror
+    if apt_install; then
       break
     fi
     (( attempt < 3 )) || die "apt-get install failed 3 times"
-    log "apt-get failed (attempt $attempt); retrying"
+    log "apt-get failed or timed out (attempt $attempt); retrying"
     sleep $(( attempt * 10 ))
   done
   vulkaninfo --summary >"$CANARY_OUT/vulkaninfo.txt" 2>&1 || true

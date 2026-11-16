@@ -62,12 +62,12 @@ test("env.DAILY_SCHEDULE is exactly one of the workflow's two schedules", () => 
 describe("the hourly schedule", () => {
   test("checks a release with no recorded result", async () => {
     const r = await decide({ ...hourly, HERDR_APP_VERSION: "0.1.15" });
-    expect(r).toMatchObject({ code: 0, outputs: { check: "true", reason: "new herdr-app release 0.1.15" } });
+    expect(r).toMatchObject({ code: 0, outputs: { check: "true", new_release: "true", reason: "new herdr-app release 0.1.15" } });
   });
 
   test("skips a release that passed its last check", async () => {
     const r = await decide({ ...hourly, HERDR_APP_VERSION: "0.1.14" }, { version: "0.1.14", result: "pass" });
-    expect(r).toMatchObject({ code: 0, outputs: { check: "false", reason: "herdr-app 0.1.14 passed its last check; nothing new" } });
+    expect(r).toMatchObject({ code: 0, outputs: { check: "false", new_release: "false", reason: "herdr-app 0.1.14 passed its last check; nothing new" } });
   });
 
   test("fails at once while the release's last check failed", async () => {
@@ -83,12 +83,12 @@ describe("the daily schedule and a dispatch check regardless of the last result"
   for (const result of ["pass", "fail"]) {
     test(`daily, last ${result}`, async () => {
       const r = await decide({ EVENT_NAME: "schedule", SCHEDULE: DAILY, HERDR_APP_VERSION: "0.1.14" }, { version: "0.1.14", result });
-      expect(r).toMatchObject({ code: 0, outputs: { check: "true", reason: "daily check of herdr-app 0.1.14" } });
+      expect(r).toMatchObject({ code: 0, outputs: { check: "true", new_release: "false", reason: "daily check of herdr-app 0.1.14" } });
     });
 
     test(`dispatched, last ${result}`, async () => {
       const r = await decide({ EVENT_NAME: "workflow_dispatch", HERDR_APP_VERSION: "0.1.14" }, { version: "0.1.14", result });
-      expect(r).toMatchObject({ code: 0, outputs: { check: "true", reason: "dispatched: checking herdr-app 0.1.14" } });
+      expect(r).toMatchObject({ code: 0, outputs: { check: "true", new_release: "false", reason: "dispatched: checking herdr-app 0.1.14" } });
     });
   }
 });

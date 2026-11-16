@@ -11,6 +11,8 @@ name: herdr-app types drift
 # host declarations the mod uses since the last checked release.
 #
 # This job runs herdr's published install.sh: it is never given a secret.
+# When the hourly run first sees a new release, a second job (no checkout, no
+# downloaded code, only actions: write) dispatches the nightly canary for it.
 
 on:
   schedule:
@@ -34,6 +36,9 @@ jobs:
     name: src/ against herdr-app's generated declarations
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      new_release: ${{ steps.decide.outputs.new_release }}
+      app: ${{ steps.resolve.outputs.app }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -169,3 +174,23 @@ jobs:
           path: ${{ runner.temp }}/herdr-canary/out
           if-no-files-found: error
           retention-days: 14
+
+  canary-on-release:
+    name: Dispatch the canary for a new herdr-app release
+    needs: types
+    if: always() && needs.types.outputs.new_release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch canary.yml on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.repository.default_branch }}
+          APP: ${{ needs.types.outputs.app }}
+        run: |
+          [[ $APP =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::not a release version: $APP"; exit 1; }
+          gh workflow run canary.yml --repo "$REPO" --ref "$REF" -f reason="herdr-app release $APP"
+          echo "dispatched the canary for herdr-app $APP" >>"$GITHUB_STEP_SUMMARY"

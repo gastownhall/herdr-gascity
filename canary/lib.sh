@@ -3,7 +3,10 @@
 #
 # Layout under CANARY_ROOT (default: $RUNNER_TEMP/herdr-canary, else /tmp):
 #   out/            everything uploaded as the run's artifact
-#   out/stages.jsonl  one line per stage: id, class, rc, duration_s
+#   out/stages-begun.jsonl  one line per stage as it begins: id, class, start
+#   out/stages.jsonl  one line per stage as it ends: id, class, rc, duration_s
+#                   (a stage with a begin and no end was killed: an Actions
+#                   step timeout; result.sh classes it infra)
 #   app-home/       HERDR_APP_HOME
 #   state/          XDG_STATE_HOME (herdr-core's machines and terminals)
 #   runtime/        XDG_RUNTIME_DIR when the runner has none
@@ -55,12 +58,15 @@ valid_version() { [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; }
 now() { date +%s.%N; }
 
 # run_stage <id> <failure class> <function> [args...]: runs one stage in a
-# subshell, records its outcome and duration in out/stages.jsonl, and keeps its
-# exit code. Stages hand values to later steps through export_env.
+# subshell, records that it began in out/stages-begun.jsonl and its outcome
+# and duration in out/stages.jsonl, and keeps its exit code. Stages hand
+# values to later steps through export_env.
 run_stage() {
   local id=$1 class=$2 rc=0 start end
   shift 2
   start=$(now)
+  jq -cn --arg id "$id" --arg class "$class" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{stage: $id, class: $class, started_at: $at}' >>"$CANARY_OUT/stages-begun.jsonl"
   log "stage $id: begin"
   # A subshell keeps errexit working inside the stage (it is off in `f || x`).
   set +e

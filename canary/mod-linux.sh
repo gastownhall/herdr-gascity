@@ -10,6 +10,9 @@
 #   mod-linux.sh city         a scratch city (file beads, subprocess sessions, no orders,
 #                             one rig, two agents) with a few beads, from this
 #                             shell: never from a herdr terminal
+#   mod-linux.sh canary-city  the canary city instead (canary/city.toml.in: the canary
+#                             pack's agent, file beads, tmux on its own socket),
+#                             from this shell: never from a herdr terminal
 #   mod-linux.sh package [--broken]
 #                             `bun run package` into $CANARY_ROOT/dist (MOD_TARBALL);
 #                             --broken puts a syntax error into the packaged
@@ -23,7 +26,8 @@
 #   mod-linux.sh shot [file]  wait until the mod shows the whole board, then
 #                             `herdr-app shot` into out/<file> (preview.png);
 #                             `herdr-app status` must report no errors
-#   mod-linux.sh teardown     stop the supervisor the city stage recorded, only that
+#   mod-linux.sh teardown     stop the supervisor the city stage recorded, and the
+#                             canary city's tmux server by its socket; only those
 #
 # The city stage puts a city into GC_HOME (default ~/.gc) and gc's default
 # port, where a person's own gc lives: it runs only when GITHUB_ACTIONS=true
@@ -45,12 +49,16 @@ API=http://127.0.0.1:8372
 # supervisor this script recorded in SUPERVISOR_MARKER.
 export GC_HOME=${GC_HOME:-$HOME/.gc}
 SUPERVISOR_MARKER=$CANARY_ROOT/supervisor.json
+# The canary city (canary-city stage): its name, directory and tmux socket.
+CANARY_CITY=canary
+CANARY_CITY_DIR=$CANARY_ROOT/canary-city
+CANARY_SOCKET_FILE=$CANARY_ROOT/canary-socket
 
 build_gc() {
   [[ -n ${GASCITY_SRC:-} && -f $GASCITY_SRC/go.mod ]] || die "GASCITY_SRC must point at a gascity checkout"
   mkdir -p "$GC_DIR"
   (cd "$GASCITY_SRC" && go build -o "$GC" ./cmd/gc)
-  "$GC" version >&2 || true
+  printf 'gc: %s (%s)\n' "$("$GC" version)" "$(git -C "$GASCITY_SRC" rev-parse --short=10 HEAD)" | tee "$CANARY_OUT/versions-gc.txt" >&2
 }
 
 # api <method> <path> [json]: one call to the city's API.
@@ -84,13 +92,19 @@ record_supervisor() {
   log "the scratch city's supervisor: pid $pid in $GC_HOME"
 }
 
+# No service manager: gc init's `supervisor install` must not reach one.
+service_manager_shims() {
+  local s
+  mkdir -p "$1"
+  for s in systemctl launchctl; do printf '#!/bin/sh\nexit 0\n' >"$1/$s"; chmod +x "$1/$s"; done
+}
+
 city_up() {
   local shims=$CANARY_ROOT/gc-shims rc=0
   guard_throwaway_home
   [[ -x $GC ]] || die "no gc at $GC (run the gc stage)"
-  mkdir -p "$CITY_ROOT/rigs/frontend" "$GC_HOME" "$shims"
-  # No service manager: gc init's `supervisor install` must not reach one.
-  for s in systemctl launchctl; do printf '#!/bin/sh\nexit 0\n' >"$shims/$s"; chmod +x "$shims/$s"; done
+  mkdir -p "$CITY_ROOT/rigs/frontend" "$GC_HOME"
+  service_manager_shims "$shims"
   local ORDERS
   ORDERS=$(find "$GASCITY_SRC/internal/bootstrap/packs/core/orders" -name '*.toml' -exec basename {} .toml \; | sort | jq -Rn '[inputs] | map(@json) | join(", ")' -r)
   [[ -n $ORDERS ]] || die "no built-in orders found under $GASCITY_SRC"
@@ -152,6 +166,32 @@ EOF
   curl -fsS "$API/v0/cities" | tee "$CANARY_OUT/cities.json" >&2
 }
 
+# The canary city: canary/city.toml.in filled as canary/city.ts fills it, in
+# the default GC_HOME and port so the mod discovers it as a person's city.
+# Orders run (the audit is scoped to this run's own subjects).
+canary_city_up() {
+  local shims=$CANARY_ROOT/gc-shims rc=0 socket toml=$CANARY_ROOT/canary-city.toml
+  guard_throwaway_home
+  [[ -x $GC ]] || die "no gc at $GC (run the gc stage)"
+  mkdir -p "$GC_HOME"
+  service_manager_shims "$shims"
+  socket=$(printf 'canary-%s-%s' "${GITHUB_RUN_ID:-local}" "${GITHUB_RUN_ATTEMPT:-$$}" | tr -c 'A-Za-z0-9-' '-' | cut -c1-60)
+  printf '%s\n' "$socket" >"$CANARY_SOCKET_FILE"
+  sed -e "s#@SOCKET@#$socket#g" -e "s#@PACK_DIR@#$here/pack#g" -e "s#@API_URL@#$API#g" -e "s#@CITY@#$CANARY_CITY#g" \
+    "$here/city.toml.in" >"$toml"
+  ! grep -n '@[A-Z_]*@' "$toml" || die "city.toml.in has a placeholder left"
+  cp -f "$toml" "$CANARY_OUT/canary-city.toml"
+  PATH=$shims:$PATH "$GC" init --name "$CANARY_CITY" --file "$toml" "$CANARY_CITY_DIR" 2>&1 | tee "$CANARY_OUT/gc-init.log" >&2 || rc=$?
+  record_supervisor
+  (( rc == 0 )) || die "gc init failed (exit $rc)"
+  # shellcheck disable=SC2317 # a poll predicate, called by name
+  city_running() {
+    curl -fsS --max-time 5 "$API/v0/cities" 2>/dev/null | jq -e --arg c "$CANARY_CITY" 'any(.items[]; .name == $c and .running == true)' >/dev/null
+  }
+  poll 120 "the canary city running" city_running || { curl -sS "$API/v0/cities" >&2 || true; die "the canary city is not running"; }
+  curl -fsS "$API/v0/cities" >"$CANARY_OUT/cities.json"
+  export_env CANARY_CITY_DIR "$CANARY_CITY_DIR"
+}
 
 # The tarball the package stage made (MOD_TARBALL, from $GITHUB_ENV in CI).
 tarball() {
@@ -259,7 +299,7 @@ shot() {
 
 # Stops the supervisor the city stage recorded, and nothing else: no record,
 # another GC_HOME, or another supervisor running there now, and it is left alone.
-teardown() {
+stop_supervisor() {
   local home pid now
   if [[ ! -f $SUPERVISOR_MARKER ]]; then
     log "teardown: no supervisor recorded in $SUPERVISOR_MARKER; nothing to stop"
@@ -282,14 +322,29 @@ teardown() {
   log "teardown: stopped the scratch city's supervisor (pid $pid)"
 }
 
+# The supervisor first (it would restart sessions), then the canary city's tmux server.
+teardown() {
+  local socket
+  stop_supervisor
+  if [[ -f $CANARY_SOCKET_FILE ]]; then
+    socket=$(<"$CANARY_SOCKET_FILE")
+    # Only the canary city's own tmux server, by the socket this run named.
+    if [[ $socket =~ ^canary-[A-Za-z0-9-]+$ ]] && tmux -L "$socket" kill-server 2>/dev/null; then
+      log "teardown: stopped the canary city's tmux server (-L $socket)"
+    fi
+    rm -f "$CANARY_SOCKET_FILE"
+  fi
+}
+
 case ${1:-} in
   gc) run_stage gc infra build_gc ;;
   city) run_stage city infra city_up ;;
+  canary-city) run_stage city gc canary_city_up ;;
   package) run_stage package product package_mod "${@:2}" ;;
   check) run_stage check product check_mod ;;
   install) run_stage install-mod product install_mod ;;
   connected) run_stage connected product connected ;;
   shot) run_stage shot ui shot "${@:2}" ;;
   teardown) teardown ;;
-  *) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -88,9 +88,11 @@ it. `compat.json` names the herdr-app and gc versions a release supports.
 | `test/integration/` | The integration test against a real scratch gc city (see below): `scenario.integration.ts`, the live herdr stand-in `herdr.ts` (constrained fetch, allowlisted exec, recorded `run`), `terminals.ts` (tabs in PTYs under herdr's shell wrapper), `proxy.ts`, `checks.ts`. |
 | `canary/pack/` | The canary pack: one deterministic, LLM-free agent (`assets/canary-agent.sh`) for the integration test and the nightly canary. |
 | `canary/city.ts`, `canary/city.toml.in` | An isolated scratch city (own HOME, GC_HOME, XDG dirs, tmux socket, port; teardown stops only what it started). |
-| `canary/scope-audit.ts`, `canary/proc.ts` | The `HC_SCOPE` process audit over `/proc`. |
+| `canary/scope-audit.ts`, `canary/proc.ts` | The `HC_SCOPE` process audit over `/proc`; as a CLI (`bun canary/scope-audit.ts --city <path> session attach <id>`) it audits the herdr terminal running that attach. |
 | `canary/bootstrap-linux.sh`, `canary/mirror.sh`, `canary/lib.sh`, `canary/result.sh` | The released herdr-app headless on a GPU-less Linux runner (Xvfb or Weston, lavapipe), installed by herdr's published `install.sh` from a sha256-checked per-release mirror; each stage's outcome in `out/stages.jsonl`. |
 | `canary/mod-linux.sh` | The packaged mod in that app against a scratch city run by gc built at `api/PIN`: package, `herdr-app check`, `install.sh --from`, the probe connected, the shot. Run by the smoke and the preview workflows. |
+| `canary/canary-linux.sh` | The nightly canary's stages S5-S13: every step driven through `herdr-app do gascity.<command>` against the canary city, plus one real key. |
+| `canary/gc-authority.ts` | The canary's authority audit: every gc change traces to a write the mod's probe shows, every write is accounted for, every program the mod ran is allowlisted, and the mod agrees with gc. |
 
 ## Rules the build enforces
 
@@ -879,6 +881,45 @@ records the supervisor `gc init` started (`$CANARY_ROOT/supervisor.json`:
 home and pid), and `teardown` stops that supervisor only, and only while it
 is still the one running there. Never run it, or herdr-app, on a machine
 whose gc or Herdr you use.
+
+## Nightly canary
+
+`.github/workflows/canary.yml` runs the whole integration in the released
+app every night: on a fresh ubuntu-24.04 VM, the current stable herdr-app
+(from herdr's `install.sh`, as the smoke installs it), the mod installed by
+`install.sh --from` this commit's package, and gc built at `api/PIN` running
+the canary city (`canary/pack/`, its tmux sessions on a socket of the run's
+own). Every step goes through `herdr-app do gascity.<command>` with the mod's
+tab selected, and the mod's probe and gc must agree on each:
+
+| Stage | What must happen |
+| --- | --- |
+| discover | the mod connects and shows the canary city running, with no errors |
+| session | `session-new` starts a session gc runs and the mod lists |
+| output | the session's `CANARY READY` line and the run's nonce in the detail |
+| attach | `attach` opens a herdr terminal on `gc session attach`; gc shows it attached |
+| scope-audit | nothing under that terminal leaks `HC_SCOPE` past the scrub |
+| keyboard | a real XTEST key reaches the mod (`r` refreshes) |
+| bead-input | `bead-new` creates a bead on the board; `submit` sends the agent its close line |
+| bead-closed | the agent's close, with the run's reason, in the mod's closed list and detail |
+| authority | `canary/gc-authority.ts` over gc's `supervisor.request` events and the probe |
+
+Each stage records its class (infra, product, gc, integration, ui) and each
+workflow step has a timeout longer than the stage's own deadlines; a step
+killed at its timeout, an apt hang included, is classed infra.
+`canary/result.sh` writes `canary-result.json`: the first failing stage, its
+class and reason (`stage-failed`, `step-timeout`, `not-reached`), and
+whether it is a product failure. A product failure files or updates one
+issue; infra failures only show in the summary. Weekly the workflow runs a
+soak of five sequential runs and reports the product-stage flake rate
+(target under 2%). `types-drift.yml` dispatches it when a new herdr-app
+release appears, and it can be dispatched by hand (`reason`, `runs`). The
+canary job is read-only and gets no secret; only the report job, which runs
+no downloaded code, may write issues.
+
+The lane today is main (the mod at the commit, gc at `api/PIN`). A
+latest-release lane (both published installers, released gc) follows the
+first mod release and a gc release with the APIs the mod uses.
 
 ## Develop
 

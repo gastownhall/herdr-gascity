@@ -7,7 +7,9 @@
 #                             and on the daily schedule; on the hourly schedule
 #                             only an app release with no recorded result. A
 #                             release whose last result is a failure fails
-#                             the hourly run at once, until a check passes
+#                             the hourly run at once, until a check passes;
+#                             new_release=true marks a release seen first
+#                             (the canary is dispatched for it)
 #   types-drift.sh check      type-check src/ against the generated
 #                             declarations, diff the host surface src/ uses
 #                             against the last checked release's, write the
@@ -44,7 +46,7 @@ last_result() {
 }
 
 decide() {
-  local version=${HERDR_APP_VERSION:-} check=true reason last rc=0
+  local version=${HERDR_APP_VERSION:-} check=true new_release=false reason last rc=0
   valid_version "$version" || die "HERDR_APP_VERSION is not a release version: ${version:-unset}"
   last=$(last_result "$version")
   case ${EVENT_NAME:-} in
@@ -62,6 +64,7 @@ decide() {
         reason="herdr-app $version failed its last check; failing until a daily or dispatched check passes"
         rc=1
       else
+        new_release=true
         reason="new herdr-app release $version"
       fi
       ;;
@@ -70,6 +73,7 @@ decide() {
   log "$reason"
   export_output check "$check"
   export_output reason "$reason"
+  export_output new_release "$new_release"
   if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then printf '%s\n' "$reason" >>"$GITHUB_STEP_SUMMARY"; fi
   return "$rc"
 }
