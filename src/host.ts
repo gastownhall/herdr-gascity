@@ -17,6 +17,7 @@ import { windowFlag, windowOpenAt } from "./notify/window.ts";
 import type { ProbeIo } from "./probe.ts";
 import { attachArgvIssue } from "./terminal/argv.ts";
 import { MOD_NAME, type VisibilityInput } from "./sync/visibility.ts";
+import { PIN_BOOK_KEY } from "./sync/keepAwake.ts";
 import type { ExecRecord } from "./vm/probe.ts";
 import { cleanLine } from "./vm/sanitize.ts";
 
@@ -155,6 +156,16 @@ export function readWindowOpen(): boolean {
 /** The "needs you" window's copy says it is open (in init, then every WINDOW_REFRESH_MS) or closed. */
 export function setWindowOpen(open: boolean): void {
   herdr.setShared(WINDOW_KEY, open ? windowFlag(Date.now()) : false);
+}
+
+/** The raw pins keep-awake made (decoded by sync/keepAwake.ts). */
+export function readOwnPins(): unknown {
+  return herdr.shared(PIN_BOOK_KEY);
+}
+
+/** Replaces the pins keep-awake made, for every copy and the next start. */
+export function writeOwnPins(value: unknown): void {
+  herdr.setShared(PIN_BOOK_KEY, value);
 }
 
 /** The raw shared focus target (decoded by notify/focus.ts). */

@@ -149,7 +149,6 @@ export const SessionResponseSchema: z.ZodMiniType<T.SessionResponse> = z.object(
   submission_capabilities: z.optional(SubmissionCapabilitiesSchema),
   created_at: z.string(),
   last_active: z.optional(z.string()),
-  last_output: z.optional(z.string()),
   wake_reasons: z.optional(nullableList(z.string())),
 });
 
@@ -186,6 +185,24 @@ export const PendingInteractionSchema: z.ZodMiniType<T.PendingInteraction> = z.o
 export const SessionPendingResponseSchema: z.ZodMiniType<T.SessionPendingResponse> = z.object({
   supported: z.boolean(),
   pending: z.optional(PendingInteractionSchema),
+});
+
+export const OutputTurnSchema: z.ZodMiniType<T.OutputTurn> = z.object({
+  id: z.optional(z.string()),
+  role: z.string(),
+  text: z.string(),
+  timestamp: z.optional(z.string()),
+});
+
+export const PaginationInfoSchema: z.ZodMiniType<T.PaginationInfo> = z.object({
+  has_older_messages: z.boolean(),
+});
+
+export const SessionTranscriptGetResponseSchema: z.ZodMiniType<T.SessionTranscriptGetResponse> = z.object({
+  id: z.string(),
+  format: enumOf(["conversation","text"]),
+  turns: optionalNullableList(OutputTurnSchema),
+  pagination: z.optional(PaginationInfoSchema),
 });
 
 export const ReadyBeadSchema: z.ZodMiniType<T.ReadyBead> = z.object({

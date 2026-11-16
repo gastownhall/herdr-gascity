@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/canary/session/ca-19/transcript",
+    "query": "tail=1"
+  },
+  "status": 200,
+  "body": {
+    "id": "ca-19",
+    "template": "canary.canary-agent",
+    "provider": "sh",
+    "format": "text",
+    "turns": [
+      {
+        "role": "output",
+        "text": "CANARY READY canary-agent-adhoc-e5c3ad8b84\n[canary] canary.canary-agent-adhoc-e5c3ad8b84 • 2026-11-16T17:22:57\n\nRun `gc prime` to initialize your context.CANARY IGNORED\nCANARY IGNORED\n^[\nCANARY IGNORED"
+      }
+    ]
+  }
+}

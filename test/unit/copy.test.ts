@@ -142,13 +142,13 @@ describe("a copy", () => {
     expect(gc.seen.length).toBe(seen);
   });
 
-  test("selecting a session watches its detail (output, wake reasons, pending prompt); deselecting releases it", async () => {
+  test("selecting a session watches its detail (transcript, wake reasons, pending prompt); deselecting releases it", async () => {
     const { host, gc, open } = setup();
     const a = await open();
     await host.advance(3000);
     a.copy.selectSession("sc-20");
     await host.advance(3000);
-    expect(gc.count("/session/sc-20")).toBeGreaterThan(0);
+    expect(gc.count("/session/sc-20/transcript")).toBeGreaterThan(0);
     expect(gc.count("/session/sc-20/pending")).toBe(1);
     expect(gc.paths().filter((p) => p.includes("wake_reasons=true")).length).toBe(1);
     const detail = a.copy.view(host.now()).detail;
@@ -157,7 +157,7 @@ describe("a copy", () => {
     await host.advance(TICK_MS);
     const seen = gc.seen.length;
     await host.advance(10_000);
-    expect(gc.count("/session/sc-20", seen)).toBe(0);
+    expect(gc.count("/session/sc-20/transcript", seen)).toBe(0);
   });
 
   test("renders the work board from the shared snapshot: columns without infrastructure beads, the closed seed by creation time, a bead in Ready not listed as closed", async () => {

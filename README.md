@@ -313,7 +313,7 @@ promise never settles. The engine is built around that rule:
   |---|---|---|
   | events | 2 s | 10 s |
   | sessions + pending | 5 s | 30 s |
-  | detail peek | 2 s | paused |
+  | detail transcript | 2 s | paused |
   | sweep (everything) | 60 s | 60 s |
 
   The event poll keeps running while hidden, so app-wide listeners (toasts)
@@ -375,10 +375,36 @@ it unsubscribes and starts nothing; the other copies keep updating.
   fetched by id (at most 10 per step, again on an event about it, after an
   event gap, when gc comes back and on "retry now", but not at every sweep,
   whose cost would grow with the city); it is never guessed.
-- **Detail pane.** Clicking a session opens it: gc's facts, the output (40
-  lines, refreshed every 2 s while the pane is open and on screen), the wake
-  reasons (fetched when it opens and on "retry now", because gc probes the
-  runtime for each session), and the pending prompt with gc's own options.
+- **Detail pane.** Clicking a session opens it: gc's facts, its
+  conversation, the wake reasons (fetched when it opens and on "retry now",
+  because gc probes the runtime for each session), a keep-awake line, and
+  the pending prompt with gc's own options. The raw terminal stays in the
+  attach tab (Open terminal).
+- **Conversation** (`sync/transcript.ts`). Read from gc's per-session
+  transcript, every 2 s while the pane is open and on screen, paused while
+  hidden, at peek priority under the fetch budget. A session with a log
+  (format `conversation`) is read once from its last compaction segment
+  (`tail=1`) and then followed with `after=<last turn id>`, so each poll
+  carries only new turns, each shown under its role and time; gc's 409
+  `transcript-cursor-invalidated` starts again from the tail. A session
+  without one (format `text`) is a capture of its terminal, read whole each
+  time. At most 200 turns are kept; older ones are said to be hidden. The
+  session's SSE stream is not used: herdr's `fetch` reads a whole body under
+  a 30 s total timeout, and that stream never ends.
+- **Keep awake** (`sync/keepAwake.ts`). While a session's pane is open in
+  any copy, the mod pins it in gc so it is not put to sleep, and unpins it
+  when the last pane of it closes. It only ever unpins a pin it made: it
+  pins only a session the pane's wake-reasons read shows as listed, active,
+  running, without a lifecycle reason and without the `pin` reason, and
+  says why it did not otherwise. A person's own Pin or Unpin of the session
+  takes it over. The pins it made are kept in herdr's shared value
+  `gascity.pins` (written before the pin is sent), so a pin left by a crash,
+  or by a copy that closed with its pane open, is released at the next
+  start. Its pins and unpins are actions in the activity log ("Keep awake",
+  "Release keep-awake") and refetch nothing. gc's pin is one ownerless flag
+  that the session itself does not report, so a pin a person makes outside
+  this mod between the pane's read and its pin is taken for the mod's and
+  is released when the pane closes.
 - **Errors and staleness.** Each region says how old its data is; on a
   failure it keeps the last data, greyed, with the error above it. The header
   says connected, connecting, reconnecting in N s (with the cause), city

@@ -789,29 +789,65 @@ describe("visibility", () => {
     expect(gc.count("/events", start)).toBe(6);
   });
 
-  test("the detail peek polls every 2 s on screen, pauses hidden, stops when released", async () => {
+  test("the open pane's transcript polls every 2 s on screen, pauses hidden, stops when released", async () => {
     const { host, gc, reg, open } = setup();
     const a = await open();
     const release = a.sub.watchPeek("sc-20");
     await host.advance(TICK_MS);
-    expect(gc.paths().at(-1)).toBe("/v0/city/scratch/session/sc-20?peek=true&peek_lines=40");
-    expect(a.sub.snapshot().peeks.get("sc-20")?.value?.id).toBe("sc-20");
+    expect(gc.paths().at(-1)).toBe("/v0/city/scratch/session/sc-20/transcript?tail=1");
+    expect(a.sub.snapshot().transcripts.get("sc-20")?.value?.format).toBe("conversation");
     let start = gc.seen.length;
     await host.advance(10_000);
-    expect(gc.count("/session/sc-20", start)).toBe(5);
+    expect(gc.count("/session/sc-20/transcript", start)).toBe(5);
+    // followed from the last turn's id: only new turns come back
+    expect(gc.paths(start).filter((p) => p.includes("/transcript")).every((p) => p.endsWith("?after=4f0b2c1e-0000-4000-8000-000000000002"))).toBe(true);
     reg.setOnScreen(false);
     start = gc.seen.length;
     await host.advance(10_000);
-    expect(gc.count("/session/sc-20", start)).toBe(0);
+    expect(gc.count("/session/sc-20/transcript", start)).toBe(0);
     reg.setOnScreen(true);
     release();
     start = gc.seen.length;
     await host.advance(10_000);
-    expect(gc.count("/session/sc-20", start)).toBe(0);
-    expect(a.sub.snapshot().peeks.has("sc-20")).toBe(false);
+    expect(gc.count("/session/sc-20/transcript", start)).toBe(0);
+    expect(a.sub.snapshot().transcripts.has("sc-20")).toBe(false);
   });
 
-  test("a peek watched by two copies is released only when both release it", async () => {
+  test("new turns are appended; an invalidated cursor is read again from the tail at the next tick, with no error shown", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    a.sub.watchPeek("sc-20");
+    await host.advance(TICK_MS);
+    gc.override = (req) => req.path.endsWith("/transcript") && req.query.get("after") !== null
+      ? { status: 200, body: { id: "sc-20", template: "worker", provider: "claude", format: "conversation", turns: [{ id: "a3", role: "assistant", text: "done" }] } }
+      : undefined;
+    await host.advance(2000);
+    expect(a.sub.snapshot().transcripts.get("sc-20")?.value?.turns.map((t) => t.text)).toEqual(["fix the login test", "Looking at the test first.\n[Bash]", "done"]);
+    gc.override = (req) => req.path.endsWith("/transcript") && req.query.get("after") !== null
+      ? { status: 409, body: fixtureBody("get-v0-city-by-city-name-session-by-id-transcript", "cursor-invalidated") }
+      : undefined;
+    const start = gc.seen.length;
+    await host.advance(2000 + TICK_MS);
+    const reads = gc.paths(start).filter((p) => p.includes("/transcript"));
+    expect(reads).toEqual(["/v0/city/scratch/session/sc-20/transcript?after=a3", "/v0/city/scratch/session/sc-20/transcript?tail=1"]);
+    const t = a.sub.snapshot().transcripts.get("sc-20");
+    expect(t?.error).toBeNull();
+    expect(t?.value?.turns.map((x) => x.id)).toEqual(["4f0b2c1e-0000-4000-8000-000000000001", "4f0b2c1e-0000-4000-8000-000000000002"]);
+  });
+
+  test("a failed transcript read keeps the turns it had, with the error", async () => {
+    const { host, gc, open } = setup();
+    const a = await open();
+    a.sub.watchPeek("sc-20");
+    await host.advance(TICK_MS);
+    gc.override = (req) => req.path.endsWith("/transcript") ? { status: 404, body: { title: "Not Found", status: 404, detail: "session not found" } } : undefined;
+    await host.advance(2000);
+    const t = a.sub.snapshot().transcripts.get("sc-20");
+    expect(t?.value?.turns).toHaveLength(2);
+    expect(t?.error).toMatchObject({ kind: "http", status: 404 });
+  });
+
+  test("a transcript watched by two copies is released only when both release it", async () => {
     const { host, gc, open, close } = setup();
     const a = await open();
     const b = await open();
@@ -821,11 +857,11 @@ describe("visibility", () => {
     await host.advance(TICK_MS);
     const start = gc.seen.length;
     await host.advance(4000);
-    expect(gc.count("/session/sc-20", start)).toBe(2);
-    await close(b); // closing releases that copy's peeks
+    expect(gc.count("/session/sc-20/transcript", start)).toBe(2);
+    await close(b); // closing releases that copy's watches
     const s2 = gc.seen.length;
     await host.advance(4000);
-    expect(gc.count("/session/sc-20", s2)).toBe(0);
+    expect(gc.count("/session/sc-20/transcript", s2)).toBe(0);
   });
 });
 

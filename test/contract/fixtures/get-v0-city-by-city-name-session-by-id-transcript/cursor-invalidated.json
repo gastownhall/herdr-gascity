@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/canary/session/ca-19/transcript",
+    "query": "after=no-such-entry"
+  },
+  "status": 409,
+  "body": {
+    "type": "urn:gascity:error:transcript-cursor-invalidated",
+    "title": "Transcript Cursor Invalidated",
+    "status": 409,
+    "detail": "reading session log: after transcript cursor \"no-such-entry\" not found",
+    "code": "transcript-cursor-invalidated"
+  }
+}

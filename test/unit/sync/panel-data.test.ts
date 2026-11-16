@@ -69,7 +69,7 @@ describe("an open detail", () => {
     await host.advance(20_000);
     const wake = gc.paths(start).filter((p) => p.includes("wake_reasons=true"));
     expect(wake).toEqual(["/v0/city/scratch/sessions?limit=500&template=worker&wake_reasons=true"]);
-    expect(a.sub.snapshot().details.get("sc-20")?.wakeReasons.value).toEqual({ listed: true, reasons: ["session", "config"] });
+    expect(a.sub.snapshot().details.get("sc-20")?.wakeReasons.value).toMatchObject({ listed: true, reasons: ["session", "config"], session: { id: "sc-20", state: "active", running: true } });
     a.sub.refreshDetail("sc-20");
     await host.advance(1000);
     expect(gc.paths(start).filter((p) => p.includes("wake_reasons=true")).length).toBe(2);
@@ -82,7 +82,7 @@ describe("an open detail", () => {
     await host.advance(1000);
     a.sub.watchPeek("sc-5");
     await host.advance(2000);
-    expect(a.sub.snapshot().details.get("sc-5")?.wakeReasons.value).toEqual({ listed: false, reasons: [] });
+    expect(a.sub.snapshot().details.get("sc-5")?.wakeReasons.value).toEqual({ listed: false, reasons: [], session: null });
   });
 
   test("fetches the session's pending prompt on open and when the city's pending list changes for it", async () => {

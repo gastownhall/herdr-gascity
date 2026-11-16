@@ -311,6 +311,7 @@ export class FakeGc {
       const name = req.query.get("wake_reasons") === "true" ? "wake-reasons" : "ok";
       return { status: 200, body: fixtureBody("get-v0-city-by-city-name-sessions", name) };
     }
+    if (/\/session\/[^/]+\/transcript$/.test(p)) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-session-by-id-transcript", "conversation") };
     if (/\/session\/[^/]+\/pending$/.test(p)) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-session-by-id-pending", "none") };
     if (p.endsWith("/pending")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-pending", "ok") };
     if (p.endsWith("/rigs")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-rigs", "ok") };

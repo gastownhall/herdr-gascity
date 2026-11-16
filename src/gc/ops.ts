@@ -58,14 +58,25 @@ export function listSessions(
   return c.call("get-v0-city-by-city-name-sessions", { path: { cityName: city }, query });
 }
 
-/** GET one session; `peek` adds its last output. */
-export function getSession(
+/** GET one session. */
+export function getSession(c: GcClient, city: string, id: string) {
+  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id } });
+}
+
+/**
+ * GET a session's conversation (format "conversation", from its session log)
+ * or, for a session without one, a capture of its terminal (format "text":
+ * one "output" turn, no ids). `tail` is a number of compaction segments
+ * (omitted: the whole log); `after` returns the entries after that entry id
+ * and is answered 409 transcript-cursor-invalidated once gc no longer has it.
+ */
+export function getSessionTranscript(
   c: GcClient,
   city: string,
   id: string,
-  query: Pick<Query<"get-v0-city-by-city-name-session-by-id">, "peek" | "peek_lines"> = {},
+  query: Pick<Query<"get-v0-city-by-city-name-session-by-id-transcript">, "tail" | "after">,
 ) {
-  return c.call("get-v0-city-by-city-name-session-by-id", { path: { cityName: city, id }, query });
+  return c.call("get-v0-city-by-city-name-session-by-id-transcript", { path: { cityName: city, id }, query });
 }
 
 /** GET every pending interaction in a city. */

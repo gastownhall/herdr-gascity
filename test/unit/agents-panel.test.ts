@@ -7,6 +7,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { findById, loadMod, textOf } from "../harness.ts";
 import { BASE, gc, running, text } from "./panel-fixture.ts";
+import { fixtureBody } from "./sync/fakes.ts";
 
 describe("the copy's lifecycle", () => {
   test("init starts discovery and one periodic timer of 250 ms; no city request before the first tick", async () => {
@@ -110,6 +111,24 @@ describe("agents panel", () => {
     expect(text(root, "gascity-detail-pending-0")).toBe("Pending prompt: this session's provider has none");
     mod.click("gascity-detail-close");
     expect(findById(mod.render(), "gascity-detail")).toBeUndefined();
+  });
+
+  test("a session's conversation shows each turn under its role, oldest first, and says when older turns are not shown", async () => {
+    const base = gc();
+    const conversation = {
+      ...(fixtureBody("get-v0-city-by-city-name-session-by-id-transcript", "conversation") as object),
+      pagination: { has_older_messages: true, total_message_count: 9, returned_message_count: 2, total_compactions: 1 },
+    };
+    const mod = await running({ route: (url) => (new URL(url).pathname.endsWith("/transcript") ? { status: 200, body: conversation } : base(url)) });
+    findById(mod.render(), "gascity-agent-0-1-session-0")!.handlers.on_click!({}, mod.cx);
+    for (let i = 0; i < 3; i++) await mod.tick();
+    const root = mod.render();
+    expect(text(root, "gascity-detail-older")).toBe("older turns are not shown");
+    expect(text(root, "gascity-detail-turn-0")).toBe("user · 2026-11-16T17:20:00Z");
+    expect(text(root, "gascity-detail-line-0")).toBe("fix the login test");
+    expect(text(root, "gascity-detail-turn-1")).toBe("assistant · 2026-11-16T17:20:04Z");
+    expect(text(root, "gascity-detail-line-1")).toBe("Looking at the test first.");
+    expect(text(root, "gascity-detail-line-2")).toBe("[Bash]");
   });
 
   test("a failing read keeps the last data, greyed, with the error above it", async () => {

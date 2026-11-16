@@ -23,7 +23,7 @@ import { View } from "gpui-kit";
 import { InputState } from "gpui-base";
 import {
   closeWindow, execGcStatus, hostFetch, logError, missingHostExports, nextCommand, openAttachTab, postNeedsYou, probeIo, readExecLog,
-  readFocusTarget, readHerdrVersion, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTerminalScene,
+  readFocusTarget, readHerdrVersion, readOwnPins, writeOwnPins, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTerminalScene,
   readTheme, readVisibility, rememberCity, selectTab, setProbeEnabled, setWindowOpen, storeGcBin,
 } from "./host.ts";
 import { sharedCommandBook } from "./commandBook.ts";
@@ -73,6 +73,7 @@ function registry(): SyncRegistry {
     fetch: hostFetch,
     onError: (key, entry) => logError(`gascity: ${key.city}: ${entry.source}: ${syncErrorText(entry.error)}`),
     onNeedsYou: postNeedsYou,
+    pins: { read: readOwnPins, write: writeOwnPins },
   }));
 }
 

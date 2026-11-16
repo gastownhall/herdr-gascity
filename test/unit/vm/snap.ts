@@ -3,6 +3,7 @@
 
 import type { GcError } from "../../../src/gc/errors.ts";
 import type * as T from "../../../src/gc/types.gen.ts";
+import type { Transcript } from "../../../src/sync/transcript.ts";
 import type {
   AgentList, CitySnapshot, DetailState, PendingList, RigList, SessionList, Slot, WorkList,
 } from "../../../src/sync/store.ts";
@@ -66,7 +67,7 @@ export function snapshot(parts: {
   pending?: Slot<PendingList>;
   ready?: Slot<WorkList>;
   inProgress?: Slot<WorkList>;
-  peeks?: Map<string, Slot<T.SessionResponse>>;
+  transcripts?: Map<string, Slot<Transcript>>;
   details?: Map<string, DetailState>;
   beads?: Map<string, Slot<T.Bead>>;
   recent?: { seq: number; bead: T.Bead }[];
@@ -94,7 +95,7 @@ export function snapshot(parts: {
     ready: parts.ready ?? slot({ items: [], unreadable: [] }),
     inProgress: parts.inProgress ?? slot({ items: [], unreadable: [] }),
     closed: { seed: parts.seed ?? slot({ items: [], unreadable: [] }), recent: parts.recent ?? [], incomplete: parts.incomplete ?? false, hidden: parts.hiddenClosed ?? 0 },
-    peeks: parts.peeks ?? new Map(),
+    transcripts: parts.transcripts ?? new Map(),
     details: parts.details ?? new Map(),
     beads: parts.beads ?? new Map(),
     errors: parts.errors ?? [],

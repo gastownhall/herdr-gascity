@@ -99,6 +99,17 @@ export const OPERATIONS = {
     response: S.SessionPendingResponseSchema,
     item: null,
   },
+  "get-v0-city-by-city-name-session-by-id-transcript": {
+    method: "GET",
+    path: "/v0/city/{cityName}/session/{id}/transcript",
+    pathParams: ["cityName","id"],
+    csrf: false,
+    idempotencyKey: false,
+    body: null,
+    success: 200,
+    response: S.SessionTranscriptGetResponseSchema,
+    item: null,
+  },
   "get-v0-city-by-city-name-work-ready": {
     method: "GET",
     path: "/v0/city/{cityName}/work/ready",
@@ -395,6 +406,12 @@ export interface OperationTypes {
     query: {};
     body: undefined;
     decoded: T.SessionPendingResponse;
+  };
+  "get-v0-city-by-city-name-session-by-id-transcript": {
+    path: { cityName: string; id: string; };
+    query: { "tail"?: string; "format"?: "conversation" | "raw" | "structured"; "include_thinking"?: boolean; "before"?: string; "after"?: string; };
+    body: undefined;
+    decoded: T.SessionTranscriptGetResponse;
   };
   "get-v0-city-by-city-name-work-ready": {
     path: { cityName: string; };

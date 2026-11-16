@@ -32,9 +32,12 @@ export function gc(overrides: Record<string, FakeReply> = {}) {
     if (p.endsWith("/sessions")) {
       return { status: 200, body: fixtureBody("get-v0-city-by-city-name-sessions", u.searchParams.get("wake_reasons") === "true" ? "wake-reasons" : "ok") };
     }
+    if (/\/session\/[^/]+\/transcript$/.test(p)) {
+      return { status: 200, body: { ...(fixtureBody("get-v0-city-by-city-name-session-by-id-transcript", "text") as object), turns: [{ role: "output", text: "\u001b[1mCANARY READY\u001b[0m\nsecond line" }] } };
+    }
     if (/\/session\/[^/]+\/pending$/.test(p)) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-session-by-id-pending", "none") };
     if (/\/session\/[^/]+$/.test(p)) {
-      return { status: 200, body: { ...(fixtureBody("get-v0-city-by-city-name-session-by-id", "peek") as object), last_output: "\u001b[1mCANARY READY\u001b[0m\nsecond line" } };
+      return { status: 200, body: fixtureBody("get-v0-city-by-city-name-session-by-id", "peek") };
     }
     const bead = /\/bead\/([^/]+)$/.exec(p);
     if (bead) return { status: 200, body: recordedBead(decodeURIComponent(bead[1] ?? "")) };

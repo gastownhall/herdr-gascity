@@ -42,6 +42,8 @@ export function syncErrorText(e: SyncError): string {
       return `discovery made no progress for ${Math.round(e.idleMs / 1000)} s and was started again`;
     case "tick-crashed":
       return cleanLine(`a periodic update failed: ${e.message}`);
+    case "pin-book-unreadable":
+      return `${e.entries} of the keep-awake pin records could not be read and were left as they are`;
     case "step-stalled":
       return `a refresh step made no progress for ${Math.round(e.idleMs / 1000)} s and was abandoned`;
     default:

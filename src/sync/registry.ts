@@ -39,6 +39,7 @@ import { Endpoint, type EndpointListener } from "./endpoint.ts";
 import type { Domain } from "./invalidate.ts";
 import { CitiesPoller, type CitiesSnapshot } from "./cities.ts";
 import { NeedsYouNotifier, type NeedsYou, type NeedsYouBatch } from "../notify/needsYou.ts";
+import { KeepAwake, type KeepAwakeState, type PinBook } from "./keepAwake.ts";
 import { CityStore, type CityKey, type CitySnapshot, type ErrorEntry, type EventBatch } from "./store.ts";
 
 /** How often each copy should call `tick()`: the granularity of the 300 ms debounce and of "retry now". */
@@ -61,6 +62,8 @@ export interface SyncDeps {
    * (tried again later) and why (kept in the store's diagnostics).
    */
   onNeedsYou?: (batch: NeedsYouBatch) => { failed: readonly NeedsYou[]; errors: readonly string[] };
+  /** The pins keep-awake made (keepAwake.ts), in herdr's shared state; default none kept (no keep-awake across restarts). */
+  pins?: PinBook;
 }
 
 /** One copy's subscription to one city store. */
@@ -74,8 +77,14 @@ export interface Subscription {
    * rev, so the copy can notify when it changed.
    */
   tick(): number;
-  /** Watches a session's detail (output, wake reasons, pending prompt); returns the release. Released on unsubscribe too. */
+  /**
+   * Watches a session's detail (transcript, wake reasons, pending prompt) and
+   * keeps the session awake while it is watched (keepAwake.ts); returns the
+   * release. Released on unsubscribe too.
+   */
   watchPeek(sessionId: string): () => void;
+  /** What keep-awake did for a watched session; null when no copy watches it. */
+  keepAwake(sessionId: string): KeepAwakeState | null;
   /** Watches a bead (an open bead detail): fetched by id, and again on an event about it; returns the release. Released on unsubscribe too. */
   watchBead(beadId: string): () => void;
   /** Refetches a watched session's output, wake reasons and pending prompt at the next tick. */
@@ -138,18 +147,40 @@ function storeId(apiUrl: string, city: string): string {
   return `${apiUrl}\u0000${city}`;
 }
 
+/** One city's shared state. */
+interface StoreEntry {
+  store: CityStore;
+  ledger: ActionLedger;
+  notifier: NeedsYouNotifier;
+  keepAwake: KeepAwake;
+  subs: number;
+}
+
+/** A pin book that keeps nothing: tests and hosts without shared state. */
+function memoryBook(): PinBook {
+  let value: unknown;
+  return {
+    read: () => value,
+    write: (v) => {
+      value = v;
+    },
+  };
+}
+
 /** The app's shared city stores. */
 export class SyncRegistry {
   private readonly budget: FetchBudget;
   private readonly clock: Clock;
   private readonly random: () => number;
   private readonly endpoints = new Map<string, Endpoint>();
-  private readonly stores = new Map<string, { store: CityStore; ledger: ActionLedger; notifier: NeedsYouNotifier; subs: number }>();
+  private readonly stores = new Map<string, StoreEntry>();
   private readonly pollers = new Map<string, { poller: CitiesPoller; subs: number }>();
   private readonly listeners = new Set<(batch: EventBatch) => void>();
   private onScreen = false;
+  private readonly pins: PinBook;
 
   constructor(private readonly deps: SyncDeps) {
+    this.pins = deps.pins ?? memoryBook();
     this.clock = deps.clock ?? systemClock;
     this.budget = new FetchBudget(deps.fetch, this.clock);
     this.random = deps.random ?? Math.random;
@@ -183,11 +214,20 @@ export class SyncRegistry {
         refreshBead: (beadId) => store.refreshBead(beadId),
         newKey: this.deps.newKey ?? (() => newIdempotencyKey()),
       });
-      entry = { store, ledger, notifier: new NeedsYouNotifier(key.city), subs: 0 };
+      const keepAwake = new KeepAwake({
+        key: store.key,
+        book: this.pins,
+        clock: this.clock,
+        start: (owner, spec) => ledger.start(owner, spec),
+        action: (actionId) => ledger.snapshot().entries.find((e) => e.id === actionId),
+        wake: (sessionId) => store.snapshot().details.get(sessionId)?.wakeReasons,
+        onUnreadable: (entries) => store.noteError("keep-awake", { kind: "pin-book-unreadable", entries }),
+      });
+      entry = { store, ledger, notifier: new NeedsYouNotifier(key.city), keepAwake, subs: 0 };
       this.stores.set(id, entry);
     }
     entry.subs++;
-    return ok(this.subscription(id, entry.store, entry.ledger, entry.notifier, endpoint.value));
+    return ok(this.subscription(id, entry, endpoint.value));
   }
 
   /** Subscribes a copy to a loopback gc API's shared city list; `not-loopback` otherwise. */
@@ -296,7 +336,8 @@ export class SyncRegistry {
     this.endpoints.delete(endpoint.baseUrl);
   }
 
-  private subscription(id: string, store: CityStore, ledger: ActionLedger, notifier: NeedsYouNotifier, endpoint: Endpoint): Subscription {
+  private subscription(id: string, entry: StoreEntry, endpoint: Endpoint): Subscription {
+    const { store, ledger, notifier, keepAwake } = entry;
     const owner = {};
     const watches = new Set<() => void>();
     let active = true;
@@ -307,13 +348,17 @@ export class SyncRegistry {
       watches.clear();
       ledger.ownerGone(owner);
       store.abandonStartedBy(owner);
-      const entry = this.stores.get(id);
-      if (entry && --entry.subs <= 0) {
+      if (this.stores.get(id) === entry && --entry.subs <= 0) {
         this.stores.delete(id);
+        keepAwake.dispose();
         ledger.dispose();
         store.dispose();
         this.releaseEndpoint(endpoint, store);
       }
+    };
+    /** A person's own pin or unpin (or retry of one) takes the session over from keep-awake. */
+    const disownOnPin = (spec: ActionSpec) => {
+      if ((spec.kind === "session.pin" || spec.kind === "session.unpin") && spec.target.kind === "session") keepAwake.disown(spec.target.id);
     };
     /** Tracks a store watch so the unsubscribe releases it. */
     const watch = (release: () => void) => {
@@ -332,6 +377,7 @@ export class SyncRegistry {
           this.budget.reclaim();
           store.tick(owner);
           ledger.tick(owner);
+          keepAwake.tick(owner);
           const s = store.snapshot();
           const now = this.clock.now();
           const batch = notifier.observe(s.pending.value, s.sessions.value, now);
@@ -343,7 +389,16 @@ export class SyncRegistry {
         }
         return store.snapshot().rev;
       },
-      watchPeek: (sessionId) => (active ? watch(store.watchPeek(sessionId)) : () => {}),
+      watchPeek: (sessionId) => {
+        if (!active) return () => {};
+        const release = store.watchPeek(sessionId);
+        keepAwake.open(sessionId);
+        return watch(() => {
+          release();
+          keepAwake.release(sessionId);
+        });
+      },
+      keepAwake: (sessionId) => keepAwake.state(sessionId),
       watchBead: (beadId) => (active ? watch(store.watchBead(beadId)) : () => {}),
       refreshDetail: (sessionId) => {
         if (active) store.refreshDetail(sessionId);
@@ -355,8 +410,17 @@ export class SyncRegistry {
         if (active) store.refresh(domains);
       },
       client: () => endpoint.client("mutation"),
-      act: (spec, key) => (active ? ledger.start(owner, spec, key) : -1),
-      retryAction: (actionId) => (active ? ledger.retry(owner, actionId, store.snapshot()) : err("this view has closed")),
+      act: (spec, key) => {
+        if (!active) return -1;
+        disownOnPin(spec);
+        return ledger.start(owner, spec, key);
+      },
+      retryAction: (actionId) => {
+        if (!active) return err("this view has closed");
+        const spec = ledger.snapshot().entries.find((e) => e.id === actionId)?.spec;
+        if (spec) disownOnPin(spec);
+        return ledger.retry(owner, actionId, store.snapshot());
+      },
       refreshAction: (actionId) => {
         if (active) ledger.refreshFor(actionId);
       },

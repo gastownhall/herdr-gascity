@@ -105,6 +105,20 @@ export function sessionPin(id: string): ActionSpec {
     (c, city) => then(ops.pinSession(c, city, id), (s) => ({ kind: "done", detail: sessionDetail(s) })));
 }
 
+/**
+ * Keep-awake's pin of a session whose pane is open (sync/keepAwake.ts). It
+ * refetches nothing: the pane has just read the session, and its wake reasons
+ * cost gc a runtime probe.
+ */
+export function keepAwakePin(id: string): ActionSpec {
+  return { ...sessionPin(id), verb: "Keep awake", refresh: [], refreshesDetail: false };
+}
+
+/** Keep-awake's unpin of a session it pinned, once no pane of it is open. Refetches nothing. */
+export function keepAwakeUnpin(id: string): ActionSpec {
+  return { ...sessionUnpin(id), verb: "Release keep-awake", refresh: [], refreshesDetail: false };
+}
+
 /** Clears the session's pin. gc declares no Idempotency-Key here. */
 export function sessionUnpin(id: string): ActionSpec {
   return spec("session.unpin", "Unpin", id, "post-v0-city-by-city-name-session-by-id-unpin", LIFECYCLE, null,

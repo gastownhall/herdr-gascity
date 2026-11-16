@@ -2,7 +2,8 @@
 // (each one gc API call; close and kill ask first; Open terminal wakes it
 // through gc, then opens a herdr tab attached to it), facts, wake reasons, the
 // pending prompt with one answer button per option gc lists, the send box,
-// and its output as plain text, one element per line (no markdown, no links).
+// and its conversation as plain text: each turn under its role, one element
+// per line (no markdown, no links).
 // An action already under way shows as waiting instead of a button.
 
 import { div } from "gpui-kit";
@@ -110,7 +111,8 @@ export function renderDetail(m: DetailModel, theme: ThemeRead, actions: DetailAc
     .child(label("gascity-detail-status", m.status.detail === null ? m.status.label : `${m.status.label} · ${m.status.detail}`))
     .child(actionBar(m.ref, m.noTerminal, ctx, theme, actions))
     .child(muted(label("gascity-detail-facts", m.facts.map(([k, v]) => `${k}: ${v}`).join(" · ")), theme))
-    .child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`));
+    .child(label("gascity-detail-wake", `Wake reasons: ${m.wakeReasons}`))
+    .child(label("gascity-detail-keep-awake", m.keepAwake));
   pendingText(m.pending).forEach((t, i) => {
     el = el.child(label(`gascity-detail-pending-${i}`, t));
   });
@@ -121,11 +123,18 @@ export function renderDetail(m: DetailModel, theme: ThemeRead, actions: DetailAc
   let output = v_flex().id("gascity-detail-output").gap(0);
   if (out.region.age !== null) output = output.child(muted(label("gascity-detail-output-age", `output, ${out.region.age}`), theme));
   if (out.region.error !== null) output = output.child(label("gascity-detail-output-error", out.region.error));
-  if (out.text === null) {
+  if (out.turns === null) {
     output = output.child(muted(label("gascity-detail-output-loading", out.region.kind === "failed" ? "no output" : "loading output…"), theme));
+  } else if (out.turns.length === 0) {
+    output = output.child(muted(label("gascity-detail-output-empty", "(no output)"), theme));
   } else {
+    if (out.olderHidden) output = output.child(muted(label("gascity-detail-older", "older turns are not shown"), theme));
     // One element per line: the text is shown as is, never interpreted.
-    output = output.children(out.text.split("\n").map((line, i) => label(`gascity-detail-line-${i}`, line)));
+    let line = 0;
+    out.turns.forEach((t, i) => {
+      if (t.role !== null) output = output.child(muted(label(`gascity-detail-turn-${i}`, t.time === null ? t.role : `${t.role} · ${t.time}`), theme));
+      for (const text of t.lines) output = output.child(label(`gascity-detail-line-${line++}`, text));
+    });
   }
   return el.child(greyedIf(output, out.region.stale, theme));
 }

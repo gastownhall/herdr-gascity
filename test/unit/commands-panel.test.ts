@@ -56,6 +56,9 @@ const mutations = (mod: Mod) => mod.fetched
     return { path: u.pathname, query: u.search, body: init.body === undefined ? null : JSON.parse(init.body), key: key === undefined ? "none" : UUID.test(key) ? "uuid" : key };
   });
 
+/** The mutations a person's input sent: `mutations` without keep-awake's pins and unpins of the panes it opened (sync/keepAwake.ts). */
+const sends = (mod: Mod) => mutations(mod).filter((m) => !/\/session\/[^/]+\/(pin|unpin)$/.test(m.path));
+
 /** The activity log's rows as drawn. */
 const activity = (mod: Mod) => {
   const node = findById(mod.render(), "gascity-activity");
@@ -665,7 +668,7 @@ describe("keys never fire while a text box holds the keyboard; Send goes to the 
     expect(text(mod.render(), "gascity-detail-title")).not.toBe("Detail: frontend/builder / frontend/builder");
     await ticks(mod);
     drawn.handlers.on_click!({}, mod.cx);
-    expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/submit"]);
+    expect(sends(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/submit"]);
   });
 });
 
@@ -691,6 +694,31 @@ describe("a stale window flag", () => {
   });
 });
 
+describe("keep awake", () => {
+  test("opening a running, unpinned session pins it and says so; opening another releases it; the log names both", async () => {
+    const w = world();
+    const mod = await running({ route: (url, req) => {
+      if ((req as Req).method === "POST" && /\/session\/[^/]+\/(pin|unpin)$/.test(new URL(url).pathname)) {
+        return { status: 200, body: fixtureBody(`post-v0-city-by-city-name-session-by-id-${new URL(url).pathname.endsWith("/unpin") ? "unpin" : "pin"}`, "ok") };
+      }
+      return w.route(url, req as Req);
+    } });
+    const sc5 = ids(mod.render()).filter((id) => /^gascity-agent-\d+-\d+-session-\d+$/.test(id)).find((id) => id !== "gascity-agent-0-1-session-0");
+    mod.click(sc5!);
+    await ticks(mod, 8);
+    expect(text(mod.render(), "gascity-detail-keep-awake")).toBe("Keep awake: pinned by this pane until it closes");
+    const pinned = mutations(mod).map((m) => m.path).filter((p) => p.endsWith("/pin"));
+    expect(pinned).toHaveLength(1);
+    await openSession(mod);
+    await ticks(mod, 8);
+    // sc-6 is not in gc's wake-reasons list for its template: whether it is pinned cannot be read.
+    expect(text(mod.render(), "gascity-detail-keep-awake")).toContain("not pinned");
+    expect(mutations(mod).map((m) => m.path).filter((p) => p.endsWith("/unpin"))).toEqual([pinned[0]!.replace(/pin$/, "unpin")]);
+    expect(activity(mod).some((row) => row.includes("Keep awake"))).toBe(true);
+    expect(activity(mod).some((row) => row.includes("Release keep-awake"))).toBe(true);
+  });
+});
+
 describe("a draft belongs to its session", () => {
   /** The window copy's send box: each copy makes 7 inputs, the send box first. */
   const box = (mod: Mod, copyIndex: number) => mod.inputs[copyIndex * 7]!;
@@ -713,7 +741,7 @@ describe("a draft belongs to its session", () => {
     expect(text(win.render(), "gascity-detail-title")).toBe("Detail: frontend/builder / frontend/builder");
     expect(text(win.render(), "gascity-window-next")).toBe("Session sc-20 in city scratch needs you too. [Show]");
     box(mod, 1).submit(win.cx);
-    expect(mutations(mod).map((m) => [m.path, m.body])).toEqual([["/v0/city/scratch/session/sc-6/submit", { message: "yes, run them", intent: "default" }]]);
+    expect(sends(mod).map((m) => [m.path, m.body])).toEqual([["/v0/city/scratch/session/sc-6/submit", { message: "yes, run them", intent: "default" }]]);
     // The draft is gone: the window may move on, and does when asked.
     win.click("gascity-window-next-show");
     for (let i = 0; i < 3; i++) await win.tick();
@@ -739,7 +767,7 @@ describe("a draft belongs to its session", () => {
     expect(text(win.render(), "gascity-detail-title")).toBe("Detail: worker-adhoc-88210e2896 / worker-adhoc-88210e2896");
     box(mod, 1).submit(win.cx);
     win.click("gascity-send-default");
-    expect(mutations(mod)).toEqual([]);
+    expect(sends(mod)).toEqual([]);
     expect(text(win.render(), "gascity-notice")).toBe("this text was typed for session sc-6: open that session to send it, or clear the box");
   });
 
@@ -768,11 +796,11 @@ describe("a draft belongs to its session", () => {
     mod.click(other!);
     await ticks(mod);
     box(mod, 0).submit(mod.cx);
-    expect(mutations(mod)).toEqual([]);
+    expect(sends(mod)).toEqual([]);
     expect(text(mod.render(), "gascity-notice")).toBe("this text was typed for session sc-6: open that session to send it, or clear the box");
     await openSession(mod);
     box(mod, 0).submit(mod.cx);
-    expect(mutations(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/submit"]);
+    expect(sends(mod).map((m) => m.path)).toEqual(["/v0/city/scratch/session/sc-6/submit"]);
   });
 
   test("a draft typed while the open session is unlisted stays bound to it: Send in another session's detail posts nothing", async () => {
@@ -790,7 +818,7 @@ describe("a draft belongs to its session", () => {
     await ticks(mod);
     mod.click("gascity-send-default");
     box(mod, 0).submit(mod.cx);
-    expect(mutations(mod)).toEqual([]);
+    expect(sends(mod)).toEqual([]);
     expect(text(mod.render(), "gascity-notice")).toBe("this text was typed for session sc-6: open that session to send it, or clear the box");
   });
 });

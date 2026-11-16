@@ -24,7 +24,7 @@ describe("probeDocument", () => {
       sessions: slot(sessions([session("s-1", "w", { program_status: { state: "working", since: "t", working_children: 0 }, active_bead: "fe-1" }), session("s-9", "x")])),
       ready: slot({ items: [ready("fe-1", "fix login", { priority: 1 }), ready("s-x", "a session bead", { issue_type: "session" })], unreadable: [] }),
       seed: slot({ items: [ready("fe-0", "older", { status: "closed", close_reason: "dup\u0007" })], unreadable: [] }),
-      peeks: new Map([["s-1", slot(session("s-1", "w", { last_output: "CANARY READY canary-1" }))]]),
+      transcripts: new Map([["s-1", slot({ format: "text" as const, turns: [{ role: "output", text: "CANARY READY canary-1" }], olderHidden: false })]]),
       recent: [{ seq: 7, bead: bead("fe-2", "done thing", { status: "closed", close_reason: "canary n1", assignee: "w" }) }],
       beads: new Map([["fe-2", slot(bead("fe-2", "done thing", { status: "closed", close_reason: "canary n1", description: "the canary's bead" }))]]),
     });

@@ -338,6 +338,7 @@ export class CopyController {
     const signature = [
       this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.city?.activity().rev ?? -1, this.onScreen, this.selected,
       this.selectedBead, this.notice ?? "", this.gascityTabs.join(","), this.focusShown?.session ?? "", this.focusNext?.session ?? "",
+      this.selected !== null ? JSON.stringify(this.city?.keepAwake(this.selected) ?? null) : "",
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -374,7 +375,7 @@ export class CopyController {
       agents,
       board,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
-      detail: s ? detailModel({ snapshot: s, now, selected: this.selected }) : { kind: "none" },
+      detail: s ? detailModel({ snapshot: s, now, selected: this.selected, keepAwake: this.selected !== null ? this.city?.keepAwake(this.selected) ?? null : null }) : { kind: "none" },
       activity: this.city ? activityModel(this.city.activity(), s, now) : null,
       dialog: this.dialog(),
       notice: this.notice,

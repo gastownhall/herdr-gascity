@@ -1,0 +1,35 @@
+{
+  "provenance": "synthesized: the scratch city's subprocess provider keeps no session log, so gc answers its transcript as a terminal capture (format text, see text.json). Body per gc c7eb6d2f internal/api/handler_session_transcript.go handleSessionTranscript (format conversation: turns from entryToTurn, entry UUID as id, empty-text turns dropped, the log's pagination); validated against the pin like every fixture.",
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/session/sc-20/transcript",
+    "query": "tail=1"
+  },
+  "status": 200,
+  "body": {
+    "id": "sc-20",
+    "template": "worker",
+    "provider": "claude",
+    "format": "conversation",
+    "turns": [
+      {
+        "id": "4f0b2c1e-0000-4000-8000-000000000001",
+        "role": "user",
+        "text": "fix the login test",
+        "timestamp": "2026-11-16T17:20:00Z"
+      },
+      {
+        "id": "4f0b2c1e-0000-4000-8000-000000000002",
+        "role": "assistant",
+        "text": "Looking at the test first.\n[Bash]",
+        "timestamp": "2026-11-16T17:20:04Z"
+      }
+    ],
+    "pagination": {
+      "has_older_messages": false,
+      "total_message_count": 2,
+      "returned_message_count": 2,
+      "total_compactions": 0
+    }
+  }
+}
