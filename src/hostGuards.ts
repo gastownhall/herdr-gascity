@@ -27,7 +27,10 @@ export function probePathIssue(path: string, appHome: string): string | null {
 /** http(s), a loopback host, an optional port and path; no whitespace or control characters. */
 const LOCAL_WEB_URL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?(\/[^\s\u0000-\u001f\u007f]*)?$/i;
 
-/** Why `url` may not be handed to xdg-open/open, or null: only http(s) URLs on this computer (the gc dashboard). */
-export function openUrlIssue(url: string): string | null {
-  return LOCAL_WEB_URL.test(url) ? null : `refused: only http(s) URLs on this computer are opened, not ${JSON.stringify(url)}`;
+/** Why `url` may not be handed to xdg-open/open, or null: http(s) URLs on this computer (the gc dashboard), or under the configured web dashboard. */
+export function openUrlIssue(url: string, dashboardUrl: string | null = null): string | null {
+  if (LOCAL_WEB_URL.test(url)) return null;
+  // The configured web dashboard (gascity.settings dashboardUrl, an https origin): a URL under it, with no control characters or whitespace.
+  if (dashboardUrl !== null && /^https:\/\//.test(dashboardUrl) && url.startsWith(`${dashboardUrl.replace(/\/+$/, "")}/`) && !/[\s\u0000-\u001f\u007f]/.test(url)) return null;
+  return `refused: only http(s) URLs on this computer${dashboardUrl !== null ? ` or under ${dashboardUrl}` : ""} are opened, not ${JSON.stringify(url)}`;
 }

@@ -61,7 +61,7 @@ const CASES: [string, (c: GcClient) => Promise<unknown>, string, string][] = [
     "/v0/city/my-city/work/ready?status=closed&sort=newest&limit=20&exclude_type=session"],
   ["getBead", (c) => ops.getBead(c, C, "fe-1"), "GET", "/v0/city/my-city/bead/fe-1"],
   ["getCityStatus", (c) => ops.getCityStatus(c, C), "GET", "/v0/city/my-city/status"],
-  ["listHumanBeads", (c) => ops.listHumanBeads(c, C, { limit: 50 }), "GET", "/v0/city/my-city/beads?label=human&status=open&limit=50"],
+  ["listOpenBeads", (c) => ops.listOpenBeads(c, C, { label: "needs/operator", limit: 50 }), "GET", "/v0/city/my-city/beads?label=needs%2Foperator&limit=50&status=open"],
   ["pollEvents", (c) => ops.pollEvents(c, C, { limit: 50 }), "GET", "/v0/city/my-city/events?limit=50"],
   ["getRequestOutcome", (c) => ops.getRequestOutcome(c, C, "req-1", "220"), "GET", "/v0/city/my-city/request/req-1?after_seq=220"],
   ["createSession", (c) => ops.createSession(c, C, { kind: "agent", name: "worker" }, K), "POST", "/v0/city/my-city/sessions"],

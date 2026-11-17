@@ -94,6 +94,23 @@ describe("openAttachTab: tab.new runs only an attach argv", () => {
   });
 });
 
+describe("openUrl: a URL under the configured web dashboard", () => {
+  const MDASH = "https://mdash.example.com";
+  test("is opened", async () => {
+    expect(await host.openUrl("open", `${MDASH}/city/maintainer-city/beads?bead=ga-1`, MDASH)).toEqual({ ok: true, value: null });
+  });
+
+  for (const url of [`${MDASH}.evil.com/`, "https://mdash.example.co/", `${MDASH}/a b`, `${MDASH}`, "https://evil.com/?u=https://mdash.example.com/"]) {
+    test(`refuses ${JSON.stringify(url)}`, async () => {
+      expect(openUrlIssue(url, MDASH)).not.toBeNull();
+    });
+  }
+
+  test("without a dashboard set, only this computer", () => {
+    expect(openUrlIssue(`${MDASH}/x`)).not.toBeNull();
+  });
+});
+
 describe("openUrl: the platform opener gets only an http(s) URL on this computer", () => {
   test("the dashboard URL is opened", async () => {
     expect(await host.openUrl("xdg-open", "http://127.0.0.1:8372/dashboard")).toEqual({ ok: true, value: null });

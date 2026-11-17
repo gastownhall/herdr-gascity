@@ -101,3 +101,18 @@ describe("the Needs you tab", () => {
     expect(findById(root, "gascity-agents")).toBeUndefined();
   });
 });
+
+describe("links to the web dashboard", () => {
+  test("none without a dashboardUrl; with one, decisions and the pane link into it", async () => {
+    const none = await running({ route: route(), props: { view: "inbox" } }, 8);
+    expect(findById(none.render(), "gascity-inbox-1-0-mdash")).toBeUndefined();
+    const mod = await running({ route: route(), props: { view: "inbox" }, shared: { "gascity.settings": { dashboardUrl: "https://mdash.example.com" } } }, 8);
+    const root = mod.render();
+    expect(text(root, "gascity-inbox-mdash")).toBe("Open mdash ↗");
+    expect(text(root, "gascity-inbox-1-0-sub")).toContain("human");
+    mod.click("gascity-inbox-1-0-mdash");
+    await mod.settle();
+    const opened = mod.herdrCalls.filter((c) => c.name === "exec").map((c) => c.args.slice(0, 2));
+    expect(opened.at(-1)).toEqual([expect.stringMatching(/^(open|xdg-open)$/), ["https://mdash.example.com/city/scratch/beads?bead=sc-90"]]);
+  });
+});

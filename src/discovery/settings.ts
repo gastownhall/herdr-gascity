@@ -20,12 +20,16 @@ export interface Settings {
   apiUrl: string | null;
   /** The gc program: "gc" or an absolute path to it. */
   gcBin: string;
+  /** The web dashboard (mdash) to link to, e.g. https://mdash.example.com; null: no links. */
+  dashboardUrl: string | null;
 }
 
 /** A change to the stored settings; `apiUrl: null` clears it. */
 export interface SettingsPatch {
   apiUrl?: string | null;
   gcBin?: string;
+  /** null clears it. */
+  dashboardUrl?: string | null;
 }
 
 type HostDecodeError = Extract<GcError, { kind: "host-decode" }>;
@@ -46,15 +50,23 @@ export function gcBinIssue(gcBin: string): string | null {
   return GC_BIN.test(gcBin) ? null : `must be "gc" or an absolute path to a program named gc, not ${JSON.stringify(gcBin)}`;
 }
 
+/** https, a host, an optional port and path; no query, fragment, credentials, whitespace or control characters. */
+const DASHBOARD_URL = /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/;
+
+/** Why `url` may not be the dashboard the mod links to, or null: an https origin with an optional path. */
+export function dashboardUrlIssue(url: string): string | null {
+  return DASHBOARD_URL.test(url) ? null : `must be an https URL with no query or fragment, like https://mdash.example.com, not ${JSON.stringify(url)}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Reads the stored value; absent means the defaults. Unknown keys are ignored. */
 export function decodeSettings(raw: unknown): Result<Settings, HostDecodeError> {
-  if (raw === undefined || raw === null) return ok({ apiUrl: null, gcBin: DEFAULT_GC_BIN });
+  if (raw === undefined || raw === null) return ok({ apiUrl: null, gcBin: DEFAULT_GC_BIN, dashboardUrl: null });
   if (!isRecord(raw)) return err(invalid("", `expected an object, got ${JSON.stringify(raw)}`));
-  const { apiUrl, gcBin } = raw;
+  const { apiUrl, gcBin, dashboardUrl } = raw;
   if (apiUrl !== undefined && (typeof apiUrl !== "string" || apiUrl === "")) {
     return err(invalid("apiUrl", `expected a non-empty string, got ${JSON.stringify(apiUrl)}`));
   }
@@ -63,7 +75,12 @@ export function decodeSettings(raw: unknown): Result<Settings, HostDecodeError> 
     const issue = gcBinIssue(gcBin);
     if (issue) return err(invalid("gcBin", issue));
   }
-  return ok({ apiUrl: apiUrl ?? null, gcBin: gcBin ?? DEFAULT_GC_BIN });
+  if (dashboardUrl !== undefined) {
+    if (typeof dashboardUrl !== "string") return err(invalid("dashboardUrl", `expected a string, got ${JSON.stringify(dashboardUrl)}`));
+    const issue = dashboardUrlIssue(dashboardUrl);
+    if (issue) return err(invalid("dashboardUrl", issue));
+  }
+  return ok({ apiUrl: apiUrl ?? null, gcBin: gcBin ?? DEFAULT_GC_BIN, dashboardUrl: typeof dashboardUrl === "string" ? dashboardUrl.replace(/\/+$/, "") : null });
 }
 
 /**
@@ -85,6 +102,12 @@ export function patchSettings(raw: unknown, patch: SettingsPatch): Result<Record
     const issue = gcBinIssue(patch.gcBin);
     if (issue) return err(invalid("gcBin", issue));
     next["gcBin"] = patch.gcBin;
+  }
+  if (patch.dashboardUrl === null) delete next["dashboardUrl"];
+  else if (patch.dashboardUrl !== undefined) {
+    const issue = dashboardUrlIssue(patch.dashboardUrl);
+    if (issue) return err(invalid("dashboardUrl", issue));
+    next["dashboardUrl"] = patch.dashboardUrl.replace(/\/+$/, "");
   }
   return ok(next);
 }

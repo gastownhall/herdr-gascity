@@ -315,6 +315,8 @@ describe("the one allowlisted exec: gcBin supervisor status --json", () => {
       { file: "gascity/main.js", rule: "run-command", text: MOD_TAB },
       { file: "src/host.ts", rule: "exec-program", text: 'herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS })' },
       { file: "src/host.ts", rule: "exec-program", text: 'herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS })' },
+      { file: "gascity/main.js", rule: "exec-program", text: 'herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS })' },
+      { file: "gascity/main.js", rule: "exec-program", text: 'herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS })' },
       { file: "gascity/main.js", rule: "constructor-read", text: expect.stringMatching(/^const ctor = o\.constructor;/) },
     ]);
     for (const e of ALLOWLIST) expect(e.reason.length).toBeGreaterThan(40);

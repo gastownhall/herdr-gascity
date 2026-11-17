@@ -18,7 +18,7 @@
 // every bead event would cost a busy city a request per poll for nothing.
 
 import { eventBead } from "../gc/events.ts";
-import { HUMAN_LABEL } from "../gc/ops.ts";
+import { DECISION_TYPE, DEFAULT_DECISION_LABEL, HUMAN_LABEL } from "../gc/ops.ts";
 import type { TypedEventStreamEnvelope } from "../gc/types.gen.ts";
 
 /**
@@ -41,6 +41,8 @@ export interface KnownIds {
   sessionIds: ReadonlySet<string>;
   /** The beads the Needs-a-human list shows. */
   humanIds: ReadonlySet<string>;
+  /** The dashboard's decision label: a bead carrying it is on that list too. Default DEFAULT_DECISION_LABEL. */
+  decisionLabel?: string;
 }
 
 /** Whether a board change can add a bead to the Needs-a-human list or take one off it. */
@@ -48,7 +50,9 @@ function touchesHuman(e: TypedEventStreamEnvelope, known: KnownIds): boolean {
   if (e.subject !== undefined && known.humanIds.has(e.subject)) return true;
   const r = eventBead(e);
   if (!r.ok || r.value === null) return true;
-  return known.humanIds.has(r.value.id) || (r.value.labels ?? []).includes(HUMAN_LABEL);
+  const labels = r.value.labels ?? [];
+  return known.humanIds.has(r.value.id) || labels.includes(HUMAN_LABEL) || labels.includes(known.decisionLabel ?? DEFAULT_DECISION_LABEL)
+    || r.value.issue_type === DECISION_TYPE;
 }
 
 const SESSION_REFRESH = new Set(["request.failed", "worker.operation"]);

@@ -13,8 +13,9 @@
 
 import type { CitiesSnapshot } from "../sync/cities.ts";
 import type { CityNeeds, NeedsSnapshot } from "../sync/needs.ts";
-import { HUMAN_LABEL } from "../gc/ops.ts";
+import { DEFAULT_DECISION_LABEL, HUMAN_LABEL } from "../gc/ops.ts";
 import type * as T from "../gc/types.gen.ts";
+import { beadLink, cityLink } from "./dashboardLinks.ts";
 import { errorText } from "./errorText.ts";
 import { decisionOrder, since } from "./human.ts";
 import { cleanLine } from "./sanitize.ts";
@@ -27,7 +28,13 @@ export type Tone = "ok" | "warn" | "bad" | "off";
 /** Something waiting on a person, in one city. */
 export type NeedRow =
   | { kind: "question"; city: string; session: string; who: string; text: string; age: string | null }
-  | { kind: "decision"; city: string; bead: string; title: string; priority: string | null; labels: string[]; age: string | null };
+  | {
+    kind: "decision"; city: string; bead: string; title: string; priority: string | null; labels: string[]; age: string | null;
+    /** Why it is listed: "human", the decision label (e.g. "needs/operator"), "decision" (its type). */
+    why: string[];
+    /** The bead in the web dashboard; null without one set. */
+    link: string | null;
+  };
 
 export interface SidebarCity {
   name: string;
@@ -43,6 +50,8 @@ export interface SidebarCity {
   more: number;
   /** While expanded: the city's counts and health, one line each. */
   details: string[];
+  /** The city in the web dashboard; null without one set. */
+  link: string | null;
 }
 
 export interface SidebarModel {
@@ -55,6 +64,8 @@ export interface SidebarModel {
 }
 
 export interface SidebarInput {
+  /** The web dashboard to link to (settings dashboardUrl); null: no links. */
+  dashboardUrl?: string | null;
   cities: CitiesSnapshot | null;
   needs: NeedsSnapshot | null;
   expanded: ReadonlySet<string>;
@@ -72,7 +83,9 @@ function count(n: number): string {
 }
 
 /** One city's needs, questions first, as rows. */
-export function needRows(needs: CityNeeds | undefined, city: string, now: number): { questions: NeedRow[]; decisions: NeedRow[] } {
+export function needRows(
+  needs: CityNeeds | undefined, city: string, now: number, decisionLabel: string = DEFAULT_DECISION_LABEL, dashboardUrl: string | null = null,
+): { questions: NeedRow[]; decisions: NeedRow[] } {
   if (!needs) return { questions: [], decisions: [] };
   const questions: NeedRow[] = needs.waiting.map((w) => ({
     kind: "question",
@@ -83,7 +96,7 @@ export function needRows(needs: CityNeeds | undefined, city: string, now: number
     age: since(w.lastActive ?? undefined, now),
   }));
   const decisions: NeedRow[] = [...needs.human]
-    .filter((b) => b.status !== "closed" && (b.labels ?? []).includes(HUMAN_LABEL))
+    .filter((b) => b.status !== "closed" && (needs.reasons.get(b.id)?.length ?? 0) > 0)
     .sort(decisionOrder)
     .map((b) => ({
       kind: "decision",
@@ -91,8 +104,10 @@ export function needRows(needs: CityNeeds | undefined, city: string, now: number
       bead: cleanLine(b.id),
       title: cleanLine(b.title),
       priority: typeof b.priority === "number" ? `P${b.priority}` : null,
-      labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL).map(cleanLine),
+      labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL && l !== decisionLabel).map(cleanLine),
       age: since(b.created_at, now),
+      why: (needs.reasons.get(b.id) ?? []).map((r) => cleanLine(r === "operator" ? decisionLabel : r)),
+      link: beadLink(dashboardUrl, city, b.id),
     }));
   return { questions, decisions };
 }
@@ -136,7 +151,7 @@ export function sidebarModel(input: SidebarInput): SidebarModel {
   const cities = list.map((info): SidebarCity => {
     const name = cleanLine(info.name);
     const needs = input.needs?.cities.get(info.name);
-    const { questions, decisions } = needRows(needs, name, now);
+    const { questions, decisions } = needRows(needs, name, now, input.needs?.decisionLabel, input.dashboardUrl ?? null);
     const expanded = input.expanded.has(info.name);
     const shown = expanded ? decisions : decisions.slice(0, SIDEBAR_DECISIONS);
     const total = needs ? Math.max(needs.humanTotal, decisions.length) : 0;
@@ -150,6 +165,7 @@ export function sidebarModel(input: SidebarInput): SidebarModel {
       rows: [...questions, ...shown],
       more: total - shown.length,
       details: expanded ? detailsOf(info, needs) : [],
+      link: cityLink(input.dashboardUrl ?? null, name),
     };
   });
   // What waits on a person first (questions weigh most), then by name.
@@ -179,9 +195,12 @@ export interface InboxModel {
   /** Decisions gc has beyond the pages read. */
   notListed: number;
   note: string | null;
+  /** The web dashboard (narrowed to the city when one is chosen); null without one set. */
+  link: string | null;
 }
 
 export interface InboxInput {
+  dashboardUrl?: string | null;
   cities: CitiesSnapshot | null;
   needs: NeedsSnapshot | null;
   filter: InboxFilter;
@@ -197,7 +216,7 @@ export function inboxModel(input: InboxInput): InboxModel {
   let notListed = 0;
   for (const name of running) {
     const needs = input.needs?.cities.get(name);
-    const rows = needRows(needs, cleanLine(name), input.now);
+    const rows = needRows(needs, cleanLine(name), input.now, input.needs?.decisionLabel, input.dashboardUrl ?? null);
     const total = needs ? Math.max(needs.humanTotal, rows.decisions.length) : 0;
     const n = rows.questions.length + total;
     if (n > 0) byCity.push({ name: cleanLine(name), count: n });
@@ -219,5 +238,6 @@ export function inboxModel(input: InboxInput): InboxModel {
     groups,
     notListed: input.filter === "questions" ? 0 : notListed,
     note: pollError ? `gc not reachable: ${errorText(pollError)}` : input.needs === null || input.needs.rev === 0 ? "loading…" : null,
+    link: input.dashboardUrl == null ? null : input.city !== null ? cityLink(input.dashboardUrl, input.city) : `${input.dashboardUrl}/`,
   };
 }

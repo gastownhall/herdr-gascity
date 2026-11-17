@@ -25,11 +25,13 @@ function status(extra: Partial<T.StatusBody> = {}): T.StatusBody {
 }
 
 function needs(city: string, parts: Partial<CityNeeds> = {}): [string, CityNeeds] {
-  return [city, { city, waiting: [], human: [], humanTotal: parts.human?.length ?? 0, status: status(), fetchedAt: NOW, error: null, ...parts }];
+  const human = parts.human ?? [];
+  const reasons = new Map(human.map((b) => [b.id, ["human" as const]]));
+  return [city, { city, waiting: [], human, reasons, humanTotal: human.length, status: status(), fetchedAt: NOW, error: null, ...parts }];
 }
 
 function snap(...entries: [string, CityNeeds][]): NeedsSnapshot {
-  return { rev: 1, cities: new Map(entries), error: null };
+  return { rev: 1, decisionLabel: "needs/operator", cities: new Map(entries), error: null };
 }
 
 const human = (n: number) => Array.from({ length: n }, (_, i) => bead(`d-${i}`, `decision ${i}`, { labels: ["human"], priority: i % 3, created_at: new Date(NOW - (i + 1) * DAY).toISOString() }));

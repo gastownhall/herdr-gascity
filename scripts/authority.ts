@@ -134,7 +134,7 @@ const MOD_TAB_REASON = "openModTab's tab.new opens a tab holding only this mod (
  */
 const OPEN_CALL = 'herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS })';
 const XDG_OPEN_CALL = 'herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS })';
-const OPEN_REASON = "openUrl runs the platform opener on one argument, after openUrlIssue refused all but an http(s) URL on this computer";
+const OPEN_REASON = "openUrl runs the platform opener on one argument, after openUrlIssue refused all but an http(s) URL on this computer or under the configured https dashboardUrl";
 
 /** The allowlist for this repo. */
 export const ALLOWLIST: readonly AllowEntry[] = [
@@ -146,6 +146,8 @@ export const ALLOWLIST: readonly AllowEntry[] = [
   { file: "gascity/main.js", rule: "run-command", text: MOD_TAB_CALL, reason: MOD_TAB_REASON },
   { file: "src/host.ts", rule: "exec-program", text: OPEN_CALL, reason: OPEN_REASON },
   { file: "src/host.ts", rule: "exec-program", text: XDG_OPEN_CALL, reason: OPEN_REASON },
+  { file: "gascity/main.js", rule: "exec-program", text: OPEN_CALL, reason: OPEN_REASON },
+  { file: "gascity/main.js", rule: "exec-program", text: XDG_OPEN_CALL, reason: OPEN_REASON },
   {
     file: "gascity/main.js",
     rule: "constructor-read",

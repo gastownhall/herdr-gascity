@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:6f4f3ef786d673a4f239fe10e5df9d6eadacb55a0e4426a73a69d39f81a21db1 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:5dd7c9b88a9491cfa5b2d93a0a262cd54be6dbdbb5ea7dc9578390ab61536b3b over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2688,13 +2688,17 @@ function invalid(path, issue2) {
 function gcBinIssue(gcBin) {
   return GC_BIN.test(gcBin) ? null : `must be "gc" or an absolute path to a program named gc, not ${JSON.stringify(gcBin)}`;
 }
+var DASHBOARD_URL = /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/;
+function dashboardUrlIssue(url) {
+  return DASHBOARD_URL.test(url) ? null : `must be an https URL with no query or fragment, like https://mdash.example.com, not ${JSON.stringify(url)}`;
+}
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function decodeSettings(raw) {
-  if (raw === void 0 || raw === null) return ok({ apiUrl: null, gcBin: DEFAULT_GC_BIN });
+  if (raw === void 0 || raw === null) return ok({ apiUrl: null, gcBin: DEFAULT_GC_BIN, dashboardUrl: null });
   if (!isRecord(raw)) return err(invalid("", `expected an object, got ${JSON.stringify(raw)}`));
-  const { apiUrl, gcBin } = raw;
+  const { apiUrl, gcBin, dashboardUrl } = raw;
   if (apiUrl !== void 0 && (typeof apiUrl !== "string" || apiUrl === "")) {
     return err(invalid("apiUrl", `expected a non-empty string, got ${JSON.stringify(apiUrl)}`));
   }
@@ -2703,7 +2707,12 @@ function decodeSettings(raw) {
     const issue2 = gcBinIssue(gcBin);
     if (issue2) return err(invalid("gcBin", issue2));
   }
-  return ok({ apiUrl: apiUrl ?? null, gcBin: gcBin ?? DEFAULT_GC_BIN });
+  if (dashboardUrl !== void 0) {
+    if (typeof dashboardUrl !== "string") return err(invalid("dashboardUrl", `expected a string, got ${JSON.stringify(dashboardUrl)}`));
+    const issue2 = dashboardUrlIssue(dashboardUrl);
+    if (issue2) return err(invalid("dashboardUrl", issue2));
+  }
+  return ok({ apiUrl: apiUrl ?? null, gcBin: gcBin ?? DEFAULT_GC_BIN, dashboardUrl: typeof dashboardUrl === "string" ? dashboardUrl.replace(/\/+$/, "") : null });
 }
 function patchSettings(raw, patch) {
   if (raw !== void 0 && raw !== null && !isRecord(raw)) {
@@ -2719,6 +2728,12 @@ function patchSettings(raw, patch) {
     const issue2 = gcBinIssue(patch.gcBin);
     if (issue2) return err(invalid("gcBin", issue2));
     next["gcBin"] = patch.gcBin;
+  }
+  if (patch.dashboardUrl === null) delete next["dashboardUrl"];
+  else if (patch.dashboardUrl !== void 0) {
+    const issue2 = dashboardUrlIssue(patch.dashboardUrl);
+    if (issue2) return err(invalid("dashboardUrl", issue2));
+    next["dashboardUrl"] = patch.dashboardUrl.replace(/\/+$/, "");
   }
   return ok(next);
 }
@@ -2811,6 +2826,12 @@ function probePathIssue(path, appHome2) {
   const name = path.startsWith(dir) ? path.slice(dir.length) : null;
   if (name === null || !/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(name)) return `refused: the mod writes only files in ${dir}, not ${JSON.stringify(path)}`;
   return null;
+}
+var LOCAL_WEB_URL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?(\/[^\s\u0000-\u001f\u007f]*)?$/i;
+function openUrlIssue(url, dashboardUrl = null) {
+  if (LOCAL_WEB_URL.test(url)) return null;
+  if (dashboardUrl !== null && /^https:\/\//.test(dashboardUrl) && url.startsWith(`${dashboardUrl.replace(/\/+$/, "")}/`) && !/[\s\u0000-\u001f\u007f]/.test(url)) return null;
+  return `refused: only http(s) URLs on this computer${dashboardUrl !== null ? ` or under ${dashboardUrl}` : ""} are opened, not ${JSON.stringify(url)}`;
 }
 
 // src/notify/focus.ts
@@ -2974,8 +2995,10 @@ function listWork(c, city, query) {
   return c.call("get-v0-city-by-city-name-work-ready", { path: { cityName: city }, query });
 }
 var HUMAN_LABEL = "human";
-function listHumanBeads(c, city, query) {
-  return c.call("get-v0-city-by-city-name-beads", { path: { cityName: city }, query: { label: HUMAN_LABEL, status: "open", limit: query.limit } });
+var DEFAULT_DECISION_LABEL = "needs/operator";
+var DECISION_TYPE = "decision";
+function listOpenBeads(c, city, query) {
+  return c.call("get-v0-city-by-city-name-beads", { path: { cityName: city }, query: { ...query, status: "open" } });
 }
 function getCityStatus(c, city) {
   return c.call("get-v0-city-by-city-name-status", { path: { cityName: city } });
@@ -3828,6 +3851,12 @@ function storeGcBin(gcBin) {
   herdr.setShared(SETTINGS_KEY, next.value);
   return ok(void 0);
 }
+function storeDashboardUrl(dashboardUrl) {
+  const next = patchSettings(herdr.shared(SETTINGS_KEY), { dashboardUrl });
+  if (!next.ok) return next;
+  herdr.setShared(SETTINGS_KEY, next.value);
+  return ok(void 0);
+}
 var hostFetch = (url, init) => fetch(url, init);
 var LAST_CITY_KEY = "city";
 function readLastCity() {
@@ -3975,6 +4004,25 @@ function openAttachTab(tab) {
     return ok(null);
   } catch (cause) {
     return err({ kind: "host-call", api: "run(tab.new)", cause: messageOf2(cause) });
+  }
+}
+var OPEN_TIMEOUT_MS = 1e4;
+async function openUrl(opener, url, dashboardUrl = null) {
+  const refused = openUrlIssue(url, dashboardUrl);
+  if (refused !== null) return err({ kind: "exec", argv: [opener, url], code: null, stderr: refused });
+  logRecord("exec", [opener, url]);
+  const running = opener === "open" ? herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS }) : herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS });
+  return running.then(
+    (r) => r.code === 0 ? ok(null) : err({ kind: "exec", argv: [opener, url], code: r.code, stderr: r.stderr.trim().slice(0, STDERR_LIMIT) }),
+    (cause) => err({ kind: "exec", argv: [opener, url], code: null, stderr: messageOf2(cause) })
+  );
+}
+function urlOpener() {
+  try {
+    const w = typeof herdr.window === "function" ? herdr.window() : null;
+    return w?.platform === "macos" ? "open" : "xdg-open";
+  } catch {
+    return "xdg-open";
   }
 }
 function closeWindow(overlay) {
@@ -4203,6 +4251,12 @@ var GRAMMAR = {
     summary: "store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it)",
     build: (a) => ({ verb: "set-gc-bin", gcBin: at2(a, 0) })
   },
+  "set-dashboard-url": {
+    mutating: false,
+    args: [id("url")],
+    summary: "store the web dashboard (mdash) the sidebar and Needs a human link to: an https URL, or none to remove the links",
+    build: (a) => ({ verb: "set-dashboard-url", url: at2(a, 0) === "none" ? null : at2(a, 0) })
+  },
   "session-new": {
     mutating: true,
     args: [id("agent")],
@@ -4377,6 +4431,8 @@ function parseCommand(raw) {
   if (verb === "probe" && args[0] !== "on" && args[0] !== "off") return err(`probe: expected "on" or "off", got "${shownCommand(args[0] ?? "")}"`);
   const gcBinRefused = verb === "set-gc-bin" ? gcBinIssue(args[0] ?? "") : null;
   if (gcBinRefused !== null) return err(`set-gc-bin: ${gcBinRefused}`);
+  const urlRefused = verb === "set-dashboard-url" && args[0] !== "none" ? dashboardUrlIssue(args[0] ?? "") : null;
+  if (urlRefused !== null) return err(`set-dashboard-url: ${urlRefused}`);
   return ok({ command: spec2.build(args, confirm), nonce });
 }
 function placeholders(verb) {
@@ -4660,7 +4716,8 @@ function touchesHuman(e, known) {
   if (e.subject !== void 0 && known.humanIds.has(e.subject)) return true;
   const r = eventBead(e);
   if (!r.ok || r.value === null) return true;
-  return known.humanIds.has(r.value.id) || (r.value.labels ?? []).includes(HUMAN_LABEL);
+  const labels = r.value.labels ?? [];
+  return known.humanIds.has(r.value.id) || labels.includes(HUMAN_LABEL) || labels.includes(known.decisionLabel ?? DEFAULT_DECISION_LABEL) || r.value.issue_type === DECISION_TYPE;
 }
 var SESSION_REFRESH = /* @__PURE__ */ new Set(["request.failed", "worker.operation"]);
 var BOARD_CHANGES = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted", "bead.dead_assignee_reopened"]);
@@ -5993,7 +6050,7 @@ var CityStore = class {
   known() {
     const sessionIds = new Set((this.slots.sessions.value?.items ?? []).map((s) => s.id));
     const humanIds = new Set((this.slots.human.value?.items ?? []).map((b) => b.id));
-    return { sessionIds, humanIds };
+    return { sessionIds, humanIds, decisionLabel: this.decisionLabel() };
   }
   workQuery(extra) {
     const q = {
@@ -6019,10 +6076,47 @@ var CityStore = class {
       case "inProgress":
         return await listWork(c, city, this.workQuery({ limit: BOARD_LIMIT, status: "in_progress" }));
       case "human":
-        return await listHumanBeads(c, city, { limit: HUMAN_LIMIT });
+        return await this.loadDecisions(step2, priority);
       default:
         return await this.loadSessions(step2, priority);
     }
+  }
+  /**
+   * Open beads waiting on a decision: labeled human, labeled with the
+   * dashboard's decision label (what mdash lists), or of type decision; each
+   * once. `total` sums gc's counts less the beads listed more than once.
+   */
+  async loadDecisions(step2, priority) {
+    const c = this.deps.endpoint.client(priority, step2);
+    const label2 = this.decisionLabel();
+    const queries = [{ label: HUMAN_LABEL, limit: HUMAN_LIMIT }];
+    if (label2 !== HUMAN_LABEL) queries.push({ label: label2, limit: HUMAN_LIMIT });
+    queries.push({ type: DECISION_TYPE, limit: HUMAN_LIMIT });
+    const out = { items: [], unreadable: [], total: 0, partial_errors: [] };
+    const seen = /* @__PURE__ */ new Set();
+    for (const q of queries) {
+      const r = await listOpenBeads(c, this.key.city, q);
+      this.progress(step2);
+      if (!r.ok) return r;
+      out.total += Math.max(r.value.total ?? 0, r.value.items.length);
+      out.partial ||= r.value.partial === true;
+      out.partial_errors.push(...r.value.partial_errors);
+      out.unreadable.push(...r.value.unreadable);
+      for (const b of r.value.items) {
+        if (seen.has(b.id)) {
+          out.total--;
+          continue;
+        }
+        seen.add(b.id);
+        out.items.push(b);
+      }
+      if (!this.current(step2)) break;
+    }
+    return { ok: true, value: out };
+  }
+  /** The dashboard decision label in use for this city. */
+  decisionLabel() {
+    return this.deps.decisionLabel?.() ?? DEFAULT_DECISION_LABEL;
   }
   async loadSessions(step2, priority) {
     const c = this.deps.endpoint.client(priority, step2);
@@ -6626,6 +6720,15 @@ function agentsModel(input) {
   };
 }
 
+// src/vm/dashboardLinks.ts
+var seg = (s) => encodeURIComponent(s);
+function cityLink(dashboardUrl, city) {
+  return dashboardUrl === null ? null : `${dashboardUrl}/city/${seg(city)}/`;
+}
+function beadLink(dashboardUrl, city, bead) {
+  return dashboardUrl === null ? null : `${dashboardUrl}/city/${seg(city)}/beads?bead=${seg(bead)}`;
+}
+
 // src/vm/human.ts
 var DAY_MS = 864e5;
 function unreadableText(what, u) {
@@ -6648,8 +6751,13 @@ function createdRank(b) {
 function decisionOrder(a, b) {
   return priorityRank(a.priority) - priorityRank(b.priority) || createdRank(a) - createdRank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
+function isDecision(b, decisionLabel) {
+  const labels = b.labels ?? [];
+  return labels.includes(HUMAN_LABEL) || labels.includes(decisionLabel) || b.issue_type === DECISION_TYPE;
+}
 function humanModel(input) {
   const { snapshot: s, now } = input;
+  const decisionLabel = input.decisionLabel ?? DEFAULT_DECISION_LABEL;
   const sessions = new Map((s.sessions.value?.items ?? []).map((x) => [x.id, x]));
   const questions = (s.pending.value?.items ?? []).map((p) => {
     const x = sessions.get(p.session_id);
@@ -6661,13 +6769,13 @@ function humanModel(input) {
       selected: input.selectedSession === p.session_id
     };
   });
-  const beads = [...s.human.value?.items ?? []].filter((b) => b.status !== "closed" && (b.labels ?? []).includes(HUMAN_LABEL)).sort(decisionOrder);
+  const beads = [...s.human.value?.items ?? []].filter((b) => b.status !== "closed" && isDecision(b, decisionLabel)).sort(decisionOrder);
   const decisions = beads.map((b) => ({
     kind: "decision",
     bead: cleanLine(b.id),
     title: cleanLine(b.title),
     priority: typeof b.priority === "number" ? `P${b.priority}` : null,
-    labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL).map(cleanLine),
+    labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL && l !== decisionLabel).map(cleanLine),
     assignee: b.assignee ? cleanLine(b.assignee) : null,
     age: since(b.created_at, now),
     selected: input.selectedBead === b.id
@@ -6696,7 +6804,7 @@ function firstLine(text2, max = 120) {
 function count(n) {
   return n.toLocaleString("en-US");
 }
-function needRows(needs, city, now) {
+function needRows(needs, city, now, decisionLabel = DEFAULT_DECISION_LABEL, dashboardUrl = null) {
   if (!needs) return { questions: [], decisions: [] };
   const questions = needs.waiting.map((w) => ({
     kind: "question",
@@ -6706,14 +6814,16 @@ function needRows(needs, city, now) {
     text: w.prompt !== null && w.prompt.trim() !== "" ? firstLine(w.prompt) : `${cleanLine(w.kind || "question")} (open it to read)`,
     age: since(w.lastActive ?? void 0, now)
   }));
-  const decisions = [...needs.human].filter((b) => b.status !== "closed" && (b.labels ?? []).includes(HUMAN_LABEL)).sort(decisionOrder).map((b) => ({
+  const decisions = [...needs.human].filter((b) => b.status !== "closed" && (needs.reasons.get(b.id)?.length ?? 0) > 0).sort(decisionOrder).map((b) => ({
     kind: "decision",
     city,
     bead: cleanLine(b.id),
     title: cleanLine(b.title),
     priority: typeof b.priority === "number" ? `P${b.priority}` : null,
-    labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL).map(cleanLine),
-    age: since(b.created_at, now)
+    labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL && l !== decisionLabel).map(cleanLine),
+    age: since(b.created_at, now),
+    why: (needs.reasons.get(b.id) ?? []).map((r) => cleanLine(r === "operator" ? decisionLabel : r)),
+    link: beadLink(dashboardUrl, city, b.id)
   }));
   return { questions, decisions };
 }
@@ -6753,7 +6863,7 @@ function sidebarModel(input) {
   const cities = list.map((info) => {
     const name = cleanLine(info.name);
     const needs = input.needs?.cities.get(info.name);
-    const { questions, decisions } = needRows(needs, name, now);
+    const { questions, decisions } = needRows(needs, name, now, input.needs?.decisionLabel, input.dashboardUrl ?? null);
     const expanded = input.expanded.has(info.name);
     const shown = expanded ? decisions : decisions.slice(0, SIDEBAR_DECISIONS);
     const total = needs ? Math.max(needs.humanTotal, decisions.length) : 0;
@@ -6766,7 +6876,8 @@ function sidebarModel(input) {
       expanded,
       rows: [...questions, ...shown],
       more: total - shown.length,
-      details: expanded ? detailsOf(info, needs) : []
+      details: expanded ? detailsOf(info, needs) : [],
+      link: cityLink(input.dashboardUrl ?? null, name)
     };
   });
   cities.sort((a, b) => b.questions - a.questions || Math.min(b.decisions, 1) - Math.min(a.decisions, 1) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -6786,7 +6897,7 @@ function inboxModel(input) {
   let notListed = 0;
   for (const name of running) {
     const needs = input.needs?.cities.get(name);
-    const rows = needRows(needs, cleanLine(name), input.now);
+    const rows = needRows(needs, cleanLine(name), input.now, input.needs?.decisionLabel, input.dashboardUrl ?? null);
     const total = needs ? Math.max(needs.humanTotal, rows.decisions.length) : 0;
     const n = rows.questions.length + total;
     if (n > 0) byCity.push({ name: cleanLine(name), count: n });
@@ -6807,7 +6918,8 @@ function inboxModel(input) {
     byCity,
     groups,
     notListed: input.filter === "questions" ? 0 : notListed,
-    note: pollError ? `gc not reachable: ${errorText(pollError)}` : input.needs === null || input.needs.rev === 0 ? "loading…" : null
+    note: pollError ? `gc not reachable: ${errorText(pollError)}` : input.needs === null || input.needs.rev === 0 ? "loading…" : null,
+    link: input.dashboardUrl == null ? null : input.city !== null ? cityLink(input.dashboardUrl, input.city) : `${input.dashboardUrl}/`
   };
 }
 
@@ -7394,6 +7506,8 @@ var CopyController = class {
   unfolded = /* @__PURE__ */ new Set();
   inboxFilter = "all";
   inboxCity = null;
+  /** The web dashboard to link to, read from the settings each tick (render reads no host state). */
+  dashboard = null;
   city = null;
   /** The city the last subscription was to: a bead selected there means nothing in another city. */
   lastCity = null;
@@ -7538,7 +7652,10 @@ var CopyController = class {
     }
     const running = (this.cities?.snapshot().value?.items ?? []).filter((c) => c.running).map((c) => c.name);
     const rev = this.needs?.tick(running) ?? -1;
+    const settings = decodeSettings(this.deps.host.settings());
+    this.dashboard = settings.ok ? settings.value.dashboardUrl : null;
     const signature = [
+      this.dashboard ?? "",
       this.machineVersion(),
       this.citiesRev,
       rev,
@@ -7552,17 +7669,22 @@ var CopyController = class {
     this.signature = signature;
     return true;
   }
+  /** The web dashboard the views link to (settings dashboardUrl, as of the last tick), or null. */
+  dashboardUrl() {
+    return this.dashboard;
+  }
   /** The cross-city model; null for a city copy. */
   crossView(now) {
     const cities = this.cities?.snapshot() ?? null;
+    const dashboardUrl = this.dashboardUrl();
     const needs = this.needs?.snapshot() ?? null;
     const notice = this.notice;
     if (this.deps.view === "sidebar") {
-      const model = sidebarModel({ cities, needs, expanded: this.unfolded, now });
+      const model = sidebarModel({ cities, needs, expanded: this.unfolded, now, dashboardUrl });
       return { kind: "sidebar", model: notice !== null && model.note === null ? { ...model, note: notice } : model };
     }
     if (this.deps.view === "inbox") {
-      const model = inboxModel({ cities, needs, filter: this.inboxFilter, city: this.inboxCity, now });
+      const model = inboxModel({ cities, needs, filter: this.inboxFilter, city: this.inboxCity, now, dashboardUrl });
       return { kind: "inbox", model: notice !== null && model.note === null ? { ...model, note: notice } : model };
     }
     return null;
@@ -7984,6 +8106,14 @@ var CopyController = class {
       case "back":
         this.selectSession(null);
         return "closed";
+      case "set-dashboard-url": {
+        const stored = this.deps.host.setDashboardUrl?.(c.url) ?? { ok: false, error: { kind: "host-call", api: "setShared", cause: "unavailable" } };
+        if (!stored.ok) {
+          this.refuse(errorText(stored.error));
+          return "";
+        }
+        return c.url === null ? "no dashboard links" : `dashboard ${c.url}`;
+      }
       case "set-gc-bin": {
         const stored = this.deps.host.setGcBin(c.gcBin);
         if (!stored.ok) {
@@ -8559,6 +8689,10 @@ function cityBlock(c, i, theme2, colors, actions) {
   if (c.details.length > 0) {
     el = el.child(v_flex().id(`${id2}-details`).pl(22).gap(0).children(c.details.map((d, k) => muted(label(`${id2}-detail-${k}`, d), theme2).text_size(12))));
   }
+  const link = c.link;
+  if (c.expanded && link !== null) {
+    el = el.child(hoverable(label(`${id2}-mdash`, "Open in mdash ↗").text_size(12).pl(22).py(1).rounded(5).on_click((_, cx) => actions.openLink(link, cx)), colors));
+  }
   return el;
 }
 function renderSidebar(m, theme2, colors, actions) {
@@ -8590,8 +8724,10 @@ function inboxRow(r, id2, theme2, colors, actions) {
     buttons = [button(`${id2}-answer`, "Answer", colors, (cx) => actions.openQuestion(r.city, r.session, cx))];
   } else {
     titleText = r.title;
-    sub = [r.city, r.bead, r.priority, r.age, r.labels.length > 0 ? `[${r.labels.join(", ")}]` : null].filter((x) => x !== null).join(" · ");
+    sub = [r.city, r.bead, r.priority, r.age, r.why.join(" + "), r.labels.length > 0 ? `[${r.labels.join(", ")}]` : null].filter((x) => x !== null && x !== "").join(" · ");
     buttons = [button(`${id2}-open`, "Resolve…", colors, (cx) => actions.openDecision(r.city, r.bead, cx))];
+    const link = r.link;
+    if (link !== null) buttons.push(button(`${id2}-mdash`, "mdash ↗", colors, (cx) => actions.openLink(link, cx)));
   }
   let title = label(`${id2}-title`, titleText).overflow_hidden().whitespace_nowrap().text_ellipsis();
   if (r.kind === "question" && colors.bad !== void 0) title = title.text_color(colors.bad);
@@ -8600,6 +8736,8 @@ function inboxRow(r, id2, theme2, colors, actions) {
 }
 function renderInbox(m, theme2, colors, actions, close = null) {
   let head = h_flex().id("gascity-inbox-head").gap(8).items_center().child(div2().id("gascity-inbox-title").flex_1().text_size(16).font_semibold().child("Needs a human"));
+  const link = m.link;
+  if (link !== null) head = head.child(button("gascity-inbox-mdash", "Open mdash ↗", colors, (cx) => actions.openLink(link, cx)));
   if (close !== null) head = head.child(button("gascity-inbox-close", "Close", colors, close));
   let root = themedRoot(theme2, v_flex().id("gascity-inbox").size_full().p(12).gap(8).overflow_y_scroll().text_size(13)).child(head);
   const kinds = h_flex().id("gascity-inbox-kinds").gap(6).items_center().child(chip("gascity-inbox-all", `All ${m.counts.all}`, m.filter === "all", colors, (cx) => actions.setFilter("all", cx))).child(chip("gascity-inbox-questions", `Questions ${m.counts.questions}`, m.filter === "questions", colors, (cx) => actions.setFilter("questions", cx))).child(chip("gascity-inbox-decisions", `Decisions ${m.counts.decisions}`, m.filter === "decisions", colors, (cx) => actions.setFilter("decisions", cx)));
@@ -9453,16 +9591,20 @@ var CitiesPoller = class {
 var NEEDS_POLL_MS = 15e3;
 var STATUS_POLL_MS = 3e4;
 var NEEDS_HUMAN_LIMIT = 50;
+var LABEL_POLL_MS = 10 * 6e4;
 var LOOKUPS_PER_POLL = 8;
 var NeedsPoller = class {
-  constructor(endpoint, clock) {
+  constructor(endpoint, clock, readConfig = null) {
     this.endpoint = endpoint;
     this.clock = clock;
+    this.readConfig = readConfig;
     endpoint.addListener(this);
   }
   endpoint;
   clock;
-  snap = { rev: 0, cities: /* @__PURE__ */ new Map(), error: null };
+  readConfig;
+  snap = { rev: 0, decisionLabel: DEFAULT_DECISION_LABEL, cities: /* @__PURE__ */ new Map(), error: null };
+  labelAt = null;
   last = null;
   wanted = false;
   poll = null;
@@ -9480,7 +9622,7 @@ var NeedsPoller = class {
     if (this.disposed) return;
     const now = this.clock.now();
     if (this.poll) {
-      if (now - this.poll.startedAt <= POLL_DEADLINE_MS) return;
+      if (now - this.poll.progressAt <= POLL_DEADLINE_MS) return;
       this.abandon();
     }
     this.forget(cities);
@@ -9488,7 +9630,7 @@ var NeedsPoller = class {
     if (!this.wanted && this.last !== null && now < this.last + NEEDS_POLL_MS) return;
     const gate = this.endpoint.gate(now);
     if (gate.kind === "wait") return;
-    const poll = { starter, startedAt: now, probe: gate.kind === "probe" ? gate.token : null };
+    const poll = { starter, startedAt: now, progressAt: now, probe: gate.kind === "probe" ? gate.token : null };
     this.poll = poll;
     this.wanted = false;
     this.last = now;
@@ -9537,6 +9679,7 @@ var NeedsPoller = class {
   /** A request's answer: true to go on; false when the poll must end (abandoned, or the endpoint backs off). */
   settle(poll, r) {
     if (!this.current(poll)) return false;
+    poll.progressAt = this.clock.now();
     if (r.ok) {
       this.endpoint.succeeded();
       return true;
@@ -9554,10 +9697,28 @@ var NeedsPoller = class {
     return true;
   }
   async run(poll, cities) {
+    await this.readLabel(poll, cities[0]);
     for (const city of cities) {
       if (!await this.pollCity(poll, city)) return;
     }
     if (this.current(poll) && this.snap.error !== null) this.snap = { ...this.snap, rev: this.snap.rev + 1, error: null };
+  }
+  /** Reads the dashboard's decision label (one supervisor-wide value) at most every LABEL_POLL_MS. */
+  async readLabel(poll, city) {
+    const now = this.clock.now();
+    if (this.readConfig === null || city === void 0 || this.labelAt !== null && now - this.labelAt < LABEL_POLL_MS) return;
+    this.labelAt = now;
+    let raw = null;
+    try {
+      raw = await this.readConfig(city);
+    } catch {
+      raw = null;
+    }
+    if (!this.current(poll)) return;
+    const label2 = typeof raw === "object" && raw !== null ? raw["decisionLabel"] : void 0;
+    if (typeof label2 === "string" && label2.trim() !== "" && label2 !== this.snap.decisionLabel) {
+      this.snap = { ...this.snap, rev: this.snap.rev + 1, decisionLabel: label2.trim() };
+    }
   }
   async pollCity(poll, city) {
     const client = this.endpoint.client("snapshot", poll);
@@ -9570,14 +9731,36 @@ var NeedsPoller = class {
       waiting2 = await this.waitingOf(poll, city, pending.value.items);
       if (!this.current(poll)) return false;
     } else error = pending.error;
-    const human = await listHumanBeads(client, city, { limit: NEEDS_HUMAN_LIMIT });
-    if (!this.settle(poll, human)) return false;
     let beads = before?.human ?? [];
+    let reasons = before?.reasons ?? /* @__PURE__ */ new Map();
     let total = before?.humanTotal ?? 0;
-    if (human.ok) {
-      beads = human.value.items;
-      total = Math.max(human.value.total ?? 0, beads.length);
-    } else error ??= human.error;
+    const queries = [["human", { label: HUMAN_LABEL, limit: NEEDS_HUMAN_LIMIT }]];
+    if (this.snap.decisionLabel !== HUMAN_LABEL) queries.push(["operator", { label: this.snap.decisionLabel, limit: NEEDS_HUMAN_LIMIT }]);
+    queries.push(["decision", { type: DECISION_TYPE, limit: NEEDS_HUMAN_LIMIT }]);
+    const byId = /* @__PURE__ */ new Map();
+    const why = /* @__PURE__ */ new Map();
+    let sum = 0;
+    let complete = true;
+    for (const [reason, query] of queries) {
+      const r = await listOpenBeads(client, city, query);
+      if (!this.settle(poll, r)) return false;
+      if (!r.ok) {
+        error ??= r.error;
+        complete = false;
+        continue;
+      }
+      sum += Math.max(r.value.total ?? 0, r.value.items.length);
+      for (const b of r.value.items) {
+        if (!byId.has(b.id)) byId.set(b.id, b);
+        why.set(b.id, [...why.get(b.id) ?? [], reason]);
+      }
+    }
+    if (complete) {
+      beads = [...byId.values()];
+      reasons = why;
+      const repeats = [...why.values()].reduce((n, w) => n + w.length - 1, 0);
+      total = Math.max(sum - repeats, beads.length);
+    }
     let status2 = before?.status ?? null;
     const now = this.clock.now();
     if (now - (this.statusAt.get(city) ?? -Infinity) >= STATUS_POLL_MS) {
@@ -9589,7 +9772,7 @@ var NeedsPoller = class {
       } else error ??= s.error;
     }
     const cities = new Map(this.snap.cities);
-    cities.set(city, { city, waiting: waiting2, human: beads, humanTotal: total, status: status2, fetchedAt: this.clock.now(), error });
+    cities.set(city, { city, waiting: waiting2, human: beads, reasons, humanTotal: total, status: status2, fetchedAt: this.clock.now(), error });
     this.snap = { ...this.snap, rev: this.snap.rev + 1, cities };
     return true;
   }
@@ -9688,7 +9871,8 @@ var SyncRegistry = class {
           if (batch.citiesChanged) this.pollers.get(endpoint.value.baseUrl)?.poller.refresh();
           for (const l of [...this.listeners]) l(batch);
         },
-        onError: (k, e) => this.deps.onError?.(k, e)
+        onError: (k, e) => this.deps.onError?.(k, e),
+        decisionLabel: () => this.needs.get(endpoint.value.baseUrl)?.poller.snapshot().decisionLabel ?? DEFAULT_DECISION_LABEL
       });
       const ep = endpoint.value;
       const ledger = new ActionLedger({
@@ -9764,7 +9948,7 @@ var SyncRegistry = class {
     const ep = endpoint.value;
     let entry = this.needs.get(ep.baseUrl);
     if (!entry) {
-      entry = { poller: new NeedsPoller(ep, this.clock), subs: 0 };
+      entry = { poller: new NeedsPoller(ep, this.clock, (city) => this.readDashboardConfig(ep.baseUrl, city)), subs: 0 };
       this.needs.set(ep.baseUrl, entry);
     }
     entry.subs++;
@@ -9796,6 +9980,20 @@ var SyncRegistry = class {
         }
       }
     });
+  }
+  /**
+   * gc's dashboard config for a city (GET {api}/api/city/{city}/config: the
+   * operator's decision label), through the app-wide budget like discovery's
+   * probes; null when gc does not answer it with JSON.
+   */
+  async readDashboardConfig(baseUrl, city) {
+    const r = await this.probeFetch().fetch(`${baseUrl}/api/city/${encodeURIComponent(city)}/config`, { method: "GET", headers: { Accept: "application/json" } });
+    if (!r.ok) return null;
+    try {
+      return JSON.parse(await r.text());
+    } catch {
+      return null;
+    }
   }
   /**
    * A fetch for discovery's probes (/health, /v0/cities) through the app-wide
@@ -10491,6 +10689,7 @@ function setUp() {
       setProbe: setProbeEnabled,
       settings: readSharedSettings,
       setGcBin: storeGcBin,
+      setDashboardUrl: storeDashboardUrl,
       herdrVersion: readHerdrVersion,
       execLog: readExecLog,
       keyboard: () => focus.handle?.is_focused() ?? false,
@@ -10720,6 +10919,10 @@ function crossActionsFor(state) {
     },
     setInboxCity: (city, cx) => {
       copy.setInboxCity(city);
+      cx.notify();
+    },
+    openLink: (url, cx) => {
+      void openUrl(urlOpener(), url, copy.dashboardUrl()).then((r) => report(r));
       cx.notify();
     },
     closePane: (cx) => {

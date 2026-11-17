@@ -341,7 +341,9 @@ describe("initial load", () => {
       `/v0/city/scratch/work/ready?${WORK}&limit=50`,
       `/v0/city/scratch/work/ready?${WORK}&limit=50&status=in_progress`,
       `/v0/city/scratch/work/ready?${WORK}&limit=20&sort=newest&status=closed`,
-      "/v0/city/scratch/beads?label=human&status=open&limit=50",
+      "/v0/city/scratch/beads?label=human&limit=50&status=open",
+      "/v0/city/scratch/beads?label=needs%2Foperator&limit=50&status=open",
+      "/v0/city/scratch/beads?type=decision&limit=50&status=open",
     ]));
     const s = a.sub.snapshot();
     expect(s.connection).toEqual({ kind: "connected" });
@@ -496,8 +498,8 @@ describe("event watcher → targeted refetches", () => {
     const start = gc.seen.length;
     gc.emit(...Array.from({ length: 12 }, (_, i) => ({ type: "bead.closed", subject: `b-${i}` })));
     await host.advance(1500);
-    // minus the event poll, the two column refetches and Needs a human (the events carry no readable bead)
-    expect(gc.count("", start) - 4).toBe(10);
+    // minus the event poll, the two column refetches and Needs a human's three queries (the events carry no readable bead)
+    expect(gc.count("", start) - 6).toBe(10);
     const closed = a.sub.snapshot().closed;
     expect(closed.recent.length).toBe(10);
     expect(closed.recent[0]?.bead.id).toBe("b-11");

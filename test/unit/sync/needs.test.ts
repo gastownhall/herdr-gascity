@@ -2,7 +2,7 @@
 // against the fake gc: what it reads, how often, and what it keeps.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { NEEDS_POLL_MS, STATUS_POLL_MS } from "../../../src/sync/needs.ts";
+import { LABEL_POLL_MS, NEEDS_POLL_MS, STATUS_POLL_MS } from "../../../src/sync/needs.ts";
 import { SyncRegistry, TICK_MS, type NeedsSubscription } from "../../../src/sync/registry.ts";
 import { FakeGc, FakeHost } from "./fakes.ts";
 
@@ -63,7 +63,8 @@ describe("the needs a human poll", () => {
     await host.advance(NEEDS_POLL_MS * 4);
     const seen = gc.seen.slice(start).map((r) => r.path);
     const n = (p: string) => seen.filter((x) => x === p).length;
-    expect(n("/v0/city/scratch/beads")).toBe(4);
+    // human, the decision label and type decision, each poll.
+    expect(n("/v0/city/scratch/beads")).toBe(12);
     expect(n("/v0/city/scratch/status")).toBe(Math.floor((NEEDS_POLL_MS * 4) / STATUS_POLL_MS));
     expect(n("/v0/city/scratch/session/sc-20")).toBe(1);
     expect(n("/v0/city/scratch/session/sc-20/pending")).toBe(1);
@@ -100,5 +101,54 @@ describe("the needs a human poll", () => {
     await host.advance(120_000);
     expect(sub.snapshot().error).toBeNull();
     expect(sub.snapshot().cities.get("scratch")?.human.length).toBe(2);
+  });
+});
+
+describe("the decision label", () => {
+  test("is read from gc's dashboard config and queried with human and type decision; a bead in several is listed once", async () => {
+    const { host, gc, sub } = await setup();
+    gc.override = (req) => {
+      if (req.path === "/api/city/scratch/config") return { status: 200, body: { decisionLabel: "needs/julian" } };
+      return undefined;
+    };
+    // The first poll read the default before the fake gc said otherwise; the label is read again after LABEL_POLL_MS.
+    await host.advance(LABEL_POLL_MS + NEEDS_POLL_MS * 2);
+    const queries = gc.seen.filter((r) => r.path === "/v0/city/scratch/beads").map((r) => r.query.toString());
+    expect(queries).toContain("label=needs%2Fjulian&limit=50&status=open");
+    expect(queries).toContain("type=decision&limit=50&status=open");
+    expect(sub.snapshot().decisionLabel).toBe("needs/julian");
+    const s = sub.snapshot().cities.get("scratch");
+    // The fake answers every query with the same two beads: each is listed once, with all three reasons.
+    expect(s?.human.map((b) => b.id)).toEqual(["sc-90", "sc-91"]);
+    expect(s?.reasons.get("sc-90")).toEqual(["human", "operator", "decision"]);
+    expect(s?.humanTotal).toBe(2);
+  });
+
+  test("defaults to needs/operator when gc does not say", async () => {
+    const { host, sub } = await setup();
+    await host.advance(NEEDS_POLL_MS);
+    expect(sub.snapshot().decisionLabel).toBe("needs/operator");
+  });
+});
+
+describe("a long round", () => {
+  test("is not abandoned while its requests keep answering, however long the whole round takes", async () => {
+    const host = new FakeHost();
+    const gc = new FakeGc(host);
+    // Each read takes 3 s from the first poll on: a round over 12 cities (5 reads each) takes far longer than POLL_DEADLINE_MS.
+    gc.delayMs = 3_000;
+    const reg = new SyncRegistry({ fetch: host.wrap(gc.fetch), clock: host, random: () => 0.5 });
+    const cities = Array.from({ length: 12 }, (_, i) => `c${i}`);
+    let sub: NeedsSubscription | null = null;
+    await host.run("sidebar", () => {
+      const made = reg.subscribeNeeds(API);
+      if (!made.ok) throw new Error("subscribe");
+      sub = made.value;
+      host.every(TICK_MS, () => sub?.tick(cities));
+    });
+    const s = sub as unknown as NeedsSubscription;
+    live.push(s);
+    await host.advance(400_000);
+    expect([...s.snapshot().cities.keys()].sort()).toEqual([...cities].sort());
   });
 });

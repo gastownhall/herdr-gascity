@@ -5,19 +5,24 @@
 //     for a request it has not seen, the session (its name, when it was
 //     last active) and the session's pending prompt (its text), at most
 //     LOOKUPS_PER_POLL of each per poll;
-//   - GET …/beads?label=human&status=open: beads waiting on a decision;
+//   - open beads waiting on a decision: GET …/beads with label=human (gc's
+//     marker for "waiting on a person"), with the dashboard's decision label
+//     (what mdash's decision queue lists; read once per API from
+//     /api/city/{city}/config, else DEFAULT_DECISION_LABEL), and with
+//     type=decision; a bead in several is listed once, with every reason;
 //   - GET …/status, every STATUS_POLL_MS: agent, rig and work counts.
 // Never the agent or session lists: the sidebar must stay cheap for a city
 // of a thousand agents.
 //
 // It follows the ownership rule of the city list (cities.ts): no timer of
 // its own; a subscribed copy's tick starts a poll; closing the copy that
-// started one abandons it; one with no answer by POLL_DEADLINE_MS is
+// started one abandons it; one with no answer for POLL_DEADLINE_MS (since
+// its last answer: a round over every city may take longer than that) is
 // abandoned. A request that backs off the endpoint (transport, 5xx) ends
 // the poll; any other failure is kept on its city and the poll goes on.
 
 import type { GcError } from "../gc/errors.ts";
-import { getCityStatus, getSession, getSessionPending, listHumanBeads, listPending } from "../gc/ops.ts";
+import { DECISION_TYPE, DEFAULT_DECISION_LABEL, HUMAN_LABEL, getCityStatus, getSession, getSessionPending, listOpenBeads, listPending } from "../gc/ops.ts";
 import type * as T from "../gc/types.gen.ts";
 import type { Result } from "../result.ts";
 import { backsOff } from "./backoff.ts";
@@ -29,8 +34,16 @@ import type { Endpoint, EndpointListener } from "./endpoint.ts";
 export const NEEDS_POLL_MS = 15_000;
 /** How often each city's status is read (its body lists every agent: the heaviest read). */
 export const STATUS_POLL_MS = 30_000;
-/** At most this many human beads per city. */
+/** At most this many beads per city and query (human, the decision label, type decision). */
 export const NEEDS_HUMAN_LIMIT = 50;
+/** How often the dashboard's decision label is read again (it changes only with gc's environment). */
+export const LABEL_POLL_MS = 10 * 60_000;
+
+/** Why a bead waits on a person: its `human` label, the dashboard's decision label, or its type. */
+export type DecisionReason = "human" | "operator" | "decision";
+
+/** Reads gc's dashboard config for a city (GET {api}/api/city/{city}/config), as JSON; null when it cannot. */
+export type ReadDashboardConfig = (city: string) => Promise<unknown>;
 /** At most this many session and prompt lookups per city per poll. */
 export const LOOKUPS_PER_POLL = 8;
 
@@ -51,9 +64,11 @@ export interface WaitingSession {
 export interface CityNeeds {
   readonly city: string;
   readonly waiting: readonly WaitingSession[];
-  /** Open human beads, at most NEEDS_HUMAN_LIMIT. */
+  /** Open beads waiting on a decision (human, the decision label, type decision), each once. */
   readonly human: readonly T.Bead[];
-  /** gc's count of open human beads. */
+  /** Why each listed bead is there, by bead id. */
+  readonly reasons: ReadonlyMap<string, readonly DecisionReason[]>;
+  /** gc's counts summed over the three queries, less the beads listed more than once. */
   readonly humanTotal: number;
   readonly status: T.StatusBody | null;
   readonly fetchedAt: number | null;
@@ -63,6 +78,8 @@ export interface CityNeeds {
 
 export interface NeedsSnapshot {
   readonly rev: number;
+  /** The dashboard's decision label in use (gc's, or the default until read). */
+  readonly decisionLabel: string;
   readonly cities: ReadonlyMap<string, CityNeeds>;
   /** A poll's failure that ended it (the endpoint backs off). */
   readonly error: GcError | null;
@@ -71,6 +88,8 @@ export interface NeedsSnapshot {
 interface Poll {
   starter: object;
   startedAt: number;
+  /** When its last request answered (or it started). */
+  progressAt: number;
   probe: number | null;
 }
 
@@ -81,7 +100,8 @@ interface Known {
 
 /** One gc API's shared poll of what waits on a person, across its cities. */
 export class NeedsPoller implements EndpointListener {
-  private snap: NeedsSnapshot = { rev: 0, cities: new Map(), error: null };
+  private snap: NeedsSnapshot = { rev: 0, decisionLabel: DEFAULT_DECISION_LABEL, cities: new Map(), error: null };
+  private labelAt: number | null = null;
   private last: number | null = null;
   private wanted = false;
   private poll: Poll | null = null;
@@ -92,7 +112,7 @@ export class NeedsPoller implements EndpointListener {
   /** Prompt texts by city then request id (a request's prompt never changes). */
   private readonly prompts = new Map<string, Map<string, string | null>>();
 
-  constructor(private readonly endpoint: Endpoint, private readonly clock: Clock) {
+  constructor(private readonly endpoint: Endpoint, private readonly clock: Clock, private readonly readConfig: ReadDashboardConfig | null = null) {
     endpoint.addListener(this);
   }
 
@@ -105,7 +125,7 @@ export class NeedsPoller implements EndpointListener {
     if (this.disposed) return;
     const now = this.clock.now();
     if (this.poll) {
-      if (now - this.poll.startedAt <= POLL_DEADLINE_MS) return;
+      if (now - this.poll.progressAt <= POLL_DEADLINE_MS) return;
       this.abandon();
     }
     this.forget(cities);
@@ -113,7 +133,7 @@ export class NeedsPoller implements EndpointListener {
     if (!this.wanted && this.last !== null && now < this.last + NEEDS_POLL_MS) return;
     const gate = this.endpoint.gate(now);
     if (gate.kind === "wait") return;
-    const poll: Poll = { starter, startedAt: now, probe: gate.kind === "probe" ? gate.token : null };
+    const poll: Poll = { starter, startedAt: now, progressAt: now, probe: gate.kind === "probe" ? gate.token : null };
     this.poll = poll;
     this.wanted = false;
     this.last = now;
@@ -170,6 +190,7 @@ export class NeedsPoller implements EndpointListener {
   /** A request's answer: true to go on; false when the poll must end (abandoned, or the endpoint backs off). */
   private settle<V>(poll: Poll, r: Result<V, GcError>): boolean {
     if (!this.current(poll)) return false;
+    poll.progressAt = this.clock.now();
     if (r.ok) {
       this.endpoint.succeeded();
       return true;
@@ -188,10 +209,29 @@ export class NeedsPoller implements EndpointListener {
   }
 
   private async run(poll: Poll, cities: string[]): Promise<void> {
+    await this.readLabel(poll, cities[0]);
     for (const city of cities) {
       if (!(await this.pollCity(poll, city))) return;
     }
     if (this.current(poll) && this.snap.error !== null) this.snap = { ...this.snap, rev: this.snap.rev + 1, error: null };
+  }
+
+  /** Reads the dashboard's decision label (one supervisor-wide value) at most every LABEL_POLL_MS. */
+  private async readLabel(poll: Poll, city: string | undefined): Promise<void> {
+    const now = this.clock.now();
+    if (this.readConfig === null || city === undefined || (this.labelAt !== null && now - this.labelAt < LABEL_POLL_MS)) return;
+    this.labelAt = now;
+    let raw: unknown = null;
+    try {
+      raw = await this.readConfig(city);
+    } catch {
+      raw = null;
+    }
+    if (!this.current(poll)) return;
+    const label = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>)["decisionLabel"] : undefined;
+    if (typeof label === "string" && label.trim() !== "" && label !== this.snap.decisionLabel) {
+      this.snap = { ...this.snap, rev: this.snap.rev + 1, decisionLabel: label.trim() };
+    }
   }
 
   private async pollCity(poll: Poll, city: string): Promise<boolean> {
@@ -207,14 +247,37 @@ export class NeedsPoller implements EndpointListener {
       if (!this.current(poll)) return false;
     } else error = pending.error;
 
-    const human = await listHumanBeads(client, city, { limit: NEEDS_HUMAN_LIMIT });
-    if (!this.settle(poll, human)) return false;
     let beads = before?.human ?? [];
+    let reasons = before?.reasons ?? new Map<string, readonly DecisionReason[]>();
     let total = before?.humanTotal ?? 0;
-    if (human.ok) {
-      beads = human.value.items;
-      total = Math.max(human.value.total ?? 0, beads.length);
-    } else error ??= human.error;
+    type Query = [DecisionReason, { label: string; limit: number } | { type: string; limit: number }];
+    const queries: Query[] = [["human", { label: HUMAN_LABEL, limit: NEEDS_HUMAN_LIMIT }]];
+    if (this.snap.decisionLabel !== HUMAN_LABEL) queries.push(["operator", { label: this.snap.decisionLabel, limit: NEEDS_HUMAN_LIMIT }]);
+    queries.push(["decision", { type: DECISION_TYPE, limit: NEEDS_HUMAN_LIMIT }]);
+    const byId = new Map<string, T.Bead>();
+    const why = new Map<string, DecisionReason[]>();
+    let sum = 0;
+    let complete = true;
+    for (const [reason, query] of queries) {
+      const r = await listOpenBeads(client, city, query);
+      if (!this.settle(poll, r)) return false;
+      if (!r.ok) {
+        error ??= r.error;
+        complete = false;
+        continue;
+      }
+      sum += Math.max(r.value.total ?? 0, r.value.items.length);
+      for (const b of r.value.items) {
+        if (!byId.has(b.id)) byId.set(b.id, b);
+        why.set(b.id, [...(why.get(b.id) ?? []), reason]);
+      }
+    }
+    if (complete) {
+      beads = [...byId.values()];
+      reasons = why;
+      const repeats = [...why.values()].reduce((n, w) => n + w.length - 1, 0);
+      total = Math.max(sum - repeats, beads.length);
+    }
 
     let status = before?.status ?? null;
     const now = this.clock.now();
@@ -228,7 +291,7 @@ export class NeedsPoller implements EndpointListener {
     }
 
     const cities = new Map(this.snap.cities);
-    cities.set(city, { city, waiting, human: beads, humanTotal: total, status, fetchedAt: this.clock.now(), error });
+    cities.set(city, { city, waiting, human: beads, reasons, humanTotal: total, status, fetchedAt: this.clock.now(), error });
     this.snap = { ...this.snap, rev: this.snap.rev + 1, cities };
     return true;
   }

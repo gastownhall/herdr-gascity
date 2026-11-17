@@ -7,14 +7,16 @@
 //     session and the kind; selecting it opens the session's detail, which
 //     fetches the prompt and offers one answer button per option.
 //   - Decisions: open beads labeled `human` (gc's beadmeta.HumanLabel, "a
-//     bead waiting on a person's decision"), by priority, then oldest first.
+//     bead waiting on a person's decision"), labeled with the dashboard's
+//     decision label (mdash's decision queue, default needs/operator), or of
+//     type decision; by priority, then oldest first.
 //     Selecting one opens the bead's detail, with Close… and Sling….
 //
 // The list is gc's bounded page (store.ts HUMAN_LIMIT); gc's total says how
 // many there are. Every string from gc is cleaned before it reaches the model.
 
 import type * as T from "../gc/types.gen.ts";
-import { HUMAN_LABEL } from "../gc/ops.ts";
+import { DECISION_TYPE, DEFAULT_DECISION_LABEL, HUMAN_LABEL } from "../gc/ops.ts";
 import type { Unreadable } from "../gc/decode.ts";
 import { domainFreshness, type CitySnapshot } from "../sync/store.ts";
 import { errorText } from "./errorText.ts";
@@ -72,6 +74,8 @@ export interface HumanInput {
   selectedSession: string | null;
   /** The bead whose detail is open. */
   selectedBead: string | null;
+  /** The dashboard's decision label; default DEFAULT_DECISION_LABEL. */
+  decisionLabel?: string;
 }
 
 const DAY_MS = 86_400_000;
@@ -103,8 +107,15 @@ export function decisionOrder(a: T.Bead, b: T.Bead): number {
   return priorityRank(a.priority) - priorityRank(b.priority) || createdRank(a) - createdRank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
+/** A bead on the list: labeled human or with the decision label, or of type decision (a later event may have changed it). */
+function isDecision(b: T.Bead, decisionLabel: string): boolean {
+  const labels = b.labels ?? [];
+  return labels.includes(HUMAN_LABEL) || labels.includes(decisionLabel) || b.issue_type === DECISION_TYPE;
+}
+
 export function humanModel(input: HumanInput): HumanModel {
   const { snapshot: s, now } = input;
+  const decisionLabel = input.decisionLabel ?? DEFAULT_DECISION_LABEL;
   const sessions = new Map((s.sessions.value?.items ?? []).map((x) => [x.id, x]));
   const questions: QuestionRow[] = (s.pending.value?.items ?? []).map((p) => {
     const x = sessions.get(p.session_id);
@@ -117,14 +128,14 @@ export function humanModel(input: HumanInput): HumanModel {
     };
   });
   const beads = [...(s.human.value?.items ?? [])]
-    .filter((b) => b.status !== "closed" && (b.labels ?? []).includes(HUMAN_LABEL))
+    .filter((b) => b.status !== "closed" && isDecision(b, decisionLabel))
     .sort(decisionOrder);
   const decisions: DecisionRow[] = beads.map((b) => ({
     kind: "decision",
     bead: cleanLine(b.id),
     title: cleanLine(b.title),
     priority: typeof b.priority === "number" ? `P${b.priority}` : null,
-    labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL).map(cleanLine),
+    labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL && l !== decisionLabel).map(cleanLine),
     assignee: b.assignee ? cleanLine(b.assignee) : null,
     age: since(b.created_at, now),
     selected: input.selectedBead === b.id,

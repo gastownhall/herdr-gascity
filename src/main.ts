@@ -25,7 +25,7 @@ import {
   closeWindow, execGcStatus, hostFetch, logError, missingHostExports, nextCommand, openAttachTab, postNeedsYou, probeIo, readExecLog,
   readFocusTarget, readHerdrVersion, readOwnPins, writeOwnPins, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTerminalScene,
   readTheme, readVisibility, rememberCity, selectTab, setProbeEnabled, setWindowOpen, storeGcBin,
-  openModTab, openNeedsTab, readStatusColors,
+  openModTab, openNeedsTab, readStatusColors, openUrl, storeDashboardUrl, urlOpener,
 } from "./host.ts";
 import type { GcError } from "./gc/errors.ts";
 import type { Result } from "./result.ts";
@@ -129,6 +129,7 @@ function setUp(): Copy {
       setProbe: setProbeEnabled,
       settings: readSharedSettings,
       setGcBin: storeGcBin,
+      setDashboardUrl: storeDashboardUrl,
       herdrVersion: readHerdrVersion,
       execLog: readExecLog,
       keyboard: () => focus.handle?.is_focused() ?? false,
@@ -377,6 +378,10 @@ function crossActionsFor(state: Extract<Copy, { kind: "ready" }>): CrossCityActi
     },
     setInboxCity: (city, cx) => {
       copy.setInboxCity(city);
+      cx.notify();
+    },
+    openLink: (url, cx) => {
+      void openUrl(urlOpener(), url, copy.dashboardUrl()).then((r) => report(r));
       cx.notify();
     },
     closePane: (cx) => {

@@ -31,6 +31,7 @@
 import type { ActionSpec, ActivitySnapshot } from "../actions/activity.ts";
 import { ActionLedger, newIdempotencyKey } from "../actions/outcome.ts";
 import type { GcClient, HostFetch } from "../gc/client.ts";
+import { DEFAULT_DECISION_LABEL } from "../gc/ops.ts";
 import type { GcError } from "../gc/errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { FetchBudget, type BudgetStats } from "./budget.ts";
@@ -216,6 +217,7 @@ export class SyncRegistry {
           for (const l of [...this.listeners]) l(batch);
         },
         onError: (k, e) => this.deps.onError?.(k, e),
+        decisionLabel: () => this.needs.get(endpoint.value.baseUrl)?.poller.snapshot().decisionLabel ?? DEFAULT_DECISION_LABEL,
       });
       const ep = endpoint.value;
       const ledger = new ActionLedger({
@@ -293,7 +295,7 @@ export class SyncRegistry {
     const ep = endpoint.value;
     let entry = this.needs.get(ep.baseUrl);
     if (!entry) {
-      entry = { poller: new NeedsPoller(ep, this.clock), subs: 0 };
+      entry = { poller: new NeedsPoller(ep, this.clock, (city) => this.readDashboardConfig(ep.baseUrl, city)), subs: 0 };
       this.needs.set(ep.baseUrl, entry);
     }
     entry.subs++;
@@ -325,6 +327,21 @@ export class SyncRegistry {
         }
       },
     });
+  }
+
+  /**
+   * gc's dashboard config for a city (GET {api}/api/city/{city}/config: the
+   * operator's decision label), through the app-wide budget like discovery's
+   * probes; null when gc does not answer it with JSON.
+   */
+  private async readDashboardConfig(baseUrl: string, city: string): Promise<unknown> {
+    const r = await this.probeFetch().fetch(`${baseUrl}/api/city/${encodeURIComponent(city)}/config`, { method: "GET", headers: { Accept: "application/json" } });
+    if (!r.ok) return null;
+    try {
+      return JSON.parse(await r.text()) as unknown;
+    } catch {
+      return null;
+    }
   }
 
   /**

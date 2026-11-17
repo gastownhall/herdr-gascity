@@ -109,9 +109,19 @@ export function listWork(
  */
 export const HUMAN_LABEL = "human";
 
-/** GET the open beads waiting on a person (label `human`), one bounded page. */
-export function listHumanBeads(c: GcClient, city: string, query: { limit: number }) {
-  return c.call("get-v0-city-by-city-name-beads", { path: { cityName: city }, query: { label: HUMAN_LABEL, status: "open", limit: query.limit } });
+/**
+ * gc's dashboard marks a bead waiting on the operator with this label when
+ * DASHBOARD_DECISION_LABEL is unset ("needs/" + the operator alias,
+ * internal/api/dashboardbff/config.go); /api/city/{city}/config says which.
+ */
+export const DEFAULT_DECISION_LABEL = "needs/operator";
+
+/** The bead type gc uses for a recorded decision ("Decide: …"). */
+export const DECISION_TYPE = "decision";
+
+/** GET one bounded page of open beads with a label or of a type. */
+export function listOpenBeads(c: GcClient, city: string, query: { label: string; limit: number } | { type: string; limit: number }) {
+  return c.call("get-v0-city-by-city-name-beads", { path: { cityName: city }, query: { ...query, status: "open" } });
 }
 
 /** GET a city's status: agent, rig and work counts (the sidebar's health line). */

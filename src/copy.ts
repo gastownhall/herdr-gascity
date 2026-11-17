@@ -94,6 +94,8 @@ export interface CopyHost {
   settings(): unknown;
   /** Stores the gc program in the machine-wide settings; refused when it is not gc or the stored value is unreadable. */
   setGcBin(gcBin: string): Result<void, GcError>;
+  /** Stores (null removes) the web dashboard the views link to. */
+  setDashboardUrl?(url: string | null): Result<void, GcError>;
   /** herdr-app's version (null when it reports none), or why it could not be read. */
   herdrVersion(): Result<string | null, GcError>;
   execLog(): readonly ExecRecord[];
@@ -275,6 +277,8 @@ export class CopyController {
   private readonly unfolded = new Set<string>();
   private inboxFilter: InboxFilter = "all";
   private inboxCity: string | null = null;
+  /** The web dashboard to link to, read from the settings each tick (render reads no host state). */
+  private dashboard: string | null = null;
   private city: Subscription | null = null;
   /** The city the last subscription was to: a bead selected there means nothing in another city. */
   private lastCity: string | null = null;
@@ -429,7 +433,10 @@ export class CopyController {
     }
     const running = (this.cities?.snapshot().value?.items ?? []).filter((c) => c.running).map((c) => c.name);
     const rev = this.needs?.tick(running) ?? -1;
+    const settings = decodeSettings(this.deps.host.settings());
+    this.dashboard = settings.ok ? settings.value.dashboardUrl : null;
     const signature = [
+      this.dashboard ?? "",
       this.machineVersion(), this.citiesRev, rev, [...this.unfolded].join(","), this.inboxFilter, this.inboxCity ?? "", this.notice ?? "",
     ].join("|");
     this.needsRev = rev;
@@ -438,17 +445,23 @@ export class CopyController {
     return true;
   }
 
+  /** The web dashboard the views link to (settings dashboardUrl, as of the last tick), or null. */
+  dashboardUrl(): string | null {
+    return this.dashboard;
+  }
+
   /** The cross-city model; null for a city copy. */
   crossView(now: number): CrossCityView | null {
     const cities = this.cities?.snapshot() ?? null;
+    const dashboardUrl = this.dashboardUrl();
     const needs = this.needs?.snapshot() ?? null;
     const notice = this.notice;
     if (this.deps.view === "sidebar") {
-      const model = sidebarModel({ cities, needs, expanded: this.unfolded, now });
+      const model = sidebarModel({ cities, needs, expanded: this.unfolded, now, dashboardUrl });
       return { kind: "sidebar", model: notice !== null && model.note === null ? { ...model, note: notice } : model };
     }
     if (this.deps.view === "inbox") {
-      const model = inboxModel({ cities, needs, filter: this.inboxFilter, city: this.inboxCity, now });
+      const model = inboxModel({ cities, needs, filter: this.inboxFilter, city: this.inboxCity, now, dashboardUrl });
       return { kind: "inbox", model: notice !== null && model.note === null ? { ...model, note: notice } : model };
     }
     return null;
@@ -919,6 +932,14 @@ export class CopyController {
       case "back":
         this.selectSession(null);
         return "closed";
+      case "set-dashboard-url": {
+        const stored = this.deps.host.setDashboardUrl?.(c.url) ?? { ok: false as const, error: { kind: "host-call" as const, api: "setShared", cause: "unavailable" } };
+        if (!stored.ok) {
+          this.refuse(errorText(stored.error));
+          return "";
+        }
+        return c.url === null ? "no dashboard links" : `dashboard ${c.url}`;
+      }
       case "set-gc-bin": {
         const stored = this.deps.host.setGcBin(c.gcBin);
         if (!stored.ok) {

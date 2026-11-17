@@ -25,6 +25,8 @@ export interface CrossCityActions {
   setFilter(filter: InboxFilter, cx: GpuiContext): void;
   /** Narrows the pane to a city; null for every city. */
   setInboxCity(city: string | null, cx: GpuiContext): void;
+  /** Opens a web dashboard link in the browser. */
+  openLink(url: string, cx: GpuiContext): void;
 }
 
 function toneColor(tone: Tone, c: StatusColors): GpuiColor | undefined {
@@ -88,6 +90,11 @@ function cityBlock(c: SidebarCity, i: number, theme: ThemeRead, colors: StatusCo
     el = el.child(v_flex().id(`${id}-details`).pl(22).gap(0)
       .children(c.details.map((d, k) => muted(label(`${id}-detail-${k}`, d), theme).text_size(12))));
   }
+  const link = c.link;
+  if (c.expanded && link !== null) {
+    el = el.child(hoverable(label(`${id}-mdash`, "Open in mdash ↗").text_size(12).pl(22).py(1).rounded(5)
+      .on_click((_, cx) => actions.openLink(link, cx)), colors));
+  }
   return el;
 }
 
@@ -127,8 +134,10 @@ function inboxRow(r: NeedRow, id: string, theme: ThemeRead, colors: StatusColors
     buttons = [button(`${id}-answer`, "Answer", colors, (cx) => actions.openQuestion(r.city, r.session, cx))];
   } else {
     titleText = r.title;
-    sub = [r.city, r.bead, r.priority, r.age, r.labels.length > 0 ? `[${r.labels.join(", ")}]` : null].filter((x) => x !== null).join(" · ");
+    sub = [r.city, r.bead, r.priority, r.age, r.why.join(" + "), r.labels.length > 0 ? `[${r.labels.join(", ")}]` : null].filter((x) => x !== null && x !== "").join(" · ");
     buttons = [button(`${id}-open`, "Resolve…", colors, (cx) => actions.openDecision(r.city, r.bead, cx))];
+    const link = r.link;
+    if (link !== null) buttons.push(button(`${id}-mdash`, "mdash ↗", colors, (cx) => actions.openLink(link, cx)));
   }
   let title = label(`${id}-title`, titleText).overflow_hidden().whitespace_nowrap().text_ellipsis();
   if (r.kind === "question" && colors.bad !== undefined) title = title.text_color(colors.bad);
@@ -144,6 +153,8 @@ export function renderInbox(
 ): GpuiElement {
   let head = h_flex().id("gascity-inbox-head").gap(8).items_center()
     .child(div().id("gascity-inbox-title").flex_1().text_size(16).font_semibold().child("Needs a human"));
+  const link = m.link;
+  if (link !== null) head = head.child(button("gascity-inbox-mdash", "Open mdash ↗", colors, (cx) => actions.openLink(link, cx)));
   if (close !== null) head = head.child(button("gascity-inbox-close", "Close", colors, close));
   let root = themedRoot(theme, v_flex().id("gascity-inbox").size_full().p(12).gap(8).overflow_y_scroll().text_size(13)).child(head);
   const kinds = h_flex().id("gascity-inbox-kinds").gap(6).items_center()

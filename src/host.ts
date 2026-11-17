@@ -82,6 +82,14 @@ export function storeGcBin(gcBin: string): Result<void, GcError> {
   return ok(undefined);
 }
 
+/** Stores (or, with null, removes) the web dashboard the views link to. */
+export function storeDashboardUrl(dashboardUrl: string | null): Result<void, GcError> {
+  const next = patchSettings(herdr.shared(SETTINGS_KEY), { dashboardUrl });
+  if (!next.ok) return next;
+  herdr.setShared(SETTINGS_KEY, next.value);
+  return ok(undefined);
+}
+
 /** herdr's fetch, in the shape the gc client takes. */
 export const hostFetch: HostFetch = (url, init) => fetch(url, init);
 
@@ -304,8 +312,8 @@ export const OPEN_TIMEOUT_MS = 10_000;
  * opener; any other argument is refused before anything is spawned (a file
  * would be opened by its default handler, which runs a macOS .command file).
  */
-export async function openUrl(opener: "xdg-open" | "open", url: string): Promise<Result<null, GcError>> {
-  const refused = openUrlIssue(url);
+export async function openUrl(opener: "xdg-open" | "open", url: string, dashboardUrl: string | null = null): Promise<Result<null, GcError>> {
+  const refused = openUrlIssue(url, dashboardUrl);
   if (refused !== null) return err({ kind: "exec", argv: [opener, url], code: null, stderr: refused });
   logRecord("exec", [opener, url]);
   const running = opener === "open"
@@ -315,6 +323,16 @@ export async function openUrl(opener: "xdg-open" | "open", url: string): Promise
     (r): Result<null, GcError> => r.code === 0 ? ok(null) : err({ kind: "exec", argv: [opener, url], code: r.code, stderr: r.stderr.trim().slice(0, STDERR_LIMIT) }),
     (cause: unknown): Result<null, GcError> => err({ kind: "exec", argv: [opener, url], code: null, stderr: messageOf(cause) }),
   );
+}
+
+/** The platform's URL opener: macOS's open, else xdg-open. */
+export function urlOpener(): "open" | "xdg-open" {
+  try {
+    const w = typeof herdr.window === "function" ? herdr.window() : null;
+    return w?.platform === "macos" ? "open" : "xdg-open";
+  } catch {
+    return "xdg-open";
+  }
 }
 
 /** Closes this copy's overlay window. */

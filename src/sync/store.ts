@@ -256,6 +256,8 @@ export interface StoreDeps {
   emit(batch: EventBatch): void;
   /** Every recorded failure, for the app log. */
   onError(key: CityKey, entry: ErrorEntry): void;
+  /** gc's dashboard decision label (the needs poll learns it); default DEFAULT_DECISION_LABEL. */
+  decisionLabel?: () => string;
 }
 
 type DomainValue = {
@@ -799,7 +801,7 @@ export class CityStore implements EndpointListener {
   private known() {
     const sessionIds = new Set((this.slots.sessions.value?.items ?? []).map((s) => s.id));
     const humanIds = new Set((this.slots.human.value?.items ?? []).map((b) => b.id));
-    return { sessionIds, humanIds };
+    return { sessionIds, humanIds, decisionLabel: this.decisionLabel() };
   }
 
   private workQuery(extra: { limit: number; status?: "in_progress" | "closed"; sort?: "newest" }) {
@@ -827,10 +829,49 @@ export class CityStore implements EndpointListener {
       case "inProgress":
         return (await ops.listWork(c, city, this.workQuery({ limit: BOARD_LIMIT, status: "in_progress" }))) as Result<DomainValue[D], GcError>;
       case "human":
-        return (await ops.listHumanBeads(c, city, { limit: HUMAN_LIMIT })) as Result<DomainValue[D], GcError>;
+        return (await this.loadDecisions(step, priority)) as Result<DomainValue[D], GcError>;
       default:
         return (await this.loadSessions(step, priority)) as Result<DomainValue[D], GcError>;
     }
+  }
+
+  /**
+   * Open beads waiting on a decision: labeled human, labeled with the
+   * dashboard's decision label (what mdash lists), or of type decision; each
+   * once. `total` sums gc's counts less the beads listed more than once.
+   */
+  private async loadDecisions(step: Step, priority: FetchPriority): Promise<Result<HumanList, GcError>> {
+    const c = this.deps.endpoint.client(priority, step);
+    const label = this.decisionLabel();
+    const queries: ({ label: string; limit: number } | { type: string; limit: number })[] = [{ label: ops.HUMAN_LABEL, limit: HUMAN_LIMIT }];
+    if (label !== ops.HUMAN_LABEL) queries.push({ label, limit: HUMAN_LIMIT });
+    queries.push({ type: ops.DECISION_TYPE, limit: HUMAN_LIMIT });
+    const out: HumanList = { items: [], unreadable: [], total: 0, partial_errors: [] };
+    const seen = new Set<string>();
+    for (const q of queries) {
+      const r = await ops.listOpenBeads(c, this.key.city, q);
+      this.progress(step);
+      if (!r.ok) return r;
+      out.total += Math.max(r.value.total ?? 0, r.value.items.length);
+      out.partial ||= r.value.partial === true;
+      out.partial_errors.push(...r.value.partial_errors);
+      out.unreadable.push(...r.value.unreadable);
+      for (const b of r.value.items) {
+        if (seen.has(b.id)) {
+          out.total--;
+          continue;
+        }
+        seen.add(b.id);
+        out.items.push(b);
+      }
+      if (!this.current(step)) break;
+    }
+    return { ok: true, value: out };
+  }
+
+  /** The dashboard decision label in use for this city. */
+  decisionLabel(): string {
+    return this.deps.decisionLabel?.() ?? ops.DEFAULT_DECISION_LABEL;
   }
 
   private async loadSessions(step: Step, priority: FetchPriority): Promise<Result<SessionList, GcError>> {

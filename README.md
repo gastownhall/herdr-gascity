@@ -463,7 +463,15 @@ it unsubscribes and starts nothing; the other copies keep updating.
 
 What waits on a person, across every city of a gc API: sessions paused on a
 question or tool approval (`/pending`, with the session's name and the
-prompt's first line), and open beads labeled `human`. One shared poll per
+prompt's first line), and open beads waiting on a decision: labeled `human`,
+labeled with the web dashboard's decision label (mdash's decision queue;
+read from gc's `/api/city/<city>/config`, default `needs/operator`), or of
+type `decision`. Each bead is listed once, with every reason.
+
+With `gascity.settings.dashboardUrl` set (an https URL;
+`herdr-app do gascity.set-dashboard-url:<percent-encoded url>`), decisions,
+cities and the pane get "Open in mdash" links (`/city/<city>/beads?bead=<id>`),
+opened with the platform opener; only URLs under that host are opened. One shared poll per
 API (`src/sync/needs.ts`) reads, for each running city, `/pending` and
 `/beads?label=human&status=open` every 15 s and `/status` every 30 s,
 never the agent or session lists.
@@ -685,8 +693,8 @@ arguments separated by `:`; each argument is percent-encoded
   Idempotency-Key where gc declares one. A copy that refuses a delivery gives
   its claim up. Commands that only change what a copy shows (`focus`,
   `city`, `session`, `bead`, `cancel`, `back`, `refresh`, `probe`) and `set-gc-bin`
-  (which stores the same value whichever copy runs it) run in each copy that
-  gets them.
+  and `set-dashboard-url` (which store the same value whichever copy runs
+  them) run in each copy that gets them.
 - **Retrying a scripted command.** Sending the same nonce again within 10
   minutes is the same delivery: the command book logs it as a `duplicate`
   and nothing reaches gc (unless the first delivery was refused, which gives
@@ -737,6 +745,7 @@ arguments separated by `:`; each argument is percent-encoded
 | `cancel` | close the open question or form without acting (Cancel) |
 | `back` | close the open session's detail (as Esc does when no question or form is open) |
 | `set-gc-bin:<gc-bin>` | store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it) |
+| `set-dashboard-url:<url>` | store the web dashboard (mdash) the sidebar and Needs a human link to: an https URL, or none to remove the links |
 | `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
 | `wake:<city>:<session>` | wake a session (Wake) |
 | `suspend:<city>:<session>` | suspend a session (Suspend) |
