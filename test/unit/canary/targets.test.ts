@@ -65,6 +65,16 @@ describe("parseTargetList", () => {
     expect(r.errors).toEqual([{ ui: null, message: "the target list is not valid TOML" }]);
   });
 
+  test("a non-ASCII character outside the printable range (Bun would silently drop the rest) is a parse error, not a missing entry", () => {
+    for (const bad of ["\u00a0", "\u200b", "\ufeff", "\u0001"]) {
+      const r = parseTargetList(bad === "\ufeff" ? bad + LIST : mutate('id = "session"', bad + 'id = "session"'));
+      expect(r.list).toBeNull();
+      expect(r.errors).toEqual([{ ui: null, message: "the target list is not valid TOML" }]);
+      expect(verdict(r, ME)).toBe("unchecked");
+    }
+    expect(parseTargetList(LIST.replaceAll("\n", "\r\n")).errors).toEqual([]);
+  });
+
   test("an owner that is not an email, no steps, or a duplicate step is an error", () => {
     expect(parseTargetList(mutate('owner = "owner@example.com"', 'owner = "nobody"')).errors).toEqual([{ ui: null, message: "owner is not an email address" }]);
     expect(parseTargetList(mutate('id = "session"', 'id = "install"')).errors).toContainEqual({ ui: null, message: 'step "install" is listed twice' });

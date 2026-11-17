@@ -72,6 +72,11 @@ const ID = /^[a-z0-9][a-z0-9-]*$/;
 
 /** Parses and validates the list; never throws. */
 export function parseTargetList(text: string): Parsed {
+  // Bun's TOML parser stops without an error at some non-ASCII characters
+  // outside strings (a no-break space, a BOM) and drops the rest of the file,
+  // which would read as this canary's entry missing. The list is ASCII, so
+  // anything else means it does not parse.
+  if (/[^\t\n\r\x20-\x7e]/.test(text)) return { list: null, errors: [{ ui: null, message: "the target list is not valid TOML" }] };
   let raw: unknown;
   try {
     raw = Bun.TOML.parse(text);

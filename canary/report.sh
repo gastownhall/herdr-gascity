@@ -30,6 +30,7 @@
 # (its lines);
 # gh reads GH_TOKEN.
 set -euo pipefail
+export LC_ALL=C # byte ranges in patterns below, independent of the runner locale
 
 LABEL=canary-failure
 TITLE="Nightly canary: product-stage failure"
