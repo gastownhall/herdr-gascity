@@ -43,6 +43,8 @@ target() {
 # inside the canary's preflight step timeout.
 APT_UPDATE_TIMEOUT=60
 APT_INSTALL_TIMEOUT=150
+# The installers fetch from the local mirror; S1's step allows 4 minutes.
+INSTALL_TIMEOUT=150
 APT_OPTIONS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
 # The runner's apt mirror (azure.archive.ubuntu.com on GitHub's images) has
 # hung a whole step; the last attempt goes to the main archive instead.
@@ -118,7 +120,7 @@ mirror() {
   local pid
   pid=$(MIRROR_LOG="$CANARY_OUT/mirror.log" "$here/mirror.sh" serve "$RESOLVED" "$MIRROR_CACHE" "$CANARY_ROOT/mirror-root" "$MIRROR_PORT" "$(target)")
   export_env MIRROR_PID "$pid"
-  curl -fsS "$MIRROR_URL/app/latest.json" >"$CANARY_OUT/mirror-app-latest.json"
+  curl -fsS --max-time 10 "$MIRROR_URL/app/latest.json" >"$CANARY_OUT/mirror-app-latest.json"
 }
 
 install_app() {
@@ -131,7 +133,10 @@ install_app() {
   # Provenance: the manifests exactly as releases.herdr.dev served them.
   cp -f "$RESOLVED/app/latest.json" "$CANARY_OUT/upstream-app-latest.json"
   cp -f "$RESOLVED/core/latest.json" "$CANARY_OUT/upstream-core-latest.json"
-  HERDR_RELEASES_URL=$MIRROR_URL sh "$script" </dev/null 2>&1 | tee "$CANARY_OUT/install.log" >&2
+  local rc=0
+  HERDR_RELEASES_URL=$MIRROR_URL timeout "$INSTALL_TIMEOUT" sh "$script" </dev/null 2>&1 | tee "$CANARY_OUT/install.log" >&2 || rc=$?
+  (( rc != 124 )) || die "install.sh ran past ${INSTALL_TIMEOUT}s"
+  (( rc == 0 )) || die "install.sh failed (exit $rc)"
   # install.sh does not fail when the core step fails (it says so and goes on).
   command -v herdr-app >/dev/null || die "herdr-app is not on PATH after install.sh"
   command -v herdr-core >/dev/null || die "herdr-core is not on PATH after install.sh"

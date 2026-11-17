@@ -145,7 +145,7 @@ jobs:
         run: ${{ fromJSON(needs.plan.outputs.runs) }}
     env:
       GASCITY_SRC: ${{ github.workspace }}/gascity-src
-      CANARY_INTEGRATION_VERSION: main@${{ github.sha }}
+      CANARY_INTEGRATION_VERSION: ${{ github.ref_name }}@${{ github.sha }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -239,7 +239,7 @@ jobs:
         run: canary/canary-linux.sh discover
 
       - name: S7 Start a session from the mod
-        timeout-minutes: 5
+        timeout-minutes: 7
         run: canary/canary-linux.sh session
 
       - name: S8 Its output in the mod's detail
@@ -247,7 +247,7 @@ jobs:
         run: canary/canary-linux.sh output
 
       - name: S9 Open its terminal from the mod
-        timeout-minutes: 4
+        timeout-minutes: 5
         run: canary/canary-linux.sh attach
 
       - name: S9b HC_SCOPE audit
@@ -259,7 +259,7 @@ jobs:
         run: canary/canary-linux.sh keyboard
 
       - name: S11 Create a bead and send the agent input
-        timeout-minutes: 4
+        timeout-minutes: 6
         run: canary/canary-linux.sh bead-input
 
       - name: S12 The agent's close shown in the mod
@@ -305,58 +305,33 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
+      contents: read
       issues: write
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Download the results
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: canary-*-${{ github.run_attempt }}
           path: results
 
+      # The results come from jobs that ran downloaded code: report.sh reads one
+      # per planned run, checks every field, and files issues on the default
+      # branch only.
       - name: Summary, flake rate, issue
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SOAK: ${{ needs.plan.outputs.soak }}
           PLANNED: ${{ needs.plan.outputs.runs }}
+          ATTEMPT: ${{ github.run_attempt }}
+          RESULTS: results
           EVENT: ${{ github.event_name }}
           REASON: ${{ inputs.reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          # One artifact lands directly in results/, several in a directory each.
-          shopt -s nullglob globstar
-          files=(results/**/canary-result.json)
-          runs=$(jq -cn '[]')
-          [[ ${#files[@]} -eq 0 ]] || runs=$(jq -cs . "${files[@]}")
-          expected=$(jq length <<<"$PLANNED")
-          {
-            echo "## Herdr app canary (${EVENT}${REASON:+: $REASON})"
-            echo
-            echo "| run | passed | failed stage | class | reason | herdr-app | core | gc | duration |"
-            echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
-            jq -r 'to_entries[] | .value as $r | "| \(.key + 1) | \($r.passed) | \($r.failed_stage // "") | \($r.failure_class // "") | \($r.failure_reason // "") | \($r.ui_version) | \($r.core_version) | \($r.gc_version) | \($r.duration_s | floor)s |"' <<<"$runs"
-            echo
-            if (( $(jq length <<<"$runs") < expected )); then
-              echo "**$(( expected - $(jq length <<<"$runs") )) run(s) wrote no result** (the job failed before the result step)."
-            fi
-          } >>"$GITHUB_STEP_SUMMARY"
-          product=$(jq '[.[] | select(.product_failure)] | length' <<<"$runs")
-          if [[ $SOAK == true ]]; then
-            jq -r --argjson n "$expected" '"Soak: \([.[] | select(.product_failure)] | length) product-stage failure(s) in \($n) run(s): flake rate \((([.[] | select(.product_failure)] | length) * 100 / $n) | floor)% (target under 2%)."' <<<"$runs" >>"$GITHUB_STEP_SUMMARY"
-          fi
-          (( product > 0 )) || exit 0
-          title="Nightly canary: product-stage failure"
-          body=$(jq -r --arg url "$RUN_URL" '
-            [.[] | select(.product_failure)][0] as $f
-            | "The Herdr app canary failed at stage `\($f.failed_stage)` (class \($f.failure_class)).\n\n"
-              + "- run: \($url)\n- herdr-app \($f.ui_version), core \($f.core_version), gc \($f.gc_version), \($f.integration_version)\n"
-              + "- artifacts: \($url)#artifacts"' <<<"$runs")
-          existing=$(gh issue list --repo "$REPO" --state open --search "in:title \"$title\"" --json number,title |
-            jq -r --arg t "$title" 'map(select(.title == $t)) | first | .number // empty')
-          if [[ -n $existing ]]; then
-            gh issue comment "$existing" --repo "$REPO" --body "$body"
-            echo "Updated issue #$existing." >>"$GITHUB_STEP_SUMMARY"
-          else
-            gh issue create --repo "$REPO" --title "$title" --body "$body"
-            echo "Filed an issue." >>"$GITHUB_STEP_SUMMARY"
-          fi
+        run: canary/report.sh

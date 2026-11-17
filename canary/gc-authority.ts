@@ -9,13 +9,16 @@
 //     recorded for it (a supervisor.request event: phase complete, a mutating
 //     method, 2xx), at the path its kind sends to. An action kind the audit
 //     has no rule for fails closed.
-//   - Writes → actions: every successful write to the city in the window is
-//     accounted for by an action (one per attempt) or by the canary agent
-//     closing this run's bead. A refused write (non-2xx) changed nothing.
+//   - Writes → actions: every successful write in the window to the city
+//     (its own path or under it) or creating a city is accounted for by an
+//     action (one per attempt) or by the canary agent's one close of this
+//     run's bead after the submit. A refused write (non-2xx) changed nothing.
 //   - Changes → writes: every bead change gc recorded for this run's bead and
 //     every create/close/delete of this run's session bead has a write that
 //     started before it and names it (or creates it). The controller's own
 //     updates of a session bead (wake, runtime metadata) are not mod writes.
+//   - The probe shows everything: nothing truncated, and neither the exec_log
+//     nor the actions ring at its limit (older entries may be gone).
 //   - fetch_in_flight_max is at most 2.
 //   - The mod and gc agree on the bead's close reason and the session's
 //     attach.
@@ -41,6 +44,8 @@ export interface ProbeView {
   fetch_in_flight_max: number;
   board: null | { closed: { recent: { id: string; close_reason: string | null }[] } };
   sessions: { id: string; attached: boolean }[];
+  /** What the probe left out to fit herdr's file limit (src/probe.ts), when anything. */
+  truncated?: string[];
 }
 
 /** What this run made in gc, and where. */
@@ -81,6 +86,11 @@ export const FETCH_IN_FLIGHT_BOUND = 2;
  * start is its stamp less duration_ms less this. Seen at about 2 ms on a runner.
  */
 export const RECORD_LAG_MS = 50;
+
+/** The mod's exec_log ring (src/host.ts EXEC_LOG_LIMIT): a full ring may have dropped entries. */
+export const EXEC_LOG_LIMIT = 50;
+/** The mod's actions ring (src/actions/outcome.ts ACTIVITY_LIMIT). */
+export const ACTIVITY_LIMIT = 50;
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -163,12 +173,13 @@ function allowed(e: { kind: string; argv: string[] }, run: RunSubjects): boolean
 }
 
 function writesOf(events: readonly GcEvent[], run: RunSubjects, since: number): Write[] {
-  const prefix = `/v0/city/${run.city}/`;
+  const city = `/v0/city/${run.city}`;
+  const toCity = (method: string, path: string) => path === city || path.startsWith(`${city}/`) || (method === "POST" && path === "/v0/city");
   const out: Write[] = [];
   for (const e of events) {
     const p = e.payload;
     if (e.type !== "supervisor.request" || p?.phase !== "complete" || p.method === undefined || p.path === undefined) continue;
-    if (!MUTATING.has(p.method) || !p.path.startsWith(prefix)) continue;
+    if (!MUTATING.has(p.method) || !toCity(p.method, p.path)) continue;
     const status = p.status ?? 0;
     if (status < 200 || status > 299) continue;
     const end = epochMs(e.ts);
@@ -221,8 +232,11 @@ export function auditAuthority(input: AuthorityInput): AuthorityAudit {
     }
     if (taken === 0 && a.state === "done" && rule.required) findings.push(`action ${a.action} is done but gc saw no ${rule.shape}`);
   }
-  for (const w of writes) {
-    if (w.by === null && w.method === "POST" && run.beads.some((b) => w.path === `/v0/city/${run.city}/bead/${b}/close`)) w.by = "canary agent";
+  // The agent closes the run's bead once, on the close line the submit sent it.
+  const submitted = writes.find((w) => w.by === "session.submit");
+  for (const b of run.beads) {
+    const close = writes.find((w) => w.by === null && w.method === "POST" && w.path === `/v0/city/${run.city}/bead/${b}/close`);
+    if (close !== undefined && submitted !== undefined && close.start >= submitted.start) close.by = "canary agent";
   }
   for (const w of writes) {
     if (w.by === null) findings.push(`write ${w.method} ${w.path} (${w.status}) at ${w.ts} is not accounted for by any action`);
@@ -238,6 +252,12 @@ export function auditAuthority(input: AuthorityInput): AuthorityAudit {
       findings.push(`event ${e.type} for ${e.subject} at ${e.ts} has no write before it`);
     }
   }
+
+  if (probe.truncated !== undefined && probe.truncated.length > 0) {
+    findings.push(`the probe was truncated (${probe.truncated.join(", ")}): the audit cannot see everything the mod did`);
+  }
+  if (probe.exec_log.length >= EXEC_LOG_LIMIT) findings.push(`exec_log holds ${probe.exec_log.length} entries, its limit: older ones may have been dropped`);
+  if (probe.actions.length >= ACTIVITY_LIMIT) findings.push(`actions holds ${probe.actions.length} entries, its limit: older ones may have been dropped`);
 
   if (probe.fetch_in_flight_max > FETCH_IN_FLIGHT_BOUND) {
     findings.push(`fetch_in_flight_max is ${probe.fetch_in_flight_max}, over the bound of ${FETCH_IN_FLIGHT_BOUND}`);

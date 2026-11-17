@@ -207,12 +207,27 @@ describe("canary.yml", () => {
     }
   });
 
+  test("the report job runs report.sh with the run's real ref, and the result names it", async () => {
+    const { text, w } = await canary();
+    const steps = w.jobs["report"]!.steps;
+    const report = steps.filter((s) => s.run !== undefined);
+    expect(report.map((s) => s.run)).toEqual(["canary/report.sh"]);
+    expect((report[0] as Step & { env?: Record<string, string> }).env).toMatchObject({
+      REF: "${{ github.ref }}",
+      DEFAULT_BRANCH: "${{ github.event.repository.default_branch }}",
+      ATTEMPT: "${{ github.run_attempt }}",
+      RESULTS: "results",
+    });
+    expect(text).not.toMatch(/globstar/);
+    expect(text).toContain("CANARY_INTEGRATION_VERSION: ${{ github.ref_name }}@${{ github.sha }}");
+  });
+
   test("least privilege: none by default, every job declares its own, and only the report job writes", async () => {
     const { text, w } = await canary();
     expect(w.permissions).toEqual({});
     expect(text).not.toMatch(/secrets\./);
     const perms = Object.fromEntries(Object.entries(w.jobs).map(([n, j]) => [n, j.permissions]));
-    expect(perms).toEqual({ plan: {}, mirror: { contents: "read" }, canary: {}, report: { actions: "read", issues: "write" } });
+    expect(perms).toEqual({ plan: {}, mirror: { contents: "read" }, canary: {}, report: { actions: "read", contents: "read", issues: "write" } });
     for (const [name, job] of Object.entries(w.jobs)) {
       expect({ name, timeout: typeof (job as { "timeout-minutes"?: number })["timeout-minutes"] }).toEqual({ name, timeout: "number" });
     }

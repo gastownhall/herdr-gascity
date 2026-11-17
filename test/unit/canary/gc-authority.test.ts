@@ -5,7 +5,7 @@
 // the run changed.
 
 import { describe, expect, test } from "bun:test";
-import { auditAuthority, type AuthorityInput, type GcEvent } from "../../../canary/gc-authority.ts";
+import { ACTIVITY_LIMIT, EXEC_LOG_LIMIT, auditAuthority, type AuthorityInput, type GcEvent } from "../../../canary/gc-authority.ts";
 
 const CITY = "canary";
 const SESSION = "cn-1a2b";
@@ -106,13 +106,58 @@ describe("auditAuthority", () => {
   test("a done action with no write behind it is a finding", () => {
     const i = good();
     i.events = i.events.filter((e) => !(e.type === "supervisor.request" && e.payload?.path === `/v0/city/${CITY}/session/${SESSION}/submit`));
-    expect(findings(i)).toEqual(["action session.submit is done but gc saw no POST /v0/city/canary/session/{id}/submit"]);
+    expect(findings(i)).toEqual([
+      "action session.submit is done but gc saw no POST /v0/city/canary/session/{id}/submit",
+      // With no submit, nothing asked the agent to close the bead.
+      `write POST /v0/city/${CITY}/bead/${BEAD}/close (200) at ${at(8)} is not accounted for by any action`,
+    ]);
   });
 
   test("a write no action accounts for is a finding (the mod wrote more than it showed)", () => {
     const i = good();
     i.events.push(request(10, "POST", `/v0/city/${CITY}/beads`, 201));
     expect(findings(i)).toEqual([`write POST /v0/city/${CITY}/beads (201) at ${at(10)} is not accounted for by any action`]);
+  });
+
+  test("a write to the city itself, or one creating a city, is a write the mod must account for", () => {
+    const i = good();
+    i.events.push(request(10, "PATCH", `/v0/city/${CITY}`), request(11, "POST", "/v0/city", 201));
+    expect(findings(i)).toEqual([
+      `write PATCH /v0/city/${CITY} (200) at ${at(10)} is not accounted for by any action`,
+      `write POST /v0/city (201) at ${at(11)} is not accounted for by any action`,
+    ]);
+  });
+
+  test("the agent accounts for one close of the run's bead, and only after the submit", () => {
+    const twice = good();
+    twice.events.push(request(9, "POST", `/v0/city/${CITY}/bead/${BEAD}/close`));
+    expect(findings(twice)).toEqual([`write POST /v0/city/${CITY}/bead/${BEAD}/close (200) at ${at(9)} is not accounted for by any action`]);
+
+    const early = good();
+    early.events = early.events.map((e) => (e.payload?.path === `/v0/city/${CITY}/bead/${BEAD}/close` ? request(6.5, "POST", `/v0/city/${CITY}/bead/${BEAD}/close`) : e));
+    early.events = early.events.map((e) => (e.type === "bead.closed" ? event(6.5, "bead.closed", BEAD) : e));
+    expect(findings(early)).toEqual([`write POST /v0/city/${CITY}/bead/${BEAD}/close (200) at ${at(6.5)} is not accounted for by any action`]);
+  });
+
+  test("a probe that left anything out, or whose rings are full, cannot prove what the mod did", () => {
+    const cut = good();
+    cut.probe.truncated = ["detail.output", "detail.pending"];
+    expect(findings(cut)).toEqual(["the probe was truncated (detail.output, detail.pending): the audit cannot see everything the mod did"]);
+
+    const full = good();
+    while (full.probe.exec_log.length < EXEC_LOG_LIMIT) full.probe.exec_log.push({ kind: "notify", argv: [] });
+    while (full.probe.actions.length < ACTIVITY_LIMIT) full.probe.actions.push({ action: "session.new", state: "not-sent", attempt: 0 });
+    expect(findings(full)).toEqual([
+      `exec_log holds ${EXEC_LOG_LIMIT} entries, its limit: older ones may have been dropped`,
+      `actions holds ${ACTIVITY_LIMIT} entries, its limit: older ones may have been dropped`,
+    ]);
+  });
+
+  test("the ring limits match the mod's", async () => {
+    const host = await Bun.file(new URL("../../../src/host.ts", import.meta.url)).text();
+    const outcome = await Bun.file(new URL("../../../src/actions/outcome.ts", import.meta.url)).text();
+    expect(host).toContain(`const EXEC_LOG_LIMIT = ${EXEC_LOG_LIMIT};`);
+    expect(outcome).toContain(`export const ACTIVITY_LIMIT = ${ACTIVITY_LIMIT};`);
   });
 
   test("a retried action may account for one write per attempt", () => {

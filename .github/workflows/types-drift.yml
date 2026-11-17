@@ -12,7 +12,9 @@ name: herdr-app types drift
 #
 # This job runs herdr's published install.sh: it is never given a secret.
 # When the hourly run first sees a new release, a second job (no checkout, no
-# downloaded code, only actions: write) dispatches the nightly canary for it.
+# downloaded code, only actions: write) dispatches the nightly canary for it,
+# once per release: a cache marker saved right after the decision keeps a
+# release whose install keeps failing from dispatching it every hour.
 
 on:
   schedule:
@@ -58,6 +60,15 @@ jobs:
           key: herdr-types-result-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: herdr-types-result-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-
 
+      # One canary per release: decide marks a new release dispatched, so a
+      # release whose check records nothing (its install failed) is checked
+      # again hourly without dispatching the canary again.
+      - name: This release's dispatch marker
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/canary-dispatched
+          key: herdr-canary-dispatched-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}
+
       - name: Decide
         id: decide
         env:
@@ -65,6 +76,14 @@ jobs:
           SCHEDULE: ${{ github.event.schedule }}
           HERDR_APP_VERSION: ${{ steps.resolve.outputs.app }}
         run: canary/types-drift.sh decide
+
+      # Saved before anything that can fail on the release runs.
+      - name: Mark this release's canary dispatched
+        if: steps.decide.outputs.new_release == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/canary-dispatched
+          key: herdr-canary-dispatched-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}
 
       - name: Preflight (packages)
         if: steps.decide.outputs.check == 'true'

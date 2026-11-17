@@ -165,7 +165,7 @@ keyboard() {
   # The X keyboard focus goes to the window with no pointer input (Xvfb, XTEST).
   geometry=$(window_geometry) || die "no Herdr window on ${DISPLAY:-}"
   eval "$geometry"
-  xdotool windowfocus --sync "$WINDOW"
+  timeout 10 xdotool windowfocus --sync "$WINDOW" || die "the Herdr window never took the X keyboard focus"
   do_ok 15 pane.go --direction left >/dev/null || die "pane.go left failed"
   # shellcheck disable=SC2317 # a poll predicate, called by name
   keyed_in() { shows '.keyboard == true'; }

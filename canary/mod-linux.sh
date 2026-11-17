@@ -43,6 +43,8 @@ GC=$GC_DIR/gc
 CITY_ROOT=$CANARY_ROOT/city-root
 CITY=$CITY_ROOT/my-city
 API=http://127.0.0.1:8372
+# gc init (city files, supervisor start) gets this long: the city stages' steps allow 5 minutes.
+GC_INIT_TIMEOUT=120
 # The supervisor's home: the default ~/.gc, so the mod finds it as a person's.
 # That is where a person's own gc lives, so the city stage runs only in a
 # throwaway home (see guard_throwaway_home) and teardown stops only the
@@ -63,7 +65,7 @@ build_gc() {
 
 # api <method> <path> [json]: one call to the city's API.
 api() {
-  local args=(-fsS -X "$1" -H 'X-GC-Request: herdr-gascity-canary' "$API/v0/city/my-city$2")
+  local args=(-fsS --max-time 20 -X "$1" -H 'X-GC-Request: herdr-gascity-canary' "$API/v0/city/my-city$2")
   [[ $# -lt 3 ]] || args+=(-H 'Content-Type: application/json' -d "$3")
   curl "${args[@]}"
 }
@@ -145,15 +147,16 @@ mode = "always"
 template = "reviewer"
 mode = "always"
 EOF
-  PATH=$shims:$PATH "$GC" init --skip-provider-readiness --file "$CITY_ROOT/city.toml" "$CITY" 2>&1 | tee "$CANARY_OUT/gc-init.log" >&2 || rc=$?
+  PATH=$shims:$PATH timeout "$GC_INIT_TIMEOUT" "$GC" init --skip-provider-readiness --file "$CITY_ROOT/city.toml" "$CITY" 2>&1 | tee "$CANARY_OUT/gc-init.log" >&2 || rc=$?
   # Whatever runs under this fresh GC_HOME now is this script's, even after a failed init.
   record_supervisor
+  (( rc != 124 )) || die "gc init ran past ${GC_INIT_TIMEOUT}s"
   (( rc == 0 )) || die "gc init failed (exit $rc)"
   # shellcheck disable=SC2317 # a poll predicate, called by name
   sessions_up() {
-    [[ $(curl -fsS "$API/v0/city/my-city/sessions" 2>/dev/null | jq '[.items[] | select(.running)] | length') == 2 ]]
+    [[ $(curl -fsS --max-time 10 "$API/v0/city/my-city/sessions" 2>/dev/null | jq '[.items[] | select(.running)] | length') == 2 ]]
   }
-  poll 120 "the city's two sessions" sessions_up || { curl -sS "$API/v0/city/my-city/sessions" >&2 || true; die "the city's sessions did not start"; }
+  poll 120 "the city's two sessions" sessions_up || { curl -sS --max-time 10 "$API/v0/city/my-city/sessions" >&2 || true; die "the city's sessions did not start"; }
   local id title
   for title in "Add retry with backoff to the API client" "Document the installer" "Show the data age in the header" "Pin the gc API spec"; do
     id=$(api POST /beads "$(jq -cn --arg t "$title" '{title: $t, priority: 2}')" | jq -er .id)
@@ -163,7 +166,7 @@ EOF
   api PATCH "/bead/$id" '{"status":"in_progress","assignee":"frontend/builder"}' >/dev/null
   id=$(sed -n 4p "$CANARY_OUT/beads.txt" | cut -d' ' -f1)
   api POST "/bead/$id/close" '{"reason":"pinned"}' >/dev/null
-  curl -fsS "$API/v0/cities" | tee "$CANARY_OUT/cities.json" >&2
+  curl -fsS --max-time 10 "$API/v0/cities" | tee "$CANARY_OUT/cities.json" >&2
 }
 
 # The canary city: canary/city.toml.in filled as canary/city.ts fills it, in
@@ -181,15 +184,16 @@ canary_city_up() {
     "$here/city.toml.in" >"$toml"
   ! grep -n '@[A-Z_]*@' "$toml" || die "city.toml.in has a placeholder left"
   cp -f "$toml" "$CANARY_OUT/canary-city.toml"
-  PATH=$shims:$PATH "$GC" init --name "$CANARY_CITY" --file "$toml" "$CANARY_CITY_DIR" 2>&1 | tee "$CANARY_OUT/gc-init.log" >&2 || rc=$?
+  PATH=$shims:$PATH timeout "$GC_INIT_TIMEOUT" "$GC" init --name "$CANARY_CITY" --file "$toml" "$CANARY_CITY_DIR" 2>&1 | tee "$CANARY_OUT/gc-init.log" >&2 || rc=$?
   record_supervisor
+  (( rc != 124 )) || die "gc init ran past ${GC_INIT_TIMEOUT}s"
   (( rc == 0 )) || die "gc init failed (exit $rc)"
   # shellcheck disable=SC2317 # a poll predicate, called by name
   city_running() {
     curl -fsS --max-time 5 "$API/v0/cities" 2>/dev/null | jq -e --arg c "$CANARY_CITY" 'any(.items[]; .name == $c and .running == true)' >/dev/null
   }
-  poll 120 "the canary city running" city_running || { curl -sS "$API/v0/cities" >&2 || true; die "the canary city is not running"; }
-  curl -fsS "$API/v0/cities" >"$CANARY_OUT/cities.json"
+  poll 120 "the canary city running" city_running || { curl -sS --max-time 10 "$API/v0/cities" >&2 || true; die "the canary city is not running"; }
+  curl -fsS --max-time 10 "$API/v0/cities" >"$CANARY_OUT/cities.json"
   export_env CANARY_CITY_DIR "$CANARY_CITY_DIR"
 }
 

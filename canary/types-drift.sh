@@ -9,7 +9,10 @@
 #                             release whose last result is a failure fails
 #                             the hourly run at once, until a check passes;
 #                             new_release=true marks a release seen first
-#                             (the canary is dispatched for it)
+#                             (the canary is dispatched for it) and writes
+#                             its dispatch marker: a release whose check
+#                             records nothing (its install failed) is checked
+#                             again hourly, but dispatched only once
 #   types-drift.sh check      type-check src/ against the generated
 #                             declarations, diff the host surface src/ uses
 #                             against the last checked release's, write the
@@ -24,7 +27,9 @@
 # Environment: HERDR_APP_VERSION (the installed release), HOST_TYPES_CACHE
 # and HOST_RESULT_CACHE (the cache paths), and for decide EVENT_NAME,
 # SCHEDULE, DAILY_SCHEDULE. HOST_RESULT_CACHE holds VERSION and RESULT
-# (pass or fail) of the latest recorded check, restored before decide.
+# (pass or fail) of the latest recorded check, restored before decide;
+# DISPATCHED_CACHE holds the VERSION whose canary was dispatched, restored
+# before decide and saved right after it.
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
 # shellcheck source=lib.sh
@@ -33,6 +38,7 @@ repo=$(cd "$here/.." && pwd)
 GENERATED=$CANARY_OUT/types
 HOST_TYPES_CACHE=${HOST_TYPES_CACHE:-$CANARY_ROOT/host-types}
 HOST_RESULT_CACHE=${HOST_RESULT_CACHE:-$CANARY_ROOT/host-result}
+DISPATCHED_CACHE=${DISPATCHED_CACHE:-$CANARY_ROOT/canary-dispatched}
 
 # The recorded result of the last check of this release: pass, fail, or empty.
 last_result() {
@@ -43,6 +49,14 @@ last_result() {
   [[ $recorded == "$version" ]] || die "the restored result is for herdr-app $recorded, not $version"
   [[ $result == pass || $result == fail ]] || die "the restored result is neither pass nor fail: $result"
   printf '%s\n' "$result"
+}
+
+# Whether this release's canary was dispatched: the restored marker names it.
+dispatched() {
+  local version=$1 recorded
+  [[ -f $DISPATCHED_CACHE/VERSION ]] || return 1
+  recorded=$(<"$DISPATCHED_CACHE/VERSION")
+  [[ $recorded == "$version" ]] || die "the restored dispatch marker is for herdr-app $recorded, not $version"
 }
 
 decide() {
@@ -63,9 +77,13 @@ decide() {
         check=false
         reason="herdr-app $version failed its last check; failing until a daily or dispatched check passes"
         rc=1
+      elif dispatched "$version"; then
+        reason="herdr-app $version has no recorded result; checking again (its canary was dispatched)"
       else
         new_release=true
         reason="new herdr-app release $version"
+        mkdir -p "$DISPATCHED_CACHE"
+        printf '%s\n' "$version" >"$DISPATCHED_CACHE/VERSION"
       fi
       ;;
     *) die "unexpected event: ${EVENT_NAME:-unset}" ;;
@@ -121,5 +139,5 @@ case ${1:-} in
   check) run_stage types-check product check ;;
   remember) remember ;;
   record) record "${2:-}" ;;
-  *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

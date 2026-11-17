@@ -99,12 +99,15 @@ poll() {
 # do_ok <seconds> <command> [args...]: `herdr-app do` until the window answers
 # without an error, or the deadline passes. Prints the last reply on stdout.
 do_ok() {
-  local seconds=$1 deadline reply rc
+  local seconds=$1 deadline left reply rc
   shift
   deadline=$(( $(date +%s) + seconds ))
   for (( ; ; )); do
+    # One call never outlives the deadline: a hung window is a failed command.
+    left=$(( deadline - $(date +%s) ))
+    (( left > 0 )) || left=1
     rc=0
-    reply=$(herdr-app "do" "$@" 2>&1) || rc=$?
+    reply=$(timeout "$left" herdr-app "do" "$@" 2>&1) || rc=$?
     if (( rc == 0 )) && jq -e 'type == "object" and (has("error") | not)' >/dev/null 2>&1 <<<"$reply"; then
       printf '%s\n' "$reply"
       return 0
