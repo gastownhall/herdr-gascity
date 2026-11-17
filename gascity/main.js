@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:16e56f540814fefe8b4d7af055a16791c9b095d6e4c8a7908e23f2c9311d81a1 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:6f4f3ef786d673a4f239fe10e5df9d6eadacb55a0e4426a73a69d39f81a21db1 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2741,7 +2741,7 @@ var SpaceSchema = object({
   id: string2(),
   machine: nullable(string2()),
   active: boolean2(),
-  tabs: array(object({ id: string2(), active: boolean2() }))
+  tabs: array(object({ id: string2(), active: boolean2(), name: optional(string2()) }))
 });
 var FocusSchema = nullable(object({ space: string2(), tab: string2() }));
 function hostDecode(api, schema, value, path = "") {
@@ -2941,117 +2941,6 @@ var NeedsYouNotifier = class {
   }
 };
 
-// src/notify/window.ts
-function overlayOf(props2) {
-  if (typeof props2 !== "object" || props2 === null || Array.isArray(props2)) return null;
-  const v = props2["overlay"];
-  return typeof v === "string" && v !== "" ? v : null;
-}
-var WINDOW_REFRESH_MS = 5e3;
-var WINDOW_TTL_MS = 15e3;
-function windowFlag(now) {
-  return { open: true, at: now };
-}
-function windowOpenAt(value, now) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const v = value;
-  const at3 = v["at"];
-  return v["open"] === true && typeof at3 === "number" && Number.isFinite(at3) && Math.abs(now - at3) <= WINDOW_TTL_MS;
-}
-
-// src/terminal/argv.ts
-var HC_SCRUB = ["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET"];
-var NO_START_FLAG = "--no-start";
-var NO_START_MIN_GC = "1.6.0";
-var RELEASE = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/;
-function release(version2) {
-  const m = RELEASE.exec(version2);
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-}
-function supportsNoStart(version2) {
-  const have = release(version2);
-  const need = release(NO_START_MIN_GC);
-  if (have === null || need === null) return false;
-  for (let i = 0; i < 3; i++) {
-    const a = have[i] ?? 0;
-    const b = need[i] ?? 0;
-    if (a !== b) return a > b;
-  }
-  return true;
-}
-var SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-function sessionIdIssue(id2) {
-  return SESSION_ID.test(id2) ? null : `session id ${JSON.stringify(id2)} is not a gc session id`;
-}
-function cityPathIssue(path) {
-  if (!path.startsWith("/")) return `city path ${JSON.stringify(path)} is not absolute`;
-  if (/[\u0000-\u001f\u007f]/.test(path)) return `city path ${JSON.stringify(path)} has a control character`;
-  if (path.split("/").includes("..")) return `city path ${JSON.stringify(path)} has a ".." segment`;
-  return null;
-}
-function attachTail(t) {
-  return [t.gcBin, "--city", t.cityPath, "session", "attach", t.sessionId];
-}
-function attachArgv(t, noStart) {
-  return [...HC_SCRUB, ...attachTail(t), ...noStart ? [NO_START_FLAG] : []];
-}
-function endsWith(argv, tail) {
-  if (argv.length < tail.length) return false;
-  const start = argv.length - tail.length;
-  return tail.every((w, i) => argv[start + i] === w);
-}
-function isAttachOf(argv, t) {
-  const tail = [...HC_SCRUB, ...attachTail(t)];
-  return endsWith(argv, tail) || endsWith(argv, [...tail, NO_START_FLAG]);
-}
-function attachArgvIssue(argv) {
-  const n = HC_SCRUB.length;
-  if (!HC_SCRUB.every((w, i) => argv[i] === w)) return `the argv does not start with ${HC_SCRUB.join(" ")}`;
-  const [gcBin, city, path, verb, sub, id2, ...rest] = argv.slice(n);
-  if (gcBin === void 0 || city !== "--city" || path === void 0 || verb !== "session" || sub !== "attach" || id2 === void 0) {
-    return "the argv is not <gc> --city <path> session attach <id> after the env prefix";
-  }
-  if (rest.length > 1 || rest.length === 1 && rest[0] !== NO_START_FLAG) return `unexpected arguments after the session id: ${JSON.stringify(rest)}`;
-  return gcBinIssue(gcBin) ?? cityPathIssue(path) ?? sessionIdIssue(id2);
-}
-
-// src/sync/visibility.ts
-var MOD_NAME = "gascity";
-function mayBeOnScreen(input) {
-  if (input.windowOpen) return true;
-  if (input.layoutMods.includes(MOD_NAME)) return true;
-  const focus = input.focus;
-  if (focus === null) return false;
-  return input.panes.some((p) => p.mod === MOD_NAME && p.tab === focus.tab);
-}
-
-// src/actions/activity.ts
-function isPending(state) {
-  return state.kind === "sending" || state.kind === "polling" || state.kind === "watching";
-}
-function targetKey(t) {
-  switch (t.kind) {
-    case "session":
-    case "bead":
-      return `${t.kind}:${t.id}`;
-    case "new-bead":
-      return `new-bead:${t.title}`;
-    default:
-      return `${t.kind}:${t.name}`;
-  }
-}
-function targetText(t) {
-  switch (t.kind) {
-    case "session":
-    case "bead":
-      return `${t.kind} ${t.id}`;
-    case "new-bead":
-      return `new bead "${t.title}"`;
-    default:
-      return `${t.kind} ${t.name}`;
-  }
-}
-
 // src/gc/ops.ts
 var INFRASTRUCTURE_BEAD_TYPES = ["session", "message", "molecule", "gate"];
 function getHealth(c) {
@@ -3158,6 +3047,345 @@ function reopenBead(c, city, id2) {
   return c.call("post-v0-city-by-city-name-bead-by-id-reopen", { path: { cityName: city, id: id2 } });
 }
 
+// src/vm/errorText.ts
+var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
+var DEMAND_ONLY_HINT = "gc starts this agent's one session only while it has work: sling a bead to it instead";
+function seconds(ms) {
+  return `${Math.round(ms / 1e3)} s`;
+}
+function drift(value) {
+  return isUnrecognized(value) ? value.raw : String(value);
+}
+function errorText(e) {
+  return cleanLine(rawText2(e));
+}
+function rawText2(e) {
+  switch (e.kind) {
+    case "unreachable":
+      return `cannot reach ${e.url}: ${e.cause}`;
+    case "timeout":
+      return `no answer from ${e.url} within ${seconds(e.ms)}`;
+    case "too-large":
+      return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
+    case "http": {
+      if (e.problem?.code === CODE_DEMAND_ONLY_SINGLETON) {
+        const gc = e.problem.detail ?? "";
+        return `${DEMAND_ONLY_HINT}${gc === "" ? "" : ` (gc: ${gc})`}`;
+      }
+      const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
+      return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
+    }
+    case "csrf-rejected":
+      return "gc refused a change without X-GC-Request (a bug in the mod)";
+    case "read-only":
+      return `gc serves this API read-only (${e.detail})`;
+    case "write-grant-required":
+      return `this city requires a signed write grant (${e.detail})`;
+    case "read-grant-required":
+      return `this city requires a signed read grant (${e.detail})`;
+    case "city-not-running":
+      return `city "${e.city}" is not running`;
+    case "api-missing":
+      return `gc too old (needs ${e.operationId})${e.raw === void 0 ? "" : `: ${e.raw}`}`;
+    case "decode":
+      return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
+    case "outcome-failed":
+      return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
+    case "outcome-unknown": {
+      const why = e.requestId === null ? e.cause : `${e.cause}, request ${e.requestId}`;
+      const issues = e.issues && e.issues.length > 0 ? `: ${e.issues.join("; ")}` : "";
+      return `outcome of ${e.operationId} unknown (${why})${issues}`;
+    }
+    case "exec":
+      return e.code === null ? `${e.argv.join(" ")} did not run: ${e.stderr}` : `${e.argv.join(" ")} exited with code ${e.code}: ${e.stderr}`;
+    case "host-incompatible":
+      return `this herdr-app lacks ${e.missing.join(", ")}`;
+    case "host-decode":
+      return `unreadable ${e.api}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
+    case "host-call":
+      return `${e.api} failed: ${e.cause}`;
+    case "supervisor-config":
+      return `${e.path} line ${e.line}: ${e.issue}`;
+    case "attach-not-started":
+      return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
+    case "not-loopback":
+      return LOOPBACK_ONLY;
+    case "cancelled":
+      return e.reason === "copy-closed" ? `request to ${e.url} was cancelled: the Gas City view that started it closed` : `request to ${e.url} was dropped before it was sent: nothing waits for its answer any more`;
+  }
+}
+
+// src/terminal/argv.ts
+var HC_SCRUB = ["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET"];
+var NO_START_FLAG = "--no-start";
+var NO_START_MIN_GC = "1.6.0";
+var RELEASE = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/;
+function release(version2) {
+  const m = RELEASE.exec(version2);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+function supportsNoStart(version2) {
+  const have = release(version2);
+  const need = release(NO_START_MIN_GC);
+  if (have === null || need === null) return false;
+  for (let i = 0; i < 3; i++) {
+    const a = have[i] ?? 0;
+    const b = need[i] ?? 0;
+    if (a !== b) return a > b;
+  }
+  return true;
+}
+var SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+function sessionIdIssue(id2) {
+  return SESSION_ID.test(id2) ? null : `session id ${JSON.stringify(id2)} is not a gc session id`;
+}
+function cityPathIssue(path) {
+  if (!path.startsWith("/")) return `city path ${JSON.stringify(path)} is not absolute`;
+  if (/[\u0000-\u001f\u007f]/.test(path)) return `city path ${JSON.stringify(path)} has a control character`;
+  if (path.split("/").includes("..")) return `city path ${JSON.stringify(path)} has a ".." segment`;
+  return null;
+}
+function attachTail(t) {
+  return [t.gcBin, "--city", t.cityPath, "session", "attach", t.sessionId];
+}
+function attachArgv(t, noStart) {
+  return [...HC_SCRUB, ...attachTail(t), ...noStart ? [NO_START_FLAG] : []];
+}
+function endsWith(argv, tail) {
+  if (argv.length < tail.length) return false;
+  const start = argv.length - tail.length;
+  return tail.every((w, i) => argv[start + i] === w);
+}
+function isAttachOf(argv, t) {
+  const tail = [...HC_SCRUB, ...attachTail(t)];
+  return endsWith(argv, tail) || endsWith(argv, [...tail, NO_START_FLAG]);
+}
+function attachArgvIssue(argv) {
+  const n = HC_SCRUB.length;
+  if (!HC_SCRUB.every((w, i) => argv[i] === w)) return `the argv does not start with ${HC_SCRUB.join(" ")}`;
+  const [gcBin, city, path, verb, sub, id2, ...rest] = argv.slice(n);
+  if (gcBin === void 0 || city !== "--city" || path === void 0 || verb !== "session" || sub !== "attach" || id2 === void 0) {
+    return "the argv is not <gc> --city <path> session attach <id> after the env prefix";
+  }
+  if (rest.length > 1 || rest.length === 1 && rest[0] !== NO_START_FLAG) return `unexpected arguments after the session id: ${JSON.stringify(rest)}`;
+  return gcBinIssue(gcBin) ?? cityPathIssue(path) ?? sessionIdIssue(id2);
+}
+
+// src/terminal/attach.ts
+var WAKE_POLL_DELAYS_MS = [500, 1e3];
+var WAKE_POLL_EVERY_MS = 2e3;
+var WAKE_DEADLINE_MS = 6e4;
+var CONFIRM_WITHIN_MS = 5e3;
+var EXIT_WATCH_MS = 1e4;
+var CONFIRM_POLL_MS = 250;
+var OPEN_WITHIN_MS = 2e3;
+var STARTING = /* @__PURE__ */ new Set(["creating", "start-pending"]);
+var STOPPING = /* @__PURE__ */ new Set(["draining", "drained", "closing", "closed", "archived"]);
+function readiness(s) {
+  if (STOPPING.has(s.state)) return "stopping";
+  if (STARTING.has(s.state)) return "starting";
+  return s.running ? "ready" : "not-running";
+}
+var LIFECYCLE = ["sessions", "agents"];
+function localSpace(spaces2) {
+  const active = spaces2.find((s) => s.active);
+  if (active && active.machine === null) return active;
+  return spaces2.find((s) => s.machine === null) ?? null;
+}
+function localTerminals(scene) {
+  const tabs = new Set(scene.spaces.filter((s) => s.machine === null).flatMap((s) => s.tabs.map((t) => t.id)));
+  const out = [];
+  for (const terminal of scene.terminals) {
+    const pane = scene.panes.find((p) => p.terminal === terminal.address && tabs.has(p.tab));
+    if (pane) out.push({ terminal, tab: pane.tab });
+  }
+  return out;
+}
+function runsProgram(t) {
+  return t.state === "live" && !t.program.shell;
+}
+function notStarted(sessionId, reason, detail) {
+  return { kind: "failed", error: { kind: "attach-not-started", sessionId, reason, detail } };
+}
+function stateText(s) {
+  return s.reason !== void 0 && s.reason !== "" ? `${s.state} (${s.reason})` : s.state;
+}
+function openTerminal(binding, name, deps) {
+  const { target, noStart } = binding;
+  const id2 = target.sessionId;
+  const { host, clock } = deps;
+  const failed = (error) => ({ kind: "failed", error });
+  const exited = notStarted(id2, "attach-exited", "attach failed: see the tab for gc's reason (the tab stays open as a shell)");
+  const stoppingError = (s) => ({
+    kind: "attach-not-started",
+    sessionId: id2,
+    reason: "session-stopping",
+    detail: `gc reports the session ${stateText(s)}: it is stopping, so no terminal is opened (try again once it is asleep)`
+  });
+  const stopping = (s) => failed(stoppingError(s));
+  const notOpened = (why) => ({ kind: "not-sent", reason: `no tab was opened: ${why}` });
+  const openNow = () => ({
+    detail: "gc reports the session running: opening its tab",
+    nextAt: clock.now(),
+    deadline: clock.now() + OPEN_WITHIN_MS,
+    expired: notOpened(`the Gas City view that asked did not get to open it within ${OPEN_WITHIN_MS / 1e3} s`),
+    abandoned: notOpened("the Gas City view that asked closed first"),
+    step: (_c, _city, live) => Promise.resolve(live() ? openOrSelect() : notOpened("the action had already ended"))
+  });
+  const openOrSelect = () => {
+    const scene = host.scene();
+    if (!scene.ok) return failed(scene.error);
+    const local = localTerminals(scene.value);
+    const running = local.find((x) => runsProgram(x.terminal) && isAttachOf(x.terminal.argv, target));
+    if (running) {
+      const selected = host.selectTab(running.tab);
+      if (!selected.ok) return failed(selected.error);
+      return { kind: "done", detail: `already open: showed its tab (terminal ${running.terminal.address})` };
+    }
+    const space = localSpace(scene.value.spaces);
+    if (space === null) return notStarted(id2, "no-local-space", "no local space: open one (space.new)");
+    const before = new Set(scene.value.terminals.filter((t) => isAttachOf(t.argv, target)).map((t) => t.address));
+    const opened = host.openTab({ space: space.id, name, argv: attachArgv(target, noStart) });
+    if (!opened.ok) return failed(opened.error);
+    return confirm(clock.now(), before, null);
+  };
+  const confirm = (openedAt, before, seen) => ({
+    detail: seen === null ? "tab opened: waiting for herdr to list its terminal" : `tab opened: checking the attach keeps running (terminal ${seen})`,
+    nextAt: clock.now() + CONFIRM_POLL_MS,
+    deadline: openedAt + (seen === null ? CONFIRM_WITHIN_MS : EXIT_WATCH_MS),
+    expired: seen === null ? notStarted(id2, "not-seen-in-terminals", `herdr listed no new terminal running the attach within ${CONFIRM_WITHIN_MS / 1e3} s of tab.new`) : { kind: "done", detail: `opened in a new tab (terminal ${seen})` },
+    abandoned: { kind: "done", detail: "tab opened; not confirmed: the Gas City view that asked closed" },
+    step: () => Promise.resolve(confirmStep(openedAt, before, seen))
+  });
+  const confirmStep = (openedAt, before, seen) => {
+    const scene = host.scene();
+    if (!scene.ok) return failed(scene.error);
+    const now = clock.now();
+    if (seen === null) {
+      const mine = localTerminals(scene.value).find((x) => !before.has(x.terminal.address) && isAttachOf(x.terminal.argv, target));
+      if (!mine) return confirm(openedAt, before, null);
+      if (!runsProgram(mine.terminal)) return exited;
+      return now - openedAt >= EXIT_WATCH_MS ? { kind: "done", detail: `opened in a new tab (terminal ${mine.terminal.address})` } : confirm(openedAt, before, mine.terminal.address);
+    }
+    const t = scene.value.terminals.find((x) => x.address === seen);
+    if (!t) return { kind: "done", detail: `opened in a new tab (terminal ${seen}); the tab has since closed` };
+    if (!runsProgram(t)) return exited;
+    return now - openedAt >= EXIT_WATCH_MS ? { kind: "done", detail: `opened in a new tab (terminal ${seen})` } : confirm(openedAt, before, seen);
+  };
+  const waitRunning = (since2, woken, polls, last) => ({
+    detail: `${woken ? "woken" : "starting"}: waiting for gc to report session ${id2} running`,
+    nextAt: clock.now() + (WAKE_POLL_DELAYS_MS[polls] ?? WAKE_POLL_EVERY_MS),
+    deadline: since2 + WAKE_DEADLINE_MS,
+    expired: notStarted(id2, "not-running-after-wake", last.ok ? `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s; it is ${stateText(last.value)}${last.value.running ? ", running" : ""}` : `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s; last read failed: ${errorText(last.error)}`),
+    abandoned: notOpened(`the Gas City view that asked closed before gc reported the session running${woken ? " (gc was asked to wake it)" : ""}`),
+    step: async (c, city) => {
+      const r = await getSession(c, city, id2);
+      if (r.ok && readiness(r.value) === "ready") return openNow();
+      if (r.ok && readiness(r.value) === "stopping") return stopping(r.value);
+      return waitRunning(since2, woken, polls + 1, r);
+    }
+  });
+  const send = async (c, city, key) => {
+    const s = await getSession(c, city, id2);
+    if (!s.ok) return s;
+    switch (readiness(s.value)) {
+      case "ready":
+        return ok({ kind: "watch", watch: openNow(), wrote: false });
+      case "stopping":
+        return err(stoppingError(s.value));
+      case "starting":
+        return ok({ kind: "watch", watch: waitRunning(clock.now(), false, 0, s), wrote: false });
+      case "not-running":
+        break;
+    }
+    const woke = await wakeSession(c, city, id2, key);
+    if (!woke.ok) {
+      if (woke.error.kind === "outcome-unknown") return woke;
+      return err({ kind: "attach-not-started", sessionId: id2, reason: "wake-refused", detail: errorText(woke.error) });
+    }
+    return ok({ kind: "watch", watch: waitRunning(clock.now(), true, 0, s), wrote: true });
+  };
+  const wake = "post-v0-city-by-city-name-session-by-id-wake";
+  return {
+    kind: "session.attach",
+    verb: "Open terminal",
+    target: { kind: "session", id: id2 },
+    operationId: wake,
+    idempotent: OPERATIONS[wake].idempotencyKey,
+    confirm: null,
+    refresh: LIFECYCLE,
+    send
+  };
+}
+
+// src/notify/modTab.ts
+var MOD_TAB_NAMES = { inbox: "Needs a human", follow: "Needs you" };
+function modTabPlan(scene, view, mod) {
+  const name = MOD_TAB_NAMES[view];
+  const ours = new Set(scene.panes.filter((p) => p.mod === mod).map((p) => p.tab));
+  for (const space of scene.spaces) {
+    if (space.machine !== null) continue;
+    const tab = space.tabs.find((t) => t.name === name && ours.has(t.id));
+    if (tab) return { kind: "select", tab: tab.id };
+  }
+  return { kind: "open", space: localSpace(scene.spaces)?.id ?? null, name, view };
+}
+
+// src/notify/window.ts
+function overlayOf(props2) {
+  if (typeof props2 !== "object" || props2 === null || Array.isArray(props2)) return null;
+  const v = props2["overlay"];
+  return typeof v === "string" && v !== "" ? v : null;
+}
+var WINDOW_REFRESH_MS = 5e3;
+var WINDOW_TTL_MS = 15e3;
+function windowFlag(now) {
+  return { open: true, at: now };
+}
+function windowOpenAt(value, now) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value;
+  const at3 = v["at"];
+  return v["open"] === true && typeof at3 === "number" && Number.isFinite(at3) && Math.abs(now - at3) <= WINDOW_TTL_MS;
+}
+
+// src/sync/visibility.ts
+var MOD_NAME = "gascity";
+function mayBeOnScreen(input) {
+  if (input.windowOpen) return true;
+  if (input.layoutMods.includes(MOD_NAME)) return true;
+  const focus = input.focus;
+  if (focus === null) return false;
+  return input.panes.some((p) => p.mod === MOD_NAME && p.tab === focus.tab);
+}
+
+// src/actions/activity.ts
+function isPending(state) {
+  return state.kind === "sending" || state.kind === "polling" || state.kind === "watching";
+}
+function targetKey(t) {
+  switch (t.kind) {
+    case "session":
+    case "bead":
+      return `${t.kind}:${t.id}`;
+    case "new-bead":
+      return `new-bead:${t.title}`;
+    default:
+      return `${t.kind}:${t.name}`;
+  }
+}
+function targetText(t) {
+  switch (t.kind) {
+    case "session":
+    case "bead":
+      return `${t.kind} ${t.id}`;
+    case "new-bead":
+      return `new bead "${t.title}"`;
+    default:
+      return `${t.kind} ${t.name}`;
+  }
+}
+
 // src/actions/answers.ts
 function statusDetail(body) {
   return `gc: ${body.status}${body.replayed ? " (replayed: gc had already done it)" : ""}`;
@@ -3176,7 +3404,7 @@ function accepted(body) {
 }
 
 // src/actions/session.ts
-var LIFECYCLE = ["sessions", "agents"];
+var LIFECYCLE2 = ["sessions", "agents"];
 var INPUT = ["sessions"];
 var ANSWER = ["pending", "sessions"];
 function spec(kind, verb, id2, operationId, refresh, confirm, send) {
@@ -3196,7 +3424,7 @@ function sessionNew(agent, alias) {
     operationId: "create-session",
     idempotent: OPERATIONS["create-session"].idempotencyKey,
     confirm: null,
-    refresh: LIFECYCLE,
+    refresh: LIFECYCLE2,
     send: (c, city, key) => then(createSession(c, city, body, key), accepted)
   };
 }
@@ -3206,7 +3434,7 @@ function sessionWake(id2) {
     "Wake",
     id2,
     "post-v0-city-by-city-name-session-by-id-wake",
-    LIFECYCLE,
+    LIFECYCLE2,
     null,
     (c, city, key) => then(wakeSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
   );
@@ -3217,7 +3445,7 @@ function sessionSuspend(id2) {
     "Suspend",
     id2,
     "post-v0-city-by-city-name-session-by-id-suspend",
-    LIFECYCLE,
+    LIFECYCLE2,
     null,
     (c, city, key) => then(suspendSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
   );
@@ -3228,13 +3456,13 @@ function sessionStop(id2) {
     "Stop turn",
     id2,
     "post-v0-city-by-city-name-session-by-id-stop",
-    LIFECYCLE,
+    LIFECYCLE2,
     null,
     (c, city, key) => then(stopSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) }))
   );
 }
 function sessionClose(id2) {
-  return spec("session.close", "Close", id2, "post-v0-city-by-city-name-session-by-id-close", LIFECYCLE, {
+  return spec("session.close", "Close", id2, "post-v0-city-by-city-name-session-by-id-close", LIFECYCLE2, {
     question: `Close session ${id2}?`,
     detail: "gc ends the session permanently: it stops its runtime and closes its session bead. A closed session cannot be woken again."
   }, (c, city, key) => then(closeSession(c, city, id2, key), (b) => ({ kind: "done", detail: statusDetail(b) })));
@@ -3252,7 +3480,7 @@ function sessionKill(id2, force) {
     force ? "Force kill" : "Kill",
     id2,
     "post-v0-city-by-city-name-session-by-id-kill",
-    LIFECYCLE,
+    LIFECYCLE2,
     confirm,
     (c, city, key) => {
       const answer = force ? killSession(c, city, id2, key, { force: true }) : killSession(c, city, id2, key);
@@ -3266,7 +3494,7 @@ function sessionPin(id2) {
     "Pin",
     id2,
     "post-v0-city-by-city-name-session-by-id-pin",
-    LIFECYCLE,
+    LIFECYCLE2,
     null,
     (c, city) => then(pinSession(c, city, id2), (s) => ({ kind: "done", detail: sessionDetail(s) }))
   );
@@ -3283,7 +3511,7 @@ function sessionUnpin(id2) {
     "Unpin",
     id2,
     "post-v0-city-by-city-name-session-by-id-unpin",
-    LIFECYCLE,
+    LIFECYCLE2,
     null,
     (c, city) => then(unpinSession(c, city, id2), (s) => ({ kind: "done", detail: sessionDetail(s) }))
   );
@@ -3694,28 +3922,28 @@ function postNeedsYou(batch) {
   for (const e of errors) logError(`gascity: ${e}`);
   return { failed, errors };
 }
-function openNeedsWindow(city, what) {
+function openModTab(view) {
+  const scene = readTerminalScene();
+  if (!scene.ok) return scene;
+  const plan2 = modTabPlan(scene.value, view, MOD_NAME);
+  if (plan2.kind === "select") return selectTab(plan2.tab);
+  const { name, view: modView } = plan2;
+  const where = plan2.space === null ? {} : { space: plan2.space };
+  logRecord("run", ["tab.new", MOD_NAME, modView]);
   try {
-    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), city, what, Date.now()));
-    if (!readWindowOpen()) {
-      logRecord("run", ["mod.open", MOD_NAME]);
-      herdr.run("mod.open", { name: MOD_NAME });
-    }
+    herdr.run("tab.new", { ...where, name, mod: MOD_NAME, props: { view: modView } });
     return ok(null);
   } catch (cause) {
-    return err({ kind: "host-call", api: "run(mod.open)", cause: messageOf2(cause) });
+    return err({ kind: "host-call", api: "run(tab.new)", cause: messageOf2(cause) });
   }
 }
-var INBOX_WINDOW_KEY = "gascity-inbox";
-function openInboxPane() {
+function openNeedsTab(city, what) {
   try {
-    if (typeof herdr.openOverlay !== "function") return err({ kind: "host-call", api: "openOverlay", cause: "this herdr-app cannot open mod windows" });
-    logRecord("run", ["openOverlay", MOD_NAME, "inbox"]);
-    herdr.openOverlay({ mod: MOD_NAME, props: { view: "inbox" }, kind: "window", key: INBOX_WINDOW_KEY, width: 0.6, height: 0.7 });
-    return ok(null);
+    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), city, what, Date.now()));
   } catch (cause) {
-    return err({ kind: "host-call", api: "openOverlay", cause: messageOf2(cause) });
+    return err({ kind: "host-call", api: "setShared", cause: messageOf2(cause) });
   }
+  return openModTab("follow");
 }
 function selectTab(id2) {
   logRecord("run", ["tab.select", id2]);
@@ -4293,8 +4521,8 @@ function decodeCopy(props2, lastSelection) {
 function decodeView(props2) {
   if (typeof props2 !== "object" || props2 === null || Array.isArray(props2) || !Object.hasOwn(props2, "view")) return ok("tab");
   const view = props2["view"];
-  if (view === "sidebar" || view === "inbox" || view === "tab") return ok(view);
-  return err({ kind: "host-decode", api: PROPS_API, path: "view", issues: [`view: expected "sidebar", "inbox" or "tab", got ${JSON.stringify(view)}`] });
+  if (view === "sidebar" || view === "inbox" || view === "follow" || view === "tab") return ok(view);
+  return err({ kind: "host-decode", api: PROPS_API, path: "view", issues: [`view: expected "sidebar", "inbox", "follow" or "tab", got ${JSON.stringify(view)}`] });
 }
 function initialMachine(copy) {
   return { copy, state: { phase: "discovering" } };
@@ -4467,74 +4695,6 @@ function invalidationFor(events, known) {
     }
   }
   return inv;
-}
-
-// src/vm/errorText.ts
-var LOOPBACK_ONLY = "only a loopback gc API (http://127.0.0.1, localhost or [::1] with a port) is allowed";
-var DEMAND_ONLY_HINT = "gc starts this agent's one session only while it has work: sling a bead to it instead";
-function seconds(ms) {
-  return `${Math.round(ms / 1e3)} s`;
-}
-function drift(value) {
-  return isUnrecognized(value) ? value.raw : String(value);
-}
-function errorText(e) {
-  return cleanLine(rawText2(e));
-}
-function rawText2(e) {
-  switch (e.kind) {
-    case "unreachable":
-      return `cannot reach ${e.url}: ${e.cause}`;
-    case "timeout":
-      return `no answer from ${e.url} within ${seconds(e.ms)}`;
-    case "too-large":
-      return `the ${e.direction} at ${e.url} is over herdr's ${e.limitBytes} byte limit`;
-    case "http": {
-      if (e.problem?.code === CODE_DEMAND_ONLY_SINGLETON) {
-        const gc = e.problem.detail ?? "";
-        return `${DEMAND_ONLY_HINT}${gc === "" ? "" : ` (gc: ${gc})`}`;
-      }
-      const detail = e.problem ? e.problem.detail ?? e.problem.title ?? "" : e.raw ?? "";
-      return detail === "" ? `gc answered ${e.status}` : `gc answered ${e.status}: ${detail}`;
-    }
-    case "csrf-rejected":
-      return "gc refused a change without X-GC-Request (a bug in the mod)";
-    case "read-only":
-      return `gc serves this API read-only (${e.detail})`;
-    case "write-grant-required":
-      return `this city requires a signed write grant (${e.detail})`;
-    case "read-grant-required":
-      return `this city requires a signed read grant (${e.detail})`;
-    case "city-not-running":
-      return `city "${e.city}" is not running`;
-    case "api-missing":
-      return `gc too old (needs ${e.operationId})${e.raw === void 0 ? "" : `: ${e.raw}`}`;
-    case "decode":
-      return `unreadable answer to ${e.operationId}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
-    case "outcome-failed":
-      return `request ${e.requestId} (${drift(e.operation)}) failed: ${e.payload.error_code}: ${e.payload.error_message}`;
-    case "outcome-unknown": {
-      const why = e.requestId === null ? e.cause : `${e.cause}, request ${e.requestId}`;
-      const issues = e.issues && e.issues.length > 0 ? `: ${e.issues.join("; ")}` : "";
-      return `outcome of ${e.operationId} unknown (${why})${issues}`;
-    }
-    case "exec":
-      return e.code === null ? `${e.argv.join(" ")} did not run: ${e.stderr}` : `${e.argv.join(" ")} exited with code ${e.code}: ${e.stderr}`;
-    case "host-incompatible":
-      return `this herdr-app lacks ${e.missing.join(", ")}`;
-    case "host-decode":
-      return `unreadable ${e.api}${e.path === "" ? "" : ` at ${e.path}`}: ${e.issues.join("; ")}`;
-    case "host-call":
-      return `${e.api} failed: ${e.cause}`;
-    case "supervisor-config":
-      return `${e.path} line ${e.line}: ${e.issue}`;
-    case "attach-not-started":
-      return `terminal for ${e.sessionId} not opened (${e.reason}): ${e.detail}`;
-    case "not-loopback":
-      return LOOPBACK_ONLY;
-    case "cancelled":
-      return e.reason === "copy-closed" ? `request to ${e.url} was cancelled: the Gas City view that started it closed` : `request to ${e.url} was dropped before it was sent: nothing waits for its answer any more`;
-  }
 }
 
 // src/sync/backoff.ts
@@ -6233,7 +6393,7 @@ function regionModel(parts) {
 }
 
 // src/vm/status.ts
-var LIFECYCLE2 = {
+var LIFECYCLE3 = {
   suspended: "suspended",
   quarantined: "quarantined",
   stopped: "stopped",
@@ -6284,14 +6444,14 @@ function liveStatus(x, detail = null) {
 function sessionStatus(s, pending) {
   if (pending !== null) return status("needs-you", `needs you (${pending.kind})`, "pending");
   if (s.state !== ACTIVE) {
-    const known = LIFECYCLE2[s.state];
+    const known = LIFECYCLE3[s.state];
     return status("lifecycle", known ?? s.state, "lifecycle", s.reason ?? null, known === void 0 ? `state ${s.state}` : null);
   }
   return liveStatus(s);
 }
 function agentStatus(a) {
   if (a.suspended) return status("lifecycle", "suspended", "lifecycle", a.unavailable_reason ?? null);
-  if (!a.running) return status("lifecycle", LIFECYCLE2[a.state] ?? "not running", "lifecycle", a.unavailable_reason ?? null);
+  if (!a.running) return status("lifecycle", LIFECYCLE3[a.state] ?? "not running", "lifecycle", a.unavailable_reason ?? null);
   const unavailable = !a.available ? `unavailable${a.unavailable_reason ? `: ${a.unavailable_reason}` : ""}` : null;
   const live = liveStatus(a, unavailable);
   return unavailable !== null && live.detail === null ? { ...live, detail: cleanLine(unavailable) } : live;
@@ -7192,153 +7352,6 @@ function probeDocument(input) {
   };
 }
 
-// src/terminal/attach.ts
-var WAKE_POLL_DELAYS_MS = [500, 1e3];
-var WAKE_POLL_EVERY_MS = 2e3;
-var WAKE_DEADLINE_MS = 6e4;
-var CONFIRM_WITHIN_MS = 5e3;
-var EXIT_WATCH_MS = 1e4;
-var CONFIRM_POLL_MS = 250;
-var OPEN_WITHIN_MS = 2e3;
-var STARTING = /* @__PURE__ */ new Set(["creating", "start-pending"]);
-var STOPPING = /* @__PURE__ */ new Set(["draining", "drained", "closing", "closed", "archived"]);
-function readiness(s) {
-  if (STOPPING.has(s.state)) return "stopping";
-  if (STARTING.has(s.state)) return "starting";
-  return s.running ? "ready" : "not-running";
-}
-var LIFECYCLE3 = ["sessions", "agents"];
-function localSpace(spaces2) {
-  const active = spaces2.find((s) => s.active);
-  if (active && active.machine === null) return active;
-  return spaces2.find((s) => s.machine === null) ?? null;
-}
-function localTerminals(scene) {
-  const tabs = new Set(scene.spaces.filter((s) => s.machine === null).flatMap((s) => s.tabs.map((t) => t.id)));
-  const out = [];
-  for (const terminal of scene.terminals) {
-    const pane = scene.panes.find((p) => p.terminal === terminal.address && tabs.has(p.tab));
-    if (pane) out.push({ terminal, tab: pane.tab });
-  }
-  return out;
-}
-function runsProgram(t) {
-  return t.state === "live" && !t.program.shell;
-}
-function notStarted(sessionId, reason, detail) {
-  return { kind: "failed", error: { kind: "attach-not-started", sessionId, reason, detail } };
-}
-function stateText(s) {
-  return s.reason !== void 0 && s.reason !== "" ? `${s.state} (${s.reason})` : s.state;
-}
-function openTerminal(binding, name, deps) {
-  const { target, noStart } = binding;
-  const id2 = target.sessionId;
-  const { host, clock } = deps;
-  const failed = (error) => ({ kind: "failed", error });
-  const exited = notStarted(id2, "attach-exited", "attach failed: see the tab for gc's reason (the tab stays open as a shell)");
-  const stoppingError = (s) => ({
-    kind: "attach-not-started",
-    sessionId: id2,
-    reason: "session-stopping",
-    detail: `gc reports the session ${stateText(s)}: it is stopping, so no terminal is opened (try again once it is asleep)`
-  });
-  const stopping = (s) => failed(stoppingError(s));
-  const notOpened = (why) => ({ kind: "not-sent", reason: `no tab was opened: ${why}` });
-  const openNow = () => ({
-    detail: "gc reports the session running: opening its tab",
-    nextAt: clock.now(),
-    deadline: clock.now() + OPEN_WITHIN_MS,
-    expired: notOpened(`the Gas City view that asked did not get to open it within ${OPEN_WITHIN_MS / 1e3} s`),
-    abandoned: notOpened("the Gas City view that asked closed first"),
-    step: (_c, _city, live) => Promise.resolve(live() ? openOrSelect() : notOpened("the action had already ended"))
-  });
-  const openOrSelect = () => {
-    const scene = host.scene();
-    if (!scene.ok) return failed(scene.error);
-    const local = localTerminals(scene.value);
-    const running = local.find((x) => runsProgram(x.terminal) && isAttachOf(x.terminal.argv, target));
-    if (running) {
-      const selected = host.selectTab(running.tab);
-      if (!selected.ok) return failed(selected.error);
-      return { kind: "done", detail: `already open: showed its tab (terminal ${running.terminal.address})` };
-    }
-    const space = localSpace(scene.value.spaces);
-    if (space === null) return notStarted(id2, "no-local-space", "no local space: open one (space.new)");
-    const before = new Set(scene.value.terminals.filter((t) => isAttachOf(t.argv, target)).map((t) => t.address));
-    const opened = host.openTab({ space: space.id, name, argv: attachArgv(target, noStart) });
-    if (!opened.ok) return failed(opened.error);
-    return confirm(clock.now(), before, null);
-  };
-  const confirm = (openedAt, before, seen) => ({
-    detail: seen === null ? "tab opened: waiting for herdr to list its terminal" : `tab opened: checking the attach keeps running (terminal ${seen})`,
-    nextAt: clock.now() + CONFIRM_POLL_MS,
-    deadline: openedAt + (seen === null ? CONFIRM_WITHIN_MS : EXIT_WATCH_MS),
-    expired: seen === null ? notStarted(id2, "not-seen-in-terminals", `herdr listed no new terminal running the attach within ${CONFIRM_WITHIN_MS / 1e3} s of tab.new`) : { kind: "done", detail: `opened in a new tab (terminal ${seen})` },
-    abandoned: { kind: "done", detail: "tab opened; not confirmed: the Gas City view that asked closed" },
-    step: () => Promise.resolve(confirmStep(openedAt, before, seen))
-  });
-  const confirmStep = (openedAt, before, seen) => {
-    const scene = host.scene();
-    if (!scene.ok) return failed(scene.error);
-    const now = clock.now();
-    if (seen === null) {
-      const mine = localTerminals(scene.value).find((x) => !before.has(x.terminal.address) && isAttachOf(x.terminal.argv, target));
-      if (!mine) return confirm(openedAt, before, null);
-      if (!runsProgram(mine.terminal)) return exited;
-      return now - openedAt >= EXIT_WATCH_MS ? { kind: "done", detail: `opened in a new tab (terminal ${mine.terminal.address})` } : confirm(openedAt, before, mine.terminal.address);
-    }
-    const t = scene.value.terminals.find((x) => x.address === seen);
-    if (!t) return { kind: "done", detail: `opened in a new tab (terminal ${seen}); the tab has since closed` };
-    if (!runsProgram(t)) return exited;
-    return now - openedAt >= EXIT_WATCH_MS ? { kind: "done", detail: `opened in a new tab (terminal ${seen})` } : confirm(openedAt, before, seen);
-  };
-  const waitRunning = (since2, woken, polls, last) => ({
-    detail: `${woken ? "woken" : "starting"}: waiting for gc to report session ${id2} running`,
-    nextAt: clock.now() + (WAKE_POLL_DELAYS_MS[polls] ?? WAKE_POLL_EVERY_MS),
-    deadline: since2 + WAKE_DEADLINE_MS,
-    expired: notStarted(id2, "not-running-after-wake", last.ok ? `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s; it is ${stateText(last.value)}${last.value.running ? ", running" : ""}` : `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s; last read failed: ${errorText(last.error)}`),
-    abandoned: notOpened(`the Gas City view that asked closed before gc reported the session running${woken ? " (gc was asked to wake it)" : ""}`),
-    step: async (c, city) => {
-      const r = await getSession(c, city, id2);
-      if (r.ok && readiness(r.value) === "ready") return openNow();
-      if (r.ok && readiness(r.value) === "stopping") return stopping(r.value);
-      return waitRunning(since2, woken, polls + 1, r);
-    }
-  });
-  const send = async (c, city, key) => {
-    const s = await getSession(c, city, id2);
-    if (!s.ok) return s;
-    switch (readiness(s.value)) {
-      case "ready":
-        return ok({ kind: "watch", watch: openNow(), wrote: false });
-      case "stopping":
-        return err(stoppingError(s.value));
-      case "starting":
-        return ok({ kind: "watch", watch: waitRunning(clock.now(), false, 0, s), wrote: false });
-      case "not-running":
-        break;
-    }
-    const woke = await wakeSession(c, city, id2, key);
-    if (!woke.ok) {
-      if (woke.error.kind === "outcome-unknown") return woke;
-      return err({ kind: "attach-not-started", sessionId: id2, reason: "wake-refused", detail: errorText(woke.error) });
-    }
-    return ok({ kind: "watch", watch: waitRunning(clock.now(), true, 0, s), wrote: true });
-  };
-  const wake = "post-v0-city-by-city-name-session-by-id-wake";
-  return {
-    kind: "session.attach",
-    verb: "Open terminal",
-    target: { kind: "session", id: id2 },
-    operationId: wake,
-    idempotent: OPERATIONS[wake].idempotencyKey,
-    confirm: null,
-    refresh: LIFECYCLE3,
-    send
-  };
-}
-
 // src/copy.ts
 function cleanFocus(f) {
   return f.bead !== void 0 ? { city: cleanLine(f.city), bead: cleanLine(f.bead) } : { city: cleanLine(f.city), session: cleanLine(f.session ?? "") };
@@ -8200,7 +8213,8 @@ var CopyController = class {
       target: t ? cleanFocus(t) : null,
       pending,
       tabs: this.gascityTabs,
-      next: n ? cleanFocus(n) : null
+      next: n ? cleanFocus(n) : null,
+      closable: this.deps.windowClosable ?? true
     };
   }
   // ---- actions ----------------------------------------------------------------------
@@ -10356,7 +10370,8 @@ import { h_flex as h_flex7, v_flex as v_flex8 } from "gpui-base";
 function renderWindowHead(m, theme2, actions) {
   const target = m.target === null ? muted(label("gascity-window-target", "No toast to follow: pick a session below."), theme2) : label("gascity-window-target", m.target.bead !== void 0 ? `Needs a decision: bead ${m.target.bead} in city ${m.target.city}` : `Needs you: session ${m.target.session ?? ""} in city ${m.target.city}`);
   const tabs = m.tabs.length === 1 ? [button2("gascity-window-tab-0", "Show Gas City tab", (cx) => actions.showTab(m.tabs[0] ?? "", cx))] : m.tabs.map((t, i) => button2(`gascity-window-tab-${i}`, `Show Gas City tab ${t}`, (cx) => actions.showTab(t, cx)));
-  const bar = h_flex7().id("gascity-window-bar").gap(8).children([...tabs, button2("gascity-window-close", "Close", (cx) => actions.closeWindow(cx))]);
+  const close = m.closable ? [button2("gascity-window-close", "Close", (cx) => actions.closeWindow(cx))] : [];
+  const bar = h_flex7().id("gascity-window-bar").gap(8).children([...tabs, ...close]);
   const list = m.pending.length === 0 ? muted(label("gascity-window-none", "No session needs you right now."), theme2) : v_flex8().id("gascity-window-pending").gap(2).children(m.pending.map((p, i) => label(`gascity-window-pending-${i}`, `${p.label} (session ${p.session}): ${p.kind}`).on_click((_, cx) => actions.selectSession(p.session, cx))));
   let el = v_flex8().id("gascity-window").gap(6).child(target);
   if (m.next !== null) {
@@ -10463,6 +10478,7 @@ function setUp() {
   }, decoded.value);
   if (!last.ok) discovery.hostErrors.push(last.error);
   const overlay = view.value === "tab" ? overlayOf(props2) : null;
+  const follows = overlay !== null || view.value === "follow";
   const paneOverlay = view.value === "inbox" ? overlayOf(props2) : null;
   const focus = { handle: null };
   const drafts = { any: () => false };
@@ -10483,7 +10499,8 @@ function setUp() {
     },
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
-    window: overlay !== null,
+    window: follows,
+    windowClosable: overlay !== null,
     commands: sharedCommandBook(),
     draft: () => drafts.any(),
     view: view.value
@@ -10686,15 +10703,15 @@ function crossActionsFor(state) {
       cx.notify();
     },
     openQuestion: (city, session, cx) => {
-      report(openNeedsWindow(city, { session }));
+      report(openNeedsTab(city, { session }));
       cx.notify();
     },
     openDecision: (city, bead, cx) => {
-      report(openNeedsWindow(city, { bead }));
+      report(openNeedsTab(city, { bead }));
       cx.notify();
     },
     openInbox: (cx) => {
-      report(openInboxPane());
+      report(openModTab("inbox"));
       cx.notify();
     },
     setFilter: (filter, cx) => {

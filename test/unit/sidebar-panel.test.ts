@@ -32,13 +32,25 @@ describe("the sidebar block", () => {
     expect(paths.some((p) => p.endsWith("/agents") || p.endsWith("/sessions") || p.endsWith("/work/ready"))).toBe(false);
   });
 
-  test("a question opens the needs-you window on its session; a decision on its bead", async () => {
+  test("a question opens the Needs you tab on its session; a decision on its bead", async () => {
     const mod = await running({ route: route(), props: { view: "sidebar" } }, 8);
     mod.click("gascity-side-city-0-row-0");
     expect(mod.shared.get(FOCUS_KEY)).toMatchObject({ city: "scratch", session: "sc-20" });
-    expect(mod.herdrCalls.some((c) => c.name === "run" && c.args[0] === "mod.open")).toBe(true);
+    const tabNew = mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new").map((c) => c.args[1]);
+    expect(tabNew).toEqual([{ space: "s1", name: "Needs you", mod: "gascity", props: { view: "follow" } }]);
     mod.click("gascity-side-city-0-row-1");
     expect(mod.shared.get(FOCUS_KEY)).toMatchObject({ city: "scratch", bead: "sc-90" });
+  });
+
+  test("an open Needs you tab is selected, not opened again", async () => {
+    const mod = await running({
+      route: route(), props: { view: "sidebar" },
+      spaces: [{ id: "s1", machine: null, active: true, tabs: [{ id: "t1", active: true, name: "1" }, { id: "t9", active: false, name: "Needs you" }] }],
+      panes: [{ pane: "p1", tab: "t1", mod: "gascity", title: "gascity", focused: true }, { pane: "p9", tab: "t9", mod: "gascity", title: "gascity", focused: false }],
+    }, 8);
+    mod.click("gascity-side-city-0-row-0");
+    const runs = mod.herdrCalls.filter((c) => c.name === "run").map((c) => [c.args[0], c.args[1]]);
+    expect(runs).toEqual([["tab.select", { id: "t9" }]]);
   });
 
   test("clicking a city unfolds its counts; the badge opens the Needs a human pane", async () => {
@@ -49,13 +61,13 @@ describe("the sidebar block", () => {
     expect(text(root, "gascity-side-city-0-detail-0")).toBe("Agents: 6 of 9 running · 1 suspended");
     expect(text(root, "gascity-side-city-0-detail-2")).toBe("Work: 2 in progress · 26 ready");
     mod.click("gascity-side-total");
-    const open = mod.herdrCalls.find((c) => c.name === "openOverlay");
-    expect(open?.args[0]).toMatchObject({ mod: "gascity", props: { view: "inbox" }, kind: "window", key: "gascity-inbox" });
+    const tabNew = mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new").map((c) => c.args[1]);
+    expect(tabNew).toEqual([{ space: "s1", name: "Needs a human", mod: "gascity", props: { view: "inbox" } }]);
   });
 });
 
 describe("the Needs a human pane", () => {
-  test("questions, then decisions, with filters; Answer opens the window on the session", async () => {
+  test("questions, then decisions, with filters; Resolve… opens the Needs you tab on the bead", async () => {
     const mod = await running({ route: route(), props: { view: "inbox", overlay: "o-7" } }, 8);
     let root = mod.render();
     expect(text(root, "gascity-inbox-all")).toBe("All 3");
@@ -74,5 +86,18 @@ describe("the Needs a human pane", () => {
     expect(mod.herdrCalls.some((c) => c.name === "closeOverlay" && c.args[0] === "o-7")).toBe(true);
     // A pane opened as a window is not the "needs you" window.
     expect(mod.shared.get("gascity.window")).toBeFalsy();
+  });
+});
+
+describe("the Needs you tab", () => {
+  test("follows the shared focus target like the window, with no Close (herdr closes tabs)", async () => {
+    const mod = await running({ route: route(), props: { view: "follow" } }, 4);
+    mod.shared.set(FOCUS_KEY, { city: "scratch", bead: "fe-1", seq: 3, at: mod.clock.t });
+    for (let i = 0; i < 6; i++) await mod.tick();
+    const root = mod.render();
+    expect(text(root, "gascity-window-target")).toBe("Needs a decision: bead fe-1 in city scratch");
+    expect(text(root, "gascity-bead-title")).toMatch(/^Bead fe-1: /);
+    expect(findById(root, "gascity-window-close")).toBeUndefined();
+    expect(findById(root, "gascity-agents")).toBeUndefined();
   });
 });

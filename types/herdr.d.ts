@@ -74,17 +74,4 @@ declare module "herdr" {
   /** Closes an overlay (a mod closes its own with closeOverlay(props().overlay)). */
   export function closeOverlay(id: string): null;
 
-  /**
-   * Opens a dialog, popup or window running a mod; returns its id. A window
-   * `key` remembers where it was dropped, and opening the same key again
-   * replaces the open one. width/height: px, or up to 1 for a share of the window.
-   */
-  export function openOverlay(spec: {
-    mod?: string;
-    props?: Record<string, unknown>;
-    kind?: "dialog" | "popup" | "window";
-    key?: string;
-    width?: number;
-    height?: number;
-  }): string;
 }

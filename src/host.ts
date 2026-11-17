@@ -13,6 +13,7 @@ import { decodeFocused, decodePanes, decodeScene, layoutModNames, type HostDecod
 import { openUrlIssue, probeDir, probePathIssue } from "./hostGuards.ts";
 import { FOCUS_KEY, nextFocus, type FocusWhat } from "./notify/focus.ts";
 import { summaryText, toastText, type NeedsYou, type NeedsYouBatch } from "./notify/needsYou.ts";
+import { modTabPlan, type ModTabView } from "./notify/modTab.ts";
 import { windowFlag, windowOpenAt } from "./notify/window.ts";
 import type { ProbeIo } from "./probe.ts";
 import { attachArgvIssue } from "./terminal/argv.ts";
@@ -216,37 +217,38 @@ export function postNeedsYou(batch: NeedsYouBatch): { failed: NeedsYou[]; errors
 }
 
 /**
- * Opens the "needs you" window on a session's question or a bead (the
- * sidebar's and the Needs a human pane's rows): writes the shared focus
- * target, which an open window follows, and opens the window when it is
- * not open (mod.open toggles, so never while it is).
+ * Opens (or selects) a tab whose only pane is this mod, showing `view`
+ * (notify/modTab.ts). The mod pane runs no program: herdr starts nothing in
+ * it but this mod. One of the mod's two tab.new calls (openAttachTab's is the other).
  */
-export function openNeedsWindow(city: string, what: FocusWhat): Result<null, GcError> {
+export function openModTab(view: ModTabView): Result<null, GcError> {
+  const scene = readTerminalScene();
+  if (!scene.ok) return scene;
+  const plan = modTabPlan(scene.value, view, MOD_NAME);
+  if (plan.kind === "select") return selectTab(plan.tab);
+  const { name, view: modView } = plan;
+  const where = plan.space === null ? {} : { space: plan.space };
+  logRecord("run", ["tab.new", MOD_NAME, modView]);
   try {
-    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), city, what, Date.now()));
-    if (!readWindowOpen()) {
-      logRecord("run", ["mod.open", MOD_NAME]);
-      herdr.run("mod.open", { name: MOD_NAME });
-    }
+    herdr.run("tab.new", { ...where, name, mod: MOD_NAME, props: { view: modView } });
     return ok(null);
   } catch (cause) {
-    return err({ kind: "host-call", api: "run(mod.open)", cause: messageOf(cause) });
+    return err({ kind: "host-call", api: "run(tab.new)", cause: messageOf(cause) });
   }
 }
 
-/** The Needs a human pane's window key: opening it again brings back the one open, in its place. */
-export const INBOX_WINDOW_KEY = "gascity-inbox";
-
-/** Opens the Needs a human pane (a window running this mod with props {view: "inbox"}). */
-export function openInboxPane(): Result<null, GcError> {
+/**
+ * Shows a session's question or a bead in the "Needs you" tab (the
+ * sidebar's and the Needs a human pane's rows): writes the shared focus
+ * target, which that tab follows, and opens or selects the tab.
+ */
+export function openNeedsTab(city: string, what: FocusWhat): Result<null, GcError> {
   try {
-    if (typeof herdr.openOverlay !== "function") return err({ kind: "host-call", api: "openOverlay", cause: "this herdr-app cannot open mod windows" });
-    logRecord("run", ["openOverlay", MOD_NAME, "inbox"]);
-    herdr.openOverlay({ mod: MOD_NAME, props: { view: "inbox" }, kind: "window", key: INBOX_WINDOW_KEY, width: 0.6, height: 0.7 });
-    return ok(null);
+    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), city, what, Date.now()));
   } catch (cause) {
-    return err({ kind: "host-call", api: "openOverlay", cause: messageOf(cause) });
+    return err({ kind: "host-call", api: "setShared", cause: messageOf(cause) });
   }
+  return openModTab("follow");
 }
 
 /** Selects a tab: one holding a Gas City pane (the window's "Show Gas City tab"), or one still running an attach. */

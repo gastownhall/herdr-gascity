@@ -485,13 +485,17 @@ never the agent or session lists.
   ```
 
 - **Needs a human pane** (`props: {view: "inbox"}`): every city's questions,
-  then decisions, filtered by kind and by city. It opens as a window from
-  the badge; `pane.split {mod: "gascity", props: {view: "inbox"}}` puts it
-  in a tab.
+  then decisions, filtered by kind and by city. The badge opens it in a
+  "Needs a human" tab (or selects the one open).
 
-A row opens the "needs you" window on it: a question shows its prompt and
-answer buttons; a decision shows the bead with Close… and Sling…. The tab's
-own "Needs a human" section lists the same for its city.
+A row opens the **Needs you** tab (`props: {view: "follow"}`) on it, or
+selects the open one, which follows the newest row clicked as the "needs
+you" window follows toasts: a question shows its prompt and answer buttons;
+a decision shows the bead with Close… and Sling…. A toast still opens the
+window (a toast's action can only be `mod.open`). These tabs hold only the
+mod: their `tab.new` passes no argv, and the authority lint allows that
+call only as written. The city tab's own "Needs a human" section lists the
+same for its city.
 
 ## The work board
 

@@ -119,10 +119,12 @@ export interface CopyDeps {
   draft?: () => boolean;
   /** What this copy shows (props().view): a city (default), the cross-city sidebar block, or the Needs a human pane. */
   view?: CopyKind;
+  /** The window can close itself (an overlay); the Needs you tab cannot (herdr closes tabs). Default true. */
+  windowClosable?: boolean;
 }
 
 /** What a copy shows. */
-export type CopyKind = "tab" | "sidebar" | "inbox";
+export type CopyKind = "tab" | "sidebar" | "inbox" | "follow";
 
 /** A cross-city copy's model (the sidebar block or the Needs a human pane). */
 export type CrossCityView = { kind: "sidebar"; model: SidebarModel } | { kind: "inbox"; model: InboxModel };
@@ -161,6 +163,8 @@ export interface WindowModel {
   tabs: string[];
   /** A newer target held back while a draft is typed (cleaned): shown on request. */
   next: FocusOn | null;
+  /** Show Close: the window is an overlay it can close (the Needs you tab is not). */
+  closable: boolean;
 }
 
 /** A question the copy asks before acting, or a form. */
@@ -1162,6 +1166,7 @@ export class CopyController {
       pending,
       tabs: this.gascityTabs,
       next: n ? cleanFocus(n) : null,
+      closable: this.deps.windowClosable ?? true,
     };
   }
 

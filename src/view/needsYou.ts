@@ -34,7 +34,8 @@ export function renderWindowHead(m: WindowModel, theme: ThemeRead, actions: Wind
   const tabs = m.tabs.length === 1
     ? [button("gascity-window-tab-0", "Show Gas City tab", (cx) => actions.showTab(m.tabs[0] ?? "", cx))]
     : m.tabs.map((t, i) => button(`gascity-window-tab-${i}`, `Show Gas City tab ${t}`, (cx) => actions.showTab(t, cx)));
-  const bar = h_flex().id("gascity-window-bar").gap(8).children([...tabs, button("gascity-window-close", "Close", (cx) => actions.closeWindow(cx))]);
+  const close = m.closable ? [button("gascity-window-close", "Close", (cx) => actions.closeWindow(cx))] : [];
+  const bar = h_flex().id("gascity-window-bar").gap(8).children([...tabs, ...close]);
   const list = m.pending.length === 0
     ? muted(label("gascity-window-none", "No session needs you right now."), theme)
     : v_flex().id("gascity-window-pending").gap(2).children(m.pending.map((p, i) =>

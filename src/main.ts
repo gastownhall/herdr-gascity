@@ -25,7 +25,7 @@ import {
   closeWindow, execGcStatus, hostFetch, logError, missingHostExports, nextCommand, openAttachTab, postNeedsYou, probeIo, readExecLog,
   readFocusTarget, readHerdrVersion, readOwnPins, writeOwnPins, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTerminalScene,
   readTheme, readVisibility, rememberCity, selectTab, setProbeEnabled, setWindowOpen, storeGcBin,
-  openInboxPane, openNeedsWindow, readStatusColors,
+  openModTab, openNeedsTab, readStatusColors,
 } from "./host.ts";
 import type { GcError } from "./gc/errors.ts";
 import type { Result } from "./result.ts";
@@ -113,8 +113,10 @@ function setUp(): Copy {
     rememberCity,
   }, decoded.value);
   if (!last.ok) discovery.hostErrors.push(last.error);
-  // Only a city copy opened as an overlay is the "needs you" window (the pane opens as a window too).
+  // Only a city copy opened as an overlay is the "needs you" window (the pane may open as a window too).
   const overlay = view.value === "tab" ? overlayOf(props) : null;
+  // The "Needs you" tab follows the shared focus target as the window does, in a tab of its own.
+  const follows = overlay !== null || view.value === "follow";
   const paneOverlay = view.value === "inbox" ? overlayOf(props) : null;
   const focus: { handle: GpuiFocusHandle | null } = { handle: null };
   const drafts: Drafts = { any: () => false };
@@ -135,7 +137,8 @@ function setUp(): Copy {
     },
     clock: systemClock,
     probe: sharedProbeWriter(() => new ProbeWriter(probeIo)),
-    window: overlay !== null,
+    window: follows,
+    windowClosable: overlay !== null,
     commands: sharedCommandBook(),
     draft: () => drafts.any(),
     view: view.value,
@@ -357,15 +360,15 @@ function crossActionsFor(state: Extract<Copy, { kind: "ready" }>): CrossCityActi
       cx.notify();
     },
     openQuestion: (city, session, cx) => {
-      report(openNeedsWindow(city, { session }));
+      report(openNeedsTab(city, { session }));
       cx.notify();
     },
     openDecision: (city, bead, cx) => {
-      report(openNeedsWindow(city, { bead }));
+      report(openNeedsTab(city, { bead }));
       cx.notify();
     },
     openInbox: (cx) => {
-      report(openInboxPane());
+      report(openModTab("inbox"));
       cx.notify();
     },
     setFilter: (filter, cx) => {
