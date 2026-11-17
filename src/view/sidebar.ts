@@ -15,7 +15,7 @@ import { label, muted, themedRoot } from "./text.ts";
 export interface CrossCityActions {
   /** Folds or unfolds a city in the sidebar. */
   toggleCity(city: string, cx: GpuiContext): void;
-  /** Opens the "needs you" window on a session's question (its prompt and answer buttons). */
+  /** Answers a session's question: opens its terminal (`gc session attach`, through the Needs you tab's Open terminal). */
   openQuestion(city: string, session: string, cx: GpuiContext): void;
   /** Opens the "needs you" window on a bead (its detail, Close… and Sling…). */
   openDecision(city: string, bead: string, cx: GpuiContext): void;

@@ -149,6 +149,8 @@ export interface FocusOn {
   /** Exactly one of session and bead is set. */
   session?: string;
   bead?: string;
+  /** With a session: open its terminal once shown (Answer). */
+  attach?: true;
 }
 
 function cleanFocus(f: FocusOn): FocusOn {
@@ -1052,14 +1054,14 @@ export class CopyController {
   }
 
   /** Shows `session` of `city` once the city is subscribed and lists it (the focus command, the window's target). */
-  focusSession(city: string, session: string): void {
+  focusSession(city: string, session: string, attach = false): void {
     const pinned = this.deps.discovery.machine.copy.pinned;
     if (pinned !== null && pinned !== city) {
       this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
       return;
     }
     if (!this.checkCity(city)) return;
-    this.focusing = { city, session, since: this.deps.clock.now() };
+    this.focusing = { city, session, ...(attach ? { attach: true as const } : {}), since: this.deps.clock.now() };
     this.followFocus();
   }
 
@@ -1127,12 +1129,14 @@ export class CopyController {
       const t = focusToApply(this.deps.host.focusTarget(), this.focusApplied, now);
       if (t !== null) {
         this.focusApplied = t.seq;
-        this.focusNext = t.bead !== undefined ? { city: t.city, bead: t.bead } : { city: t.city, session: t.session ?? "" };
+        this.focusNext = t.bead !== undefined
+          ? { city: t.city, bead: t.bead }
+          : { city: t.city, session: t.session ?? "", ...(t.attach ? { attach: true as const } : {}) };
       }
       // While a text box holds a draft the window stays where the person is typing: the newer target waits for "Show".
       const n = this.focusNext;
       const shown = this.focusShown;
-      const same = shown !== null && n !== null && shown.city === n.city && (n.bead !== undefined
+      const same = shown !== null && n !== null && !n.attach && shown.city === n.city && (n.bead !== undefined
         ? shown.bead === n.bead
         : shown.session === n.session || this.selected === n.session);
       if (n !== null && (same || !(this.deps.draft?.() ?? false))) this.showNext();
@@ -1155,6 +1159,8 @@ export class CopyController {
         this.selectBead(null);
         this.selectSession(id);
         this.focusShown = { city: f.city, session: id };
+        // Answer: open the session's terminal (the Open terminal action: wake if needed, then `gc session attach`).
+        if (f.attach) this.openTerminal(id);
       }
       return;
     }
@@ -1170,7 +1176,7 @@ export class CopyController {
     this.focusNext = null;
     if (n === null) return;
     if (n.bead !== undefined) this.focusBead(n.city, n.bead);
-    else this.focusSession(n.city, n.session ?? "");
+    else this.focusSession(n.city, n.session ?? "", n.attach === true);
   }
 
   private windowModel(): WindowModel {

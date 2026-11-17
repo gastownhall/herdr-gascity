@@ -361,7 +361,7 @@ function crossActionsFor(state: Extract<Copy, { kind: "ready" }>): CrossCityActi
       cx.notify();
     },
     openQuestion: (city, session, cx) => {
-      report(openNeedsTab(city, { session }));
+      report(openNeedsTab(city, { session, attach: true }));
       cx.notify();
     },
     openDecision: (city, bead, cx) => {

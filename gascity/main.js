@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:be0c3af9b97587cae284f8972c183802174b92fb85fc7e20eb2dcfdcf7954a11 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:88f84581eba64e17582395fef97944c21a1dc2ac592b13e7cbb827a08b7119a3 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2842,10 +2842,11 @@ var isCount = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 function decodeFocus(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const v = value;
-  const { city, session, bead, seq, at: at3 } = v;
+  const { city, session, bead, seq, at: at3, attach } = v;
   if (!isText(city) || !isCount(seq) || !isCount(at3)) return null;
-  if (isText(session) && bead === void 0) return { city, session, seq, at: at3 };
-  if (isText(bead) && session === void 0) return { city, bead, seq, at: at3 };
+  if (isText(session) && bead === void 0 && attach === true) return { city, session, attach: true, seq, at: at3 };
+  if (isText(session) && bead === void 0 && attach === void 0) return { city, session, seq, at: at3 };
+  if (isText(bead) && session === void 0 && attach === void 0) return { city, bead, seq, at: at3 };
   return null;
 }
 function nextFocus(current, city, what, now) {
@@ -8223,14 +8224,14 @@ var CopyController = class {
     return "sent";
   }
   /** Shows `session` of `city` once the city is subscribed and lists it (the focus command, the window's target). */
-  focusSession(city, session) {
+  focusSession(city, session, attach = false) {
     const pinned = this.deps.discovery.machine.copy.pinned;
     if (pinned !== null && pinned !== city) {
       this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
       return;
     }
     if (!this.checkCity(city)) return;
-    this.focusing = { city, session, since: this.deps.clock.now() };
+    this.focusing = { city, session, ...attach ? { attach: true } : {}, since: this.deps.clock.now() };
     this.followFocus();
   }
   /** Shows a bead's detail in this copy (the window's target from the sidebar or the Needs a human pane). */
@@ -8289,11 +8290,11 @@ var CopyController = class {
       const t = focusToApply(this.deps.host.focusTarget(), this.focusApplied, now);
       if (t !== null) {
         this.focusApplied = t.seq;
-        this.focusNext = t.bead !== void 0 ? { city: t.city, bead: t.bead } : { city: t.city, session: t.session ?? "" };
+        this.focusNext = t.bead !== void 0 ? { city: t.city, bead: t.bead } : { city: t.city, session: t.session ?? "", ...t.attach ? { attach: true } : {} };
       }
       const n = this.focusNext;
       const shown = this.focusShown;
-      const same = shown !== null && n !== null && shown.city === n.city && (n.bead !== void 0 ? shown.bead === n.bead : shown.session === n.session || this.selected === n.session);
+      const same = shown !== null && n !== null && !n.attach && shown.city === n.city && (n.bead !== void 0 ? shown.bead === n.bead : shown.session === n.session || this.selected === n.session);
       if (n !== null && (same || !(this.deps.draft?.() ?? false))) this.showNext();
     }
     const f = this.focusing;
@@ -8314,6 +8315,7 @@ var CopyController = class {
         this.selectBead(null);
         this.selectSession(id2);
         this.focusShown = { city: f.city, session: id2 };
+        if (f.attach) this.openTerminal(id2);
       }
       return;
     }
@@ -8328,7 +8330,7 @@ var CopyController = class {
     this.focusNext = null;
     if (n === null) return;
     if (n.bead !== void 0) this.focusBead(n.city, n.bead);
-    else this.focusSession(n.city, n.session ?? "");
+    else this.focusSession(n.city, n.session ?? "", n.attach === true);
   }
   windowModel() {
     const s = this.city?.snapshot();
@@ -10902,7 +10904,7 @@ function crossActionsFor(state) {
       cx.notify();
     },
     openQuestion: (city, session, cx) => {
-      report(openNeedsTab(city, { session }));
+      report(openNeedsTab(city, { session, attach: true }));
       cx.notify();
     },
     openDecision: (city, bead, cx) => {

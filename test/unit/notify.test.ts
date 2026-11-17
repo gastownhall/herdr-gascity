@@ -117,6 +117,9 @@ describe("the focus target", () => {
     expect(decodeFocus({ city: "c", bead: "ga-1", seq: 2, at: 10 })).toEqual({ city: "c", bead: "ga-1", seq: 2, at: 10 });
     expect(decodeFocus({ city: "c", session: "s", bead: "ga-1", seq: 2, at: 10 })).toBeNull();
     expect(decodeFocus({ city: "c", seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", session: "s", attach: true, seq: 2, at: 10 })).toEqual({ city: "c", session: "s", attach: true, seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", bead: "b", attach: true, seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", session: "s", attach: "yes", seq: 2, at: 10 })).toBeNull();
     expect(nextFocus({ city: "c", session: "s", seq: 4, at: 1 }, "d", { bead: "ga-2" }, 50)).toEqual({ city: "d", bead: "ga-2", seq: 5, at: 50 });
   });
 

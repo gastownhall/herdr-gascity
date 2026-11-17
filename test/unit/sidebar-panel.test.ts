@@ -35,7 +35,7 @@ describe("the sidebar block", () => {
   test("a question opens the Needs you tab on its session; a decision on its bead", async () => {
     const mod = await running({ route: route(), props: { view: "sidebar" } }, 8);
     mod.click("gascity-side-city-0-row-0");
-    expect(mod.shared.get(FOCUS_KEY)).toMatchObject({ city: "scratch", session: "sc-20" });
+    expect(mod.shared.get(FOCUS_KEY)).toMatchObject({ city: "scratch", session: "sc-20", attach: true });
     const tabNew = mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new").map((c) => c.args[1]);
     expect(tabNew).toEqual([{ space: "s1", name: "Needs you", mod: "gascity", props: { view: "follow" } }]);
     mod.click("gascity-side-city-0-row-1");
@@ -114,5 +114,18 @@ describe("links to the web dashboard", () => {
     await mod.settle();
     const opened = mod.herdrCalls.filter((c) => c.name === "exec").map((c) => c.args.slice(0, 2));
     expect(opened.at(-1)).toEqual([expect.stringMatching(/^(open|xdg-open)$/), ["https://mdash.example.com/city/scratch/beads?bead=sc-90"]]);
+  });
+});
+
+describe("Answer", () => {
+  test("opens the waiting session's terminal: the Needs you tab runs Open terminal (gc session attach) for it", async () => {
+    const mod = await running({ route: route(), props: { view: "follow" } }, 4);
+    mod.shared.set(FOCUS_KEY, { city: "scratch", session: "sc-6", attach: true, seq: 5, at: mod.clock.t });
+    for (let i = 0; i < 8; i++) await mod.tick();
+    const tabNew = mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new").map((c) => (c.args[1] as { argv?: string[] }).argv);
+    expect(tabNew).toEqual([["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET", "gc", "--city", "/scratch/city", "session", "attach", "sc-6"]]);
+    // A later tick does not open it again.
+    for (let i = 0; i < 4; i++) await mod.tick();
+    expect(mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new")).toHaveLength(1);
   });
 });
