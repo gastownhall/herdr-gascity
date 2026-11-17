@@ -1,0 +1,337 @@
+name: Canary - Gas City end to end in the released herdr-app
+
+# The nightly canary: on a fresh ubuntu-24.04 VM, the current stable
+# herdr-app (herdr's published install.sh, from a per-release local mirror)
+# runs the mod (install.sh --from this commit's package) against the canary
+# city (gc built from the commit api/PIN names; the canary pack's
+# deterministic agent, tmux sessions on the city's own socket). Every step
+# is driven by `herdr-app do gascity.<command>` with the mod's tab selected
+# first, plus one real XTEST key; the run ends with the HC_SCOPE scope audit
+# and the authority audit (canary/canary-linux.sh has the stage table).
+#
+# Lane: main (the mod at this commit, gc at the pinned commit). The
+# latest-release lane (both published installers, released gc) waits for the
+# first mod release and a gc release with the APIs the mod needs.
+#
+# Failure classes: every stage records its class; canary-result.json names
+# the first failing stage and its class. infra (packages, downloads, gc
+# build, the display, a step killed at its timeout) is not a product
+# failure; everything else is. Product stages are never retried.
+#
+# Privilege: nothing by default; each job declares what it needs.
+#   mirror  fills the release mirror cache (manifests and tarballs, each
+#           sha256-checked against the release manifest) and saves it. It
+#           checks out only this repo and runs nothing it downloads: it is
+#           the one job that saves a cache.
+#   canary  builds and runs gc at api/PIN, herdr's installer and herdr-app.
+#           It has no token permissions, no secret, and only restores the
+#           mirror (a miss fills from the network, sha256-checked, unsaved).
+#   report  runs no downloaded code; it reads the results as JSON, writes
+#           the summary and files or updates one issue on a product failure.
+#
+# Triggers: nightly; weekly a soak of 5 sequential runs whose product-stage
+# flake rate goes to the summary; dispatched by types-drift.yml when a new
+# herdr-app release appears; and by hand.
+
+on:
+  schedule:
+    - cron: "17 5 * * *" # nightly
+    - cron: "47 7 * * 0" # weekly soak
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Why this run (shown in the summary)
+        required: false
+        default: manual
+      runs:
+        description: Sequential runs (a soak); 1 for a single run
+        required: false
+        default: "1"
+
+permissions: {}
+
+concurrency:
+  group: canary-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SOAK_SCHEDULE: "47 7 * * 0"
+  HC_SESSION: canary
+  CANARY_DISPLAY: xvfb
+  CANARY_LANE: main
+  CANARY_RESULT: canary-result.json
+  CANARY_EXTRA_APT: tmux libicu-dev
+  # Every stage, in order: the result needs all of them.
+  CANARY_STAGES: >-
+    preflight resolve mirror install-app package check
+    gc city display app install-mod
+    discover session output attach scope-audit keyboard
+    bead-input bead-closed authority
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      runs: ${{ steps.plan.outputs.runs }}
+      soak: ${{ steps.plan.outputs.soak }}
+    steps:
+      - name: Runs
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          n=1
+          if [[ $EVENT == schedule && $SCHEDULE == "$SOAK_SCHEDULE" ]]; then n=5; fi
+          if [[ $EVENT == workflow_dispatch ]]; then
+            [[ $RUNS =~ ^[1-9]$|^10$ ]] || { echo "::error::runs must be 1-10, got $RUNS"; exit 1; }
+            n=$RUNS
+          fi
+          echo "runs=$(jq -cn --argjson n "$n" '[range(1; $n + 1)]')" >>"$GITHUB_OUTPUT"
+          echo "soak=$([[ $n -gt 1 ]] && echo true || echo false)" >>"$GITHUB_OUTPUT"
+
+  mirror:
+    name: Release mirror
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve current stable release
+        id: resolve
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh resolve
+
+      - name: Restore release mirror
+        id: restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: Fill release mirror (sha256-checked)
+        if: steps.restore.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        run: canary/bootstrap-linux.sh fill
+
+      - name: Save release mirror
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+  canary:
+    name: Canary run ${{ matrix.run }} (ubuntu-24.04, Xvfb, lavapipe)
+    # A mirror job that failed only costs the canary a download.
+    needs: [plan, mirror]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions: {}
+    strategy:
+      fail-fast: false
+      # A soak's runs one after another: they measure flakes, not capacity.
+      max-parallel: 1
+      matrix:
+        run: ${{ fromJSON(needs.plan.outputs.runs) }}
+    env:
+      GASCITY_SRC: ${{ github.workspace }}/gascity-src
+      CANARY_INTEGRATION_VERSION: ${{ github.ref_name }}@${{ github.sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: The pinned gascity commit
+        id: pin
+        run: |
+          commit=$(sed -n 's/^commit=//p' api/PIN)
+          [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "::error::api/PIN has no commit"; exit 1; }
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: gastownhall/gascity
+          ref: ${{ steps.pin.outputs.commit }}
+          path: gascity-src
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: gascity-src/go.mod
+          # No cache: nothing this job downloads may be restored by another run.
+          cache: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+          # The binary is never cached: a cache saved by a workflow that runs
+          # downloaded code could be restored by the release build.
+          no-cache: true
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      # Each step's timeout is longer than its stage's own deadlines; a step
+      # killed at its timeout is classed infra by result.sh.
+      - name: S0 Preflight (packages, lavapipe)
+        timeout-minutes: 13
+        run: canary/bootstrap-linux.sh preflight
+
+      - name: S0 Resolve current stable release
+        id: resolve
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh resolve
+
+      - name: S0 Restore release mirror
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/herdr-canary/mirror-cache
+          key: herdr-mirror-${{ steps.resolve.outputs.target }}-app${{ steps.resolve.outputs.app }}-core${{ steps.resolve.outputs.core }}
+
+      - name: S0 Serve release mirror (fills a miss, unsaved)
+        timeout-minutes: 5
+        run: canary/bootstrap-linux.sh mirror
+
+      - name: S1 Install herdr-app via published install.sh
+        timeout-minutes: 4
+        run: canary/bootstrap-linux.sh install
+
+      - name: Package the mod
+        timeout-minutes: 3
+        run: canary/mod-linux.sh package
+
+      - name: herdr-app check (the packaged mod)
+        timeout-minutes: 3
+        run: canary/mod-linux.sh check
+
+      - name: S2 Build gc at the pinned commit
+        timeout-minutes: 15
+        run: canary/mod-linux.sh gc
+
+      - name: S3 Canary city
+        timeout-minutes: 5
+        run: canary/mod-linux.sh canary-city
+
+      - name: S4 Display (Xvfb)
+        timeout-minutes: 2
+        run: canary/bootstrap-linux.sh display
+
+      - name: S4 App up, status, space.new
+        timeout-minutes: 3
+        run: canary/bootstrap-linux.sh app
+
+      - name: S5 Install the mod with install.sh --from the package
+        timeout-minutes: 3
+        run: canary/mod-linux.sh install
+
+      - name: S5/S6 The mod discovers the canary city
+        timeout-minutes: 3
+        run: canary/canary-linux.sh discover
+
+      - name: S7 Start a session from the mod
+        timeout-minutes: 7
+        run: canary/canary-linux.sh session
+
+      - name: S8 Its output in the mod's detail
+        timeout-minutes: 3
+        run: canary/canary-linux.sh output
+
+      - name: S9 Open its terminal from the mod
+        timeout-minutes: 5
+        run: canary/canary-linux.sh attach
+
+      - name: S9b HC_SCOPE audit
+        timeout-minutes: 2
+        run: canary/canary-linux.sh scope-audit
+
+      - name: S10 A real key reaches the mod
+        timeout-minutes: 3
+        run: canary/canary-linux.sh keyboard
+
+      - name: S11 Create a bead and send the agent input
+        timeout-minutes: 6
+        run: canary/canary-linux.sh bead-input
+
+      - name: S12 The agent's close shown in the mod
+        timeout-minutes: 4
+        run: canary/canary-linux.sh bead-closed
+
+      - name: S13 Authority audit
+        timeout-minutes: 3
+        run: canary/canary-linux.sh authority
+
+      - name: S14 Collect gc's events and the probe
+        if: always()
+        timeout-minutes: 2
+        run: canary/canary-linux.sh collect
+
+      - name: Teardown
+        if: always()
+        timeout-minutes: 3
+        run: |
+          canary/mod-linux.sh teardown
+          canary/bootstrap-linux.sh teardown
+
+      - name: Result
+        if: always()
+        run: |
+          read -ra stages <<<"$CANARY_STAGES"
+          canary/result.sh "${stages[@]}"
+
+      - name: Upload the result and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: canary-${{ matrix.run }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herdr-canary/out
+          if-no-files-found: error
+          retention-days: 30
+
+  report:
+    name: Report
+    needs: [plan, canary]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download the results
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: canary-*-${{ github.run_attempt }}
+          path: results
+
+      # The results come from jobs that ran downloaded code: report.sh reads one
+      # per planned run, checks every field, and files issues on the default
+      # branch only.
+      - name: Summary, flake rate, issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SOAK: ${{ needs.plan.outputs.soak }}
+          PLANNED: ${{ needs.plan.outputs.runs }}
+          ATTEMPT: ${{ github.run_attempt }}
+          RESULTS: results
+          EVENT: ${{ github.event_name }}
+          REASON: ${{ inputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: canary/report.sh

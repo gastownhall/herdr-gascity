@@ -34,3 +34,6 @@ jobs:
 
       - name: Typecheck, authority lint, bundle freshness, unit tests
         run: bun run ci
+
+      - name: Shellcheck the canary scripts
+        run: shellcheck -x canary/*.sh canary/pack/assets/*.sh

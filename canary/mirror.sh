@@ -22,7 +22,7 @@ set -euo pipefail
 upstream=${HERDR_UPSTREAM_RELEASES:-https://releases.herdr.dev}
 
 fail() { printf 'mirror: %s\n' "$*" >&2; exit 1; }
-fetch() { curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors "$1" -o "$2"; }
+fetch() { curl -fsSL --max-time 120 --retry 3 --retry-delay 2 --retry-all-errors "$1" -o "$2"; }
 
 # url_of <manifest> <target>, sha_of <manifest> <target>
 url_of() { jq -er --arg t "$2" '.targets[$t].url' "$1"; }
@@ -92,7 +92,7 @@ serve() {
   python3 -m http.server "$port" --bind 127.0.0.1 --directory "$root" >"${MIRROR_LOG:-/dev/null}" 2>&1 &
   printf '%s\n' "$!"
   for _ in $(seq 80); do
-    curl -fsS "$base/app/latest.json" >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 5 "$base/app/latest.json" >/dev/null 2>&1 && return 0
     sleep 0.25
   done
   fail "the mirror did not start on $base"

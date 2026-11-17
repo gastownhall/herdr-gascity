@@ -4,8 +4,13 @@
 # Vulkan, herdr's published installer for the app and its core (served from a
 # per-release local mirror). After herdr-app's own `scripts/sandbox`.
 #
-#   bootstrap-linux.sh preflight   system packages, software Vulkan, runtime dir
+#   bootstrap-linux.sh preflight   system packages (and $CANARY_EXTRA_APT), software
+#                                  Vulkan, runtime dir
 #   bootstrap-linux.sh resolve     current stable versions (cache key)
+#   bootstrap-linux.sh fill        fill the mirror cache only (cache misses only,
+#                                  each tarball sha256-checked); runs nothing it
+#                                  downloads, so a job that saves the cache needs
+#                                  nothing else
 #   bootstrap-linux.sh mirror      fill the mirror (cache misses only) and serve it
 #   bootstrap-linux.sh install     herdr's published install.sh against the mirror
 #   bootstrap-linux.sh display     weston --backend=headless --xwayland (or Xvfb)
@@ -33,14 +38,44 @@ target() {
   esac
 }
 
+# Each apt attempt's update and install get this long (seconds) before they
+# are killed and the attempt retried: at most 3 x 210 s plus 30 s of backoff,
+# inside the canary's preflight step timeout.
+APT_UPDATE_TIMEOUT=60
+APT_INSTALL_TIMEOUT=150
+# The installers fetch from the local mirror; S1's step allows 4 minutes.
+INSTALL_TIMEOUT=150
+APT_OPTIONS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+# The runner's apt mirror (azure.archive.ubuntu.com on GitHub's images) has
+# hung a whole step; the last attempt goes to the main archive instead.
+APT_FALLBACK_MIRROR=http://archive.ubuntu.com/ubuntu
+
+apt_install() {
+  # shellcheck disable=SC2206 # CANARY_EXTRA_APT is a space-separated package list
+  local packages=("${APT_PACKAGES[@]}" ${CANARY_EXTRA_APT:-})
+  sudo timeout "$APT_UPDATE_TIMEOUT" apt-get "${APT_OPTIONS[@]}" update -qq &&
+    sudo DEBIAN_FRONTEND=noninteractive timeout "$APT_INSTALL_TIMEOUT" apt-get "${APT_OPTIONS[@]}" install -y -qq --no-install-recommends "${packages[@]}"
+}
+
+# Points apt at the fallback mirror: both the deb822 and the one-line sources.
+apt_fallback_mirror() {
+  local f
+  for f in /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list; do
+    [[ -f $f ]] || continue
+    sudo sed -E -i "s#https?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu/?#$APT_FALLBACK_MIRROR/#g" "$f"
+  done
+  log "apt: switched to $APT_FALLBACK_MIRROR"
+}
+
 preflight() {
   local attempt
   for attempt in 1 2 3; do
-    if sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${APT_PACKAGES[@]}"; then
+    (( attempt < 3 )) || apt_fallback_mirror
+    if apt_install; then
       break
     fi
     (( attempt < 3 )) || die "apt-get install failed 3 times"
-    log "apt-get failed (attempt $attempt); retrying"
+    log "apt-get failed or timed out (attempt $attempt); retrying"
     sleep $(( attempt * 10 ))
   done
   vulkaninfo --summary >"$CANARY_OUT/vulkaninfo.txt" 2>&1 || true
@@ -76,12 +111,16 @@ resolve() {
   export_output target "$(target)"
 }
 
-mirror() {
+fill() {
   "$here/mirror.sh" fill "$RESOLVED" "$MIRROR_CACHE" "$(target)"
+}
+
+mirror() {
+  fill
   local pid
   pid=$(MIRROR_LOG="$CANARY_OUT/mirror.log" "$here/mirror.sh" serve "$RESOLVED" "$MIRROR_CACHE" "$CANARY_ROOT/mirror-root" "$MIRROR_PORT" "$(target)")
   export_env MIRROR_PID "$pid"
-  curl -fsS "$MIRROR_URL/app/latest.json" >"$CANARY_OUT/mirror-app-latest.json"
+  curl -fsS --max-time 10 "$MIRROR_URL/app/latest.json" >"$CANARY_OUT/mirror-app-latest.json"
 }
 
 install_app() {
@@ -94,7 +133,10 @@ install_app() {
   # Provenance: the manifests exactly as releases.herdr.dev served them.
   cp -f "$RESOLVED/app/latest.json" "$CANARY_OUT/upstream-app-latest.json"
   cp -f "$RESOLVED/core/latest.json" "$CANARY_OUT/upstream-core-latest.json"
-  HERDR_RELEASES_URL=$MIRROR_URL sh "$script" </dev/null 2>&1 | tee "$CANARY_OUT/install.log" >&2
+  local rc=0
+  HERDR_RELEASES_URL=$MIRROR_URL timeout "$INSTALL_TIMEOUT" sh "$script" </dev/null 2>&1 | tee "$CANARY_OUT/install.log" >&2 || rc=$?
+  (( rc != 124 )) || die "install.sh ran past ${INSTALL_TIMEOUT}s"
+  (( rc == 0 )) || die "install.sh failed (exit $rc)"
   # install.sh does not fail when the core step fails (it says so and goes on).
   command -v herdr-app >/dev/null || die "herdr-app is not on PATH after install.sh"
   command -v herdr-core >/dev/null || die "herdr-core is not on PATH after install.sh"
@@ -220,10 +262,11 @@ teardown() {
 case ${1:-} in
   preflight) run_stage preflight infra preflight ;;
   resolve) run_stage resolve infra resolve ;;
+  fill) fill ;;
   mirror) run_stage mirror infra mirror ;;
   install) run_stage install-app product install_app ;;
   display) run_stage display infra display_up ;;
   app) run_stage app product app_up ;;
   teardown) teardown ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
