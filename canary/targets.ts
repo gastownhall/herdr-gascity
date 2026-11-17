@@ -9,7 +9,12 @@
 // counted, never quoted, and a parse error quotes nothing from the file.
 //
 // CLI: bun canary/targets.ts --file <list.toml> [--workflow .github/workflows/canary.yml]
-// exits 0 when the entry checks out, 1 on any problem, 2 on a usage error.
+// exits (EXIT) 0 when the whole list checks out; 3 when this canary's entry
+// checks out but other entries or the list as a whole have problems (not this
+// canary's to report: the list's own repository tests those); 1 when this
+// canary's own entry has a problem or is missing; 2 when it cannot check (a
+// usage error, a file it cannot read, a list that does not parse, so whose
+// entry is at fault is unknown).
 
 import { readFileSync } from "node:fs";
 
@@ -67,6 +72,11 @@ const ID = /^[a-z0-9][a-z0-9-]*$/;
 
 /** Parses and validates the list; never throws. */
 export function parseTargetList(text: string): Parsed {
+  // Bun's TOML parser stops without an error at some non-ASCII characters
+  // outside strings (a no-break space, a BOM) and drops the rest of the file,
+  // which would read as this canary's entry missing. The list is ASCII, so
+  // anything else means it does not parse.
+  if (/[^\t\n\r\x20-\x7e]/.test(text)) return { list: null, errors: [{ ui: null, message: "the target list is not valid TOML" }] };
   let raw: unknown;
   try {
     raw = Bun.TOML.parse(text);
@@ -162,6 +172,20 @@ export function checkCanaryEntry(list: TargetList, me: Canary): EntryCheck {
   return { ui: ui.id, lane: ui.job.lane, steps: Object.keys(ui.job.stages).length, findings };
 }
 
+/** The check's outcome for this canary; see the CLI's exit codes. */
+export type Verdict = "ok" | "ok-others" | "mismatch" | "unchecked";
+
+/** The CLI's exit code for each verdict. */
+export const EXIT: Readonly<Record<Verdict, number>> = { ok: 0, mismatch: 1, unchecked: 2, "ok-others": 3 };
+
+/** Whose problem the list has: none, only others', this canary's own, or unknown (it does not parse). */
+export function verdict(parsed: Parsed, me: Canary): Verdict {
+  if (parsed.list === null) return "unchecked";
+  const check = checkCanaryEntry(parsed.list, me);
+  if (check.ui === null || check.findings.length > 0 || parsed.errors.some((e) => e.ui === check.ui)) return "mismatch";
+  return parsed.errors.length > 0 ? "ok-others" : "ok";
+}
+
 /** What may go to a public log: this canary's entry and counts, nothing else from the list. */
 export function publicReport(parsed: Parsed, me: Canary): string[] {
   if (parsed.list === null) return parsed.errors.map((e) => `target list: ${e.message}`);
@@ -186,6 +210,16 @@ export function workflowStages(yaml: string): string[] {
   return stages.split(/\s+/).filter((s) => s !== "");
 }
 
+/** Reads a file for the CLI; a failure names the file's role and the error code, never its contents. */
+function read(path: string, what: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (e) {
+    const code = (e as { code?: unknown }).code;
+    throw new Error(`could not read ${what} (${typeof code === "string" ? code : "error"})`);
+  }
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const flag = (name: string) => {
@@ -196,12 +230,18 @@ if (import.meta.main) {
   const workflow = flag("--workflow") ?? ".github/workflows/canary.yml";
   if (file === undefined) {
     console.error("usage: bun canary/targets.ts --file <list.toml> [--workflow .github/workflows/canary.yml]");
-    process.exit(2);
+    process.exit(EXIT.unchecked);
   }
-  const me: Canary = { repo: process.env["GITHUB_REPOSITORY"] ?? "gastownhall/herdr-gascity", workflow, stages: workflowStages(readFileSync(workflow, "utf8")) };
-  const parsed = parseTargetList(readFileSync(file, "utf8"));
-  const lines = publicReport(parsed, me);
-  for (const l of lines) console.log(l);
-  const ok = parsed.errors.length === 0 && parsed.list !== null && checkCanaryEntry(parsed.list, me).findings.length === 0;
-  process.exit(ok ? 0 : 1);
+  let me: Canary;
+  let text: string;
+  try {
+    me = { repo: process.env["GITHUB_REPOSITORY"] ?? "gastownhall/herdr-gascity", workflow, stages: workflowStages(read(workflow, "the workflow")) };
+    text = read(file, "the target list");
+  } catch (e) {
+    console.error(`targets: ${(e as Error).message}`);
+    process.exit(EXIT.unchecked);
+  }
+  const parsed = parseTargetList(text);
+  for (const l of publicReport(parsed, me)) console.log(l);
+  process.exit(EXIT[verdict(parsed, me)]);
 }

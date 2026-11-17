@@ -10,7 +10,9 @@
 //     write contents; a tag must be on main.
 
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const DIR = join(import.meta.dir, "../../.github/workflows");
@@ -223,15 +225,174 @@ describe("canary.yml", () => {
   });
 
   test("least privilege: none by default, every job declares its own, and only the report job writes", async () => {
-    const { text, w } = await canary();
+    const { w } = await canary();
     expect(w.permissions).toEqual({});
-    expect(text).not.toMatch(/secrets\./);
+    // The only secret is the target-list App key, and only the targets job sees it.
+    for (const [name, job] of Object.entries(w.jobs)) {
+      const secrets = JSON.stringify(job).match(/secrets\.[A-Za-z0-9_]+/g) ?? [];
+      expect({ name, secrets }).toEqual({ name, secrets: name === "targets" ? ["secrets.CANARY_TARGETS_APP_KEY"] : [] });
+    }
     const perms = Object.fromEntries(Object.entries(w.jobs).map(([n, j]) => [n, j.permissions]));
-    expect(perms).toEqual({ plan: {}, mirror: { contents: "read" }, canary: {}, report: { actions: "read", contents: "read", issues: "write" } });
+    expect(perms).toEqual({ plan: {}, mirror: { contents: "read" }, canary: {}, targets: {}, report: { actions: "read", contents: "read", issues: "write" } });
     for (const [name, job] of Object.entries(w.jobs)) {
       expect({ name, timeout: typeof (job as { "timeout-minutes"?: number })["timeout-minutes"] }).toEqual({ name, timeout: "number" });
     }
     // The job that runs downloaded code never sees a token in its environment.
     expect(JSON.stringify(w.jobs["canary"])).not.toMatch(/github\.token|GITHUB_TOKEN|GH_TOKEN/);
+  });
+
+  describe("the targets job", () => {
+    const LIST = "gascity/gas-city-inc";
+    const targets = async () => (await canary()).w.jobs["targets"] as Job & { environment?: unknown; outputs?: Record<string, string> };
+    const runs = async () => (await targets()).steps.filter((s) => s.run !== undefined) as (Step & { env?: Record<string, string> })[];
+
+    test("runs from main only, on the schedule or a dispatch, in the canary-targets environment, with no token permissions", async () => {
+      const j = await targets();
+      expect(j.environment).toBe("canary-targets");
+      expect(j.permissions).toEqual({});
+      expect(j.if).toBe("github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')");
+      expect(typeof (j as { "timeout-minutes"?: number })["timeout-minutes"]).toBe("number");
+      expect(j.needs).toBeUndefined();
+    });
+
+    test("uses only checkout of this repo, setup-bun and the pinned App token action; runs nothing it downloads", async () => {
+      const j = await targets();
+      const uses = j.steps.filter((s) => s.uses !== undefined).map((s) => s.uses!.split("@")[0]);
+      expect(uses).toEqual(["actions/checkout", "oven-sh/setup-bun", "actions/create-github-app-token"]);
+      const checkout = j.steps.find((s) => s.uses?.startsWith("actions/checkout@"))!;
+      expect(checkout.with?.["repository"]).toBeUndefined();
+      expect(checkout.with?.["persist-credentials"]).toBe(false);
+      for (const s of j.steps) expect(s.run ?? "").not.toMatch(/bun (install|add|x)\b|bunx|npm|npx|pip|go (run|install)|curl[^\n]*\| *(ba)?sh/);
+    });
+
+    test("mints a single-file read token for the list's repo only, from the environment's App", async () => {
+      const app = (await targets()).steps.find((s) => s.uses?.startsWith("actions/create-github-app-token@"))!;
+      expect(app.uses).toMatch(/^actions\/create-github-app-token@[0-9a-f]{40}$/);
+      expect(app.name).toBe("Token for the target list (single file, read)");
+      expect(app.with).toEqual({
+        "client-id": "${{ vars.CANARY_TARGETS_CLIENT_ID }}",
+        "private-key": "${{ secrets.CANARY_TARGETS_APP_KEY }}",
+        owner: "gascity",
+        repositories: "gas-city-inc",
+        "permission-single-file": "read",
+      });
+    });
+
+    test("fetches the list into the runner's temp dir and checks it with targets.ts; the token reaches the fetch only", async () => {
+      const [fetch, check, ...rest] = await runs();
+      expect(rest).toEqual([]);
+      expect(fetch!.env?.["TOKEN"]).toBe("${{ steps.token.outputs.token }}");
+      expect(fetch!.env?.["LIST_API"]).toBe(`\${{ github.api_url }}/repos/${LIST}/contents/packs/measure/config/agent-ui-targets.toml`);
+      expect(fetch!.run).toContain('-o "$LIST" "$LIST_API"');
+      // The token goes to curl on stdin, once: never on a command line or to the log.
+      expect(fetch!.run!.match(/\$TOKEN|\$\{TOKEN/g)).toEqual(["$TOKEN"]);
+      expect(fetch!.run).toContain('-H @-');
+      expect(fetch!.run).toContain('<<<"Authorization: Bearer $TOKEN"');
+      expect(check!.run).toContain('bun canary/targets.ts --file "$LIST"');
+      expect(JSON.stringify(check)).not.toMatch(/TOKEN|token/);
+      for (const s of [fetch!, check!]) {
+        expect(s.env?.["LIST"]).toStartWith("${{ runner.temp }}/");
+        expect(s.run).not.toMatch(/set -x|set -o xtrace/);
+        // The list is private: never printed, copied or uploaded.
+        expect(s.run).not.toMatch(/\b(cat|head|tail|less|cp|mv|tee)\b[^\n]*\$LIST|GITHUB_STEP_SUMMARY/);
+      }
+    });
+
+    // Runs a step's script as Actions does (bash -e), with stubs first on PATH.
+    function runStep(script: string, stubs: Record<string, string>, env: Record<string, string>) {
+      const root = mkdtempSync(join(tmpdir(), "canary-targets-step-"));
+      try {
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        for (const [name, body] of Object.entries(stubs)) {
+          writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`);
+          chmodSync(join(bin, name), 0o755);
+        }
+        const out = join(root, "output");
+        writeFileSync(out, "");
+        const list = join(root, "targets", "list.toml");
+        const p = Bun.spawnSync(["bash", "-e", "-c", script], {
+          env: { PATH: `${bin}:${process.env["PATH"]}`, GITHUB_OUTPUT: out, LIST: list, TOKEN: "t0ken", LIST_API: "https://api.example/x", ...env },
+        });
+        let listed: string | null = null;
+        try {
+          listed = readFileSync(list, "utf8");
+        } catch {
+          listed = null;
+        }
+        return { code: p.exitCode, stdout: p.stdout.toString(), output: readFileSync(out, "utf8"), list: listed, root };
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+
+    describe("the fetch step", () => {
+      // A curl that writes BODY to -o's file and prints WROTE as its -w output; exits CURL_RC.
+      const CURL = 'o=""; while (($#)); do [[ $1 == -o ]] && o=$2; shift; done; cat >/dev/null; printf %s "$BODY" >"$o"; printf %s "$WROTE"; exit "${CURL_RC:-0}"';
+      const fetch = async () => (await runs())[0]!.run!;
+
+      test("the raw file with HTTP 200 is kept", async () => {
+        const r = runStep(await fetch(), { curl: CURL }, { BODY: "a = 1\n", WROTE: "200 application/vnd.github.raw+json; charset=utf-8" });
+        expect(r.code).toBe(0);
+        expect(r.list).toBe("a = 1\n");
+      });
+
+      test("a redirect, another media type (a directory's JSON), an HTTP error or an empty file is a fetch error and leaves no file", async () => {
+        const cases: Record<string, string>[] = [
+          { BODY: "", WROTE: "302 text/html" },
+          { BODY: "[]", WROTE: "200 application/json; charset=utf-8" },
+          { BODY: "{}", WROTE: "404 application/json", CURL_RC: "22" },
+          { BODY: "", WROTE: "200 application/vnd.github.raw+json" },
+        ];
+        for (const env of cases) {
+          const r = runStep(await fetch(), { curl: CURL }, env);
+          expect({ env, failed: r.code !== 0, list: r.list }).toEqual({ env, failed: true, list: null });
+          if (env["CURL_RC"] === undefined) expect(r.stdout).toStartWith("::error::");
+        }
+      });
+
+      test("does not follow redirects", async () => {
+        expect(await fetch()).not.toMatch(/\s(-L|--location)\b/);
+      });
+    });
+
+    describe("the check step", () => {
+      const BUN = 'printf "%s" "$LINES"; exit "$RC"';
+      const check = async () => (await runs())[1]!.run!;
+      const LINE = "target list: herdr-app, lane main, 6 steps mapped onto this canary's stages";
+
+      test("maps targets.ts's exit to a status: 0 ok and 3 ok-others pass; 1 mismatch and 2 error fail", async () => {
+        for (const [rc, status, code] of [["0", "ok", 0], ["3", "ok-others", 0], ["1", "mismatch", 1], ["2", "error", 1], ["70", "error", 1]] as const) {
+          const r = runStep(await check(), { bun: BUN }, { RC: rc, LINES: LINE + "\n" });
+          expect({ rc, code: r.code }).toEqual({ rc, code });
+          expect({ rc, status: r.output.match(/^status=(.*)$/m)?.[1] }).toEqual({ rc, status });
+          expect(r.output).toContain(`\n${LINE}\n`);
+        }
+      });
+
+      test("never prints the report to the log: it leaves only as an output, for report.sh to check first", async () => {
+        const r = runStep(await check(), { bun: BUN }, { RC: "1", LINES: "::warning::target list: @someone\n" });
+        expect(r.stdout).not.toContain("@someone");
+        expect(r.stdout).toBe("::error::target list check: mismatch\n");
+        const ok = runStep(await check(), { bun: BUN }, { RC: "0", LINES: LINE + "\n" });
+        expect(ok.stdout).toBe("");
+      });
+    });
+
+    test("uploads nothing and touches no cache", async () => {
+      for (const s of (await targets()).steps) expect(s.uses ?? "").not.toMatch(/upload-artifact|actions\/cache/);
+    });
+
+    test("hands only targets.ts's public report and a status to the report job", async () => {
+      const { w } = await canary();
+      expect((await targets()).outputs).toEqual({ status: "${{ steps.check.outputs.status }}", report: "${{ steps.check.outputs.report }}" });
+      expect([w.jobs["report"]!.needs].flat()).toEqual(["plan", "canary", "targets"]);
+      const report = w.jobs["report"]!.steps.find((s) => s.run === "canary/report.sh") as Step & { env?: Record<string, string> };
+      expect(report.env).toMatchObject({
+        TARGETS: "${{ needs.targets.result }}",
+        TARGETS_STATUS: "${{ needs.targets.outputs.status }}",
+        TARGETS_REPORT: "${{ needs.targets.outputs.report }}",
+      });
+    });
   });
 });
