@@ -28,9 +28,10 @@ export function probePathIssue(path: string, appHome: string): string | null {
 const LOCAL_WEB_URL = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?(\/[^\s\u0000-\u001f\u007f]*)?$/i;
 
 /** Why `url` may not be handed to xdg-open/open, or null: http(s) URLs on this computer (the gc dashboard), or under the configured web dashboard. */
-export function openUrlIssue(url: string, dashboardUrl: string | null = null): string | null {
+export function openUrlIssue(url: string, dashboards: string | null | readonly (string | null)[] = null): string | null {
   if (LOCAL_WEB_URL.test(url)) return null;
-  // The configured web dashboard (gascity.settings dashboardUrl, an https origin): a URL under it, with no control characters or whitespace.
-  if (dashboardUrl !== null && /^https:\/\//.test(dashboardUrl) && url.startsWith(`${dashboardUrl.replace(/\/+$/, "")}/`) && !/[\s\u0000-\u001f\u007f]/.test(url)) return null;
-  return `refused: only http(s) URLs on this computer${dashboardUrl !== null ? ` or under ${dashboardUrl}` : ""} are opened, not ${JSON.stringify(url)}`;
+  // The configured web dashboards (gascity.settings dashboardUrl and runsUrl, https origins): a URL under one, with no control characters or whitespace.
+  const allowed = (Array.isArray(dashboards) ? dashboards : [dashboards]).filter((d): d is string => typeof d === "string" && /^https:\/\//.test(d));
+  if (!/[\s\u0000-\u001f\u007f]/.test(url) && allowed.some((d) => url.startsWith(`${d.replace(/\/+$/, "")}/`))) return null;
+  return `refused: only http(s) URLs on this computer${allowed.length > 0 ? ` or under ${allowed.join(" or ")}` : ""} are opened, not ${JSON.stringify(url)}`;
 }

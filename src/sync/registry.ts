@@ -295,7 +295,10 @@ export class SyncRegistry {
     const ep = endpoint.value;
     let entry = this.needs.get(ep.baseUrl);
     if (!entry) {
-      entry = { poller: new NeedsPoller(ep, this.clock, (city) => this.readDashboardConfig(ep.baseUrl, city)), subs: 0 };
+      entry = {
+        poller: new NeedsPoller(ep, this.clock, (city) => this.readDashboardJson(ep.baseUrl, city, "config"), (city) => this.readDashboardJson(ep.baseUrl, city, "runs/summary")),
+        subs: 0,
+      };
       this.needs.set(ep.baseUrl, entry);
     }
     entry.subs++;
@@ -330,12 +333,13 @@ export class SyncRegistry {
   }
 
   /**
-   * gc's dashboard config for a city (GET {api}/api/city/{city}/config: the
-   * operator's decision label), through the app-wide budget like discovery's
-   * probes; null when gc does not answer it with JSON.
+   * A read of gc's dashboard API for a city (GET {api}/api/city/{city}/<path>:
+   * `config` for the operator's decision label, `runs/summary` for formula
+   * runs), through the app-wide budget like discovery's probes; null when gc
+   * does not answer it with JSON.
    */
-  private async readDashboardConfig(baseUrl: string, city: string): Promise<unknown> {
-    const r = await this.probeFetch().fetch(`${baseUrl}/api/city/${encodeURIComponent(city)}/config`, { method: "GET", headers: { Accept: "application/json" } });
+  private async readDashboardJson(baseUrl: string, city: string, path: "config" | "runs/summary"): Promise<unknown> {
+    const r = await this.probeFetch().fetch(`${baseUrl}/api/city/${encodeURIComponent(city)}/${path}`, { method: "GET", headers: { Accept: "application/json" } });
     if (!r.ok) return null;
     try {
       return JSON.parse(await r.text()) as unknown;

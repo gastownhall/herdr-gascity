@@ -10,7 +10,10 @@
 //     (what mdash's decision queue lists; read once per API from
 //     /api/city/{city}/config, else DEFAULT_DECISION_LABEL), and with
 //     type=decision; a bead in several is listed once, with every reason;
-//   - GET …/status, every STATUS_POLL_MS: agent, rig and work counts.
+//   - GET …/status, every STATUS_POLL_MS: agent, rig and work counts;
+//   - gc's dashboard run summary (/api/city/{city}/runs/summary), every
+//     RUNS_POLL_MS, slimmed at once (runs.ts): runs waiting at the approval
+//     gate are things a person must do.
 // Never the agent or session lists: the sidebar must stay cheap for a city
 // of a thousand agents.
 //
@@ -29,6 +32,7 @@ import { backsOff } from "./backoff.ts";
 import { POLL_DEADLINE_MS } from "./cities.ts";
 import type { Clock } from "./clock.ts";
 import type { Endpoint, EndpointListener } from "./endpoint.ts";
+import { projectRuns, type RunSummary } from "./runs.ts";
 
 /** How often the cities' pending prompts and human beads are read. */
 export const NEEDS_POLL_MS = 15_000;
@@ -36,6 +40,9 @@ export const NEEDS_POLL_MS = 15_000;
 export const STATUS_POLL_MS = 30_000;
 /** At most this many beads per city and query (human, the decision label, type decision). */
 export const NEEDS_HUMAN_LIMIT = 50;
+/** How often each city's run summary is read (a busy city's is ~350 KB and takes gc ~5 s). */
+export const RUNS_POLL_MS = 180_000;
+
 /** How often the dashboard's decision label is read again (it changes only with gc's environment). */
 export const LABEL_POLL_MS = 10 * 60_000;
 
@@ -44,6 +51,9 @@ export type DecisionReason = "human" | "operator" | "decision";
 
 /** Reads gc's dashboard config for a city (GET {api}/api/city/{city}/config), as JSON; null when it cannot. */
 export type ReadDashboardConfig = (city: string) => Promise<unknown>;
+
+/** Reads gc's dashboard run summary for a city (GET {api}/api/city/{city}/runs/summary), as JSON; null when it cannot. */
+export type ReadRunSummary = (city: string) => Promise<unknown>;
 /** At most this many session and prompt lookups per city per poll. */
 export const LOOKUPS_PER_POLL = 8;
 
@@ -71,6 +81,8 @@ export interface CityNeeds {
   /** gc's counts summed over the three queries, less the beads listed more than once. */
   readonly humanTotal: number;
   readonly status: T.StatusBody | null;
+  /** The city's formula runs (null until read, or when gc has no run summary). */
+  readonly runs: RunSummary | null;
   readonly fetchedAt: number | null;
   /** The last failed read of this city, worded by the caller. */
   readonly error: GcError | null;
@@ -112,7 +124,14 @@ export class NeedsPoller implements EndpointListener {
   /** Prompt texts by city then request id (a request's prompt never changes). */
   private readonly prompts = new Map<string, Map<string, string | null>>();
 
-  constructor(private readonly endpoint: Endpoint, private readonly clock: Clock, private readonly readConfig: ReadDashboardConfig | null = null) {
+  private readonly runsAt = new Map<string, number>();
+
+  constructor(
+    private readonly endpoint: Endpoint,
+    private readonly clock: Clock,
+    private readonly readConfig: ReadDashboardConfig | null = null,
+    private readonly readRuns: ReadRunSummary | null = null,
+  ) {
     endpoint.addListener(this);
   }
 
@@ -290,8 +309,22 @@ export class NeedsPoller implements EndpointListener {
       } else error ??= s.error;
     }
 
+    let runs = before?.runs ?? null;
+    if (this.readRuns !== null && this.clock.now() - (this.runsAt.get(city) ?? -Infinity) >= RUNS_POLL_MS) {
+      this.runsAt.set(city, this.clock.now());
+      let raw: unknown = null;
+      try {
+        raw = await this.readRuns(city);
+      } catch {
+        raw = null;
+      }
+      if (!this.current(poll)) return false;
+      poll.progressAt = this.clock.now();
+      runs = projectRuns(raw) ?? runs;
+    }
+
     const cities = new Map(this.snap.cities);
-    cities.set(city, { city, waiting, human: beads, reasons, humanTotal: total, status, fetchedAt: this.clock.now(), error });
+    cities.set(city, { city, waiting, human: beads, reasons, humanTotal: total, status, runs, fetchedAt: this.clock.now(), error });
     this.snap = { ...this.snap, rev: this.snap.rev + 1, cities };
     return true;
   }

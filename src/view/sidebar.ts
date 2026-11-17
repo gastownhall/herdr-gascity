@@ -9,7 +9,9 @@
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import type { StatusColors, ThemeRead } from "../host.ts";
+import type { StageCell } from "../sync/runs.ts";
 import type { InboxFilter, InboxModel, NeedRow, SidebarCity, SidebarModel, Tone } from "../vm/sidebar.ts";
+import { stageStrip } from "./strip.ts";
 import { label, muted, themedRoot } from "./text.ts";
 
 export interface CrossCityActions {
@@ -52,22 +54,42 @@ function hoverable(el: GpuiElement, colors: StatusColors): GpuiElement {
   return c === undefined ? el : el.hover((s) => s.bg(c));
 }
 
-/** "? reviewer · 2 d" over the prompt's first line; "◆ P1 · 3 d" over a bead's title. */
+/** "? reviewer · 2 d" over the prompt's first line; "✓ PR #8486 · beads · 45 h" over a run's title; "◆ P1 · 3 d" over a bead's title. */
 export function rowText(r: NeedRow): { head: string; body: string } {
-  if (r.kind === "question") return { head: `? ${r.who}${r.age !== null ? ` · ${r.age}` : ""}`, body: r.text };
+  if (r.kind === "question") {
+    const ref = r.run?.ref ? ` · ${r.run.ref}` : "";
+    return { head: `? ${r.who}${ref}${r.age !== null ? ` · ${r.age}` : ""}`, body: r.text };
+  }
+  if (r.kind === "approval") {
+    return { head: ["✓ " + (r.ref ?? "approval"), r.rig, r.age].filter((x): x is string => x !== null).join(" · "), body: r.title };
+  }
   const head = [`◆ ${r.bead}`, r.priority, r.age].filter((x): x is string => x !== null).join(" · ");
   return { head, body: r.title };
 }
 
+/** What a row's click does: Answer (attach) a question or an approval's session, else the run in factory, else the bead. */
+function rowClick(r: NeedRow, actions: CrossCityActions): ((cx: GpuiContext) => void) | null {
+  if (r.kind === "question") return (cx) => actions.openQuestion(r.city, r.session, cx);
+  if (r.kind === "decision") return (cx) => actions.openDecision(r.city, r.bead, cx);
+  const { session, link } = r;
+  if (session !== null) return (cx) => actions.openQuestion(r.city, session, cx);
+  if (link !== null) return (cx) => actions.openLink(link, cx);
+  return null;
+}
+
 function needRow(r: NeedRow, id: string, theme: ThemeRead, colors: StatusColors, actions: CrossCityActions): GpuiElement {
   const { head, body } = rowText(r);
-  let headEl = label(`${id}-head`, head).text_size(12);
+  let headEl = label(`${id}-head`, head).text_size(12).min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis();
   if (r.kind === "question" && colors.bad !== undefined) headEl = headEl.text_color(colors.bad);
+  else if (r.kind === "approval" && colors.warn !== undefined) headEl = headEl.text_color(colors.warn);
   else headEl = muted(headEl, theme);
-  const el = v_flex().id(id).pl(22).pr(6).py(2).rounded(5).min_w_0()
-    .child(headEl)
-    .child(label(`${id}-body`, body).text_size(12.5).overflow_hidden().whitespace_nowrap().text_ellipsis())
-    .on_click((_, cx) => (r.kind === "question" ? actions.openQuestion(r.city, r.session, cx) : actions.openDecision(r.city, r.bead, cx)));
+  const cells = r.kind === "approval" ? r.cells : r.kind === "question" ? r.run?.cells ?? null : null;
+  const top = cells === null ? headEl : h_flex().id(`${id}-top`).gap(6).items_center().min_w_0().child(stageStrip(`${id}-strip`, cells, colors, true)).child(headEl);
+  let el = v_flex().id(id).pl(22).pr(6).py(2).rounded(5).min_w_0()
+    .child(top)
+    .child(label(`${id}-body`, body).text_size(12.5).overflow_hidden().whitespace_nowrap().text_ellipsis());
+  const click = rowClick(r, actions);
+  if (click !== null) el = el.on_click((_, cx) => click(cx));
   return hoverable(el, colors);
 }
 
@@ -81,7 +103,20 @@ function cityBlock(c: SidebarCity, i: number, theme: ThemeRead, colors: StatusCo
   head = head.child(muted(label(`${id}-meta`, c.meta), theme).text_size(11.5).flex_none())
     .on_click((_, cx) => actions.toggleCity(c.name, cx));
   let el = v_flex().id(`${id}-block`).gap(1).child(hoverable(head, colors));
+  const runs = c.runs;
+  if (runs !== null) {
+    const words = `${runs.partial ? "≥ " : ""}${runs.live} run${runs.live === 1 ? "" : "s"}${runs.approvals > 0 ? ` · ${runs.approvals} await approval` : ""}`;
+    let text = label(`${id}-runs-text`, words).text_size(12);
+    text = runs.approvals > 0 && colors.warn !== undefined ? text.text_color(colors.warn) : muted(text, theme);
+    el = el.child(hoverable(h_flex().id(`${id}-runs`).gap(6).items_center().pl(22).py(1).rounded(5)
+      .child(stageStrip(`${id}-runs-strip`, runs.cells, colors, true)).child(text)
+      .on_click((_, cx) => actions.openInbox(cx)), colors));
+  }
   el = el.children(c.rows.map((r, k) => needRow(r, `${id}-row-${k}`, theme, colors, actions)));
+  if (c.moreApprovals > 0) {
+    el = el.child(hoverable(muted(label(`${id}-more-approvals`, `${c.moreApprovals} more approval${c.moreApprovals === 1 ? "" : "s"}`), theme)
+      .text_size(12).pl(22).py(1).rounded(5).on_click((_, cx) => (c.expanded ? actions.openInbox(cx) : actions.toggleCity(c.name, cx))), colors));
+  }
   if (c.more > 0) {
     el = el.child(hoverable(muted(label(`${id}-more`, `${c.more} more decision${c.more === 1 ? "" : "s"}`), theme)
       .text_size(12).pl(22).py(1).rounded(5).on_click((_, cx) => actions.toggleCity(c.name, cx)), colors));
@@ -128,10 +163,23 @@ function inboxRow(r: NeedRow, id: string, theme: ThemeRead, colors: StatusColors
   let titleText: string;
   let sub: string;
   let buttons: GpuiElement[];
+  let cells: readonly StageCell[] | null = null;
   if (r.kind === "question") {
-    titleText = `${r.who}: ${r.text}`;
+    titleText = r.run?.ref ? `${r.run.ref} — ${r.who}: ${r.text}` : `${r.who}: ${r.text}`;
     sub = [r.city, `session ${r.session}`, r.age].filter((x) => x !== null).join(" · ");
     buttons = [button(`${id}-answer`, "Answer", colors, (cx) => actions.openQuestion(r.city, r.session, cx))];
+    const link = r.run?.link ?? null;
+    if (link !== null) buttons.push(button(`${id}-review`, "Review ↗", colors, (cx) => actions.openLink(link, cx)));
+    cells = r.run?.cells ?? null;
+  } else if (r.kind === "approval") {
+    titleText = r.ref !== null ? `${r.ref}  ${r.title}` : r.title;
+    sub = [r.city, r.rig, r.stage, r.age !== null ? `waiting ${r.age}` : null, r.also.length > 0 ? `also ${r.also.join(", ")}` : null]
+      .filter((x) => x !== null && x !== "").join(" · ");
+    buttons = [];
+    const { session, link } = r;
+    if (session !== null) buttons.push(button(`${id}-answer`, "Answer", colors, (cx) => actions.openQuestion(r.city, session, cx)));
+    if (link !== null) buttons.push(button(`${id}-review`, "Review ↗", colors, (cx) => actions.openLink(link, cx)));
+    cells = r.cells;
   } else {
     titleText = r.title;
     sub = [r.city, r.bead, r.priority, r.age, r.why.join(" + "), r.labels.length > 0 ? `[${r.labels.join(", ")}]` : null].filter((x) => x !== null && x !== "").join(" · ");
@@ -141,10 +189,11 @@ function inboxRow(r: NeedRow, id: string, theme: ThemeRead, colors: StatusColors
   }
   let title = label(`${id}-title`, titleText).overflow_hidden().whitespace_nowrap().text_ellipsis();
   if (r.kind === "question" && colors.bad !== undefined) title = title.text_color(colors.bad);
-  const row = h_flex().id(id).gap(10).items_center().px(10).py(6).border_t_1()
+  let row = h_flex().id(id).gap(10).items_center().px(10).py(6).border_t_1();
+  if (cells !== null) row = row.child(stageStrip(`${id}-strip`, cells, colors));
+  return row
     .child(main.child(title).child(muted(label(`${id}-sub`, sub), theme).text_size(12).overflow_hidden().whitespace_nowrap().text_ellipsis()))
     .children(buttons);
-  return row;
 }
 
 /** The Needs a human pane. */
@@ -160,6 +209,7 @@ export function renderInbox(
   const kinds = h_flex().id("gascity-inbox-kinds").gap(6).items_center()
     .child(chip("gascity-inbox-all", `All ${m.counts.all}`, m.filter === "all", colors, (cx) => actions.setFilter("all", cx)))
     .child(chip("gascity-inbox-questions", `Questions ${m.counts.questions}`, m.filter === "questions", colors, (cx) => actions.setFilter("questions", cx)))
+    .child(chip("gascity-inbox-approvals", `Approvals ${m.counts.approvals}`, m.filter === "approvals", colors, (cx) => actions.setFilter("approvals", cx)))
     .child(chip("gascity-inbox-decisions", `Decisions ${m.counts.decisions}`, m.filter === "decisions", colors, (cx) => actions.setFilter("decisions", cx)));
   const cities = h_flex().id("gascity-inbox-cities").gap(6).items_center()
     .child(chip("gascity-inbox-city-all", "Every city", m.city === null, colors, (cx) => actions.setInboxCity(null, cx)))
@@ -170,6 +220,10 @@ export function renderInbox(
     root = root.child(muted(label(`gascity-inbox-group-${i}`, g.title), theme).text_size(12).pt(6))
       .child(v_flex().id(`gascity-inbox-rows-${i}`).children(g.rows.map((r, k) => inboxRow(r, `gascity-inbox-${i}-${k}`, theme, colors, actions))));
   });
+  if (m.moreApprovals > 0) root = root.child(muted(label("gascity-inbox-more-approvals", `${m.moreApprovals} more approvals not listed`), theme));
+  if (m.dormantApprovals > 0) {
+    root = root.child(muted(label("gascity-inbox-dormant", `${m.dormantApprovals} older approval${m.dormantApprovals === 1 ? " has" : "s have"} had no activity for 72 h+`), theme).text_size(12));
+  }
   if (m.notListed > 0) root = root.child(muted(label("gascity-inbox-not-listed", `${m.notListed} more decisions not listed (gc lists ${50} per city)`), theme));
   if (m.note === null && m.groups.length === 0) root = root.child(muted(label("gascity-inbox-empty", "Nothing waits on a person right now."), theme));
   return root;

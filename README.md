@@ -468,6 +468,22 @@ labeled with the web dashboard's decision label (mdash's decision queue;
 read from gc's `/api/city/<city>/config`, default `needs/operator`), or of
 type `decision`. Each bead is listed once, with every reason.
 
+**Approvals.** Formula runs waiting at the human-approval gate (a PR waits
+for review before merge) are a third kind, between questions and decisions.
+The shared poll reads each city's dashboard run summary
+(`/api/city/<city>/runs/summary`, ~350 KB for a busy city) every 3 minutes
+and keeps a slim record per run (`src/sync/runs.ts`). A run is at the gate
+when it reports the approval stage, or when its step is not resolved and
+every stage before approval is done (run details confirm these are at
+"Human review before merge"). Only live runs are rows, longest wait first,
+with the run's stage strip (small boxes: done, working, waiting on you,
+next, pending); runs with no write for 72 h are a count. A question on the
+run's own session absorbs its approval, and a decision bead naming the same
+PR folds into it. Answer attaches to the run's session; Review opens the run
+in the runs dashboard (`gascity.settings.runsUrl`, e.g. factory;
+`herdr-app do gascity.set-runs-url:<percent-encoded url>`). Each city in the
+sidebar gets a runs line, e.g. "23 runs · 19 await approval".
+
 With `gascity.settings.dashboardUrl` set (an https URL;
 `herdr-app do gascity.set-dashboard-url:<percent-encoded url>`), beads with
 the decision label (mdash's queue) get an "mdash" link
@@ -697,9 +713,9 @@ arguments separated by `:`; each argument is percent-encoded
   with the same text, keeps it claimed for 10 minutes, and becomes the
   Idempotency-Key where gc declares one. A copy that refuses a delivery gives
   its claim up. Commands that only change what a copy shows (`focus`,
-  `city`, `session`, `bead`, `cancel`, `back`, `refresh`, `probe`) and `set-gc-bin`
-  and `set-dashboard-url` (which store the same value whichever copy runs
-  them) run in each copy that gets them.
+  `city`, `session`, `bead`, `cancel`, `back`, `refresh`, `probe`) and `set-gc-bin`,
+  `set-dashboard-url` and `set-runs-url` (which store the same value
+  whichever copy runs them) run in each copy that gets them.
 - **Retrying a scripted command.** Sending the same nonce again within 10
   minutes is the same delivery: the command book logs it as a `duplicate`
   and nothing reaches gc (unless the first delivery was refused, which gives
@@ -751,6 +767,7 @@ arguments separated by `:`; each argument is percent-encoded
 | `back` | close the open session's detail (as Esc does when no question or form is open) |
 | `set-gc-bin:<gc-bin>` | store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it) |
 | `set-dashboard-url:<url>` | store the web dashboard (mdash) the sidebar and Needs a human link to: an https URL, or none to remove the links |
+| `set-runs-url:<url>` | store the dashboard formula runs link to (factory): an https URL, or none to remove the run links |
 | `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
 | `wake:<city>:<session>` | wake a session (Wake) |
 | `suspend:<city>:<session>` | suspend a session (Suspend) |

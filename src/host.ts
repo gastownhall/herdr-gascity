@@ -90,6 +90,14 @@ export function storeDashboardUrl(dashboardUrl: string | null): Result<void, GcE
   return ok(undefined);
 }
 
+/** Stores (or, with null, removes) the dashboard formula runs link to. */
+export function storeRunsUrl(runsUrl: string | null): Result<void, GcError> {
+  const next = patchSettings(herdr.shared(SETTINGS_KEY), { runsUrl });
+  if (!next.ok) return next;
+  herdr.setShared(SETTINGS_KEY, next.value);
+  return ok(undefined);
+}
+
 /** herdr's fetch, in the shape the gc client takes. */
 export const hostFetch: HostFetch = (url, init) => fetch(url, init);
 
@@ -312,8 +320,8 @@ export const OPEN_TIMEOUT_MS = 10_000;
  * opener; any other argument is refused before anything is spawned (a file
  * would be opened by its default handler, which runs a macOS .command file).
  */
-export async function openUrl(opener: "xdg-open" | "open", url: string, dashboardUrl: string | null = null): Promise<Result<null, GcError>> {
-  const refused = openUrlIssue(url, dashboardUrl);
+export async function openUrl(opener: "xdg-open" | "open", url: string, dashboards: string | null | readonly (string | null)[] = null): Promise<Result<null, GcError>> {
+  const refused = openUrlIssue(url, dashboards);
   if (refused !== null) return err({ kind: "exec", argv: [opener, url], code: null, stderr: refused });
   logRecord("exec", [opener, url]);
   const running = opener === "open"

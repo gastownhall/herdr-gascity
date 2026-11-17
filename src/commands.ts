@@ -55,6 +55,8 @@ export type Command =
   | { verb: "set-gc-bin"; gcBin: string }
   /** Stores the web dashboard (mdash) the views link to; null ("none") removes the links. */
   | { verb: "set-dashboard-url"; url: string | null }
+  /** Stores the dashboard formula runs link to (factory); null ("none") removes the run links. */
+  | { verb: "set-runs-url"; url: string | null }
   | InCity<{ verb: "session-new"; agent: string; alias: string | null }>
   | InCity<{ verb: "wake" | "suspend" | "stop" | "pin" | "unpin"; session: string }>
   | InCity<{ verb: "close" | "kill" | "kill-force"; session: string; confirm: boolean }>
@@ -141,6 +143,11 @@ export const GRAMMAR: Readonly<Record<string, VerbSpec>> = {
     mutating: false, args: [id("url")],
     summary: "store the web dashboard (mdash) the sidebar and Needs a human link to: an https URL, or none to remove the links",
     build: (a) => ({ verb: "set-dashboard-url", url: at(a, 0) === "none" ? null : at(a, 0) }),
+  },
+  "set-runs-url": {
+    mutating: false, args: [id("url")],
+    summary: "store the dashboard formula runs link to (factory): an https URL, or none to remove the run links",
+    build: (a) => ({ verb: "set-runs-url", url: at(a, 0) === "none" ? null : at(a, 0) }),
   },
   "session-new": {
     mutating: true,
@@ -291,8 +298,8 @@ export function parseCommand(raw: string): Result<Delivery, string> {
   if (verb === "probe" && args[0] !== "on" && args[0] !== "off") return err(`probe: expected "on" or "off", got "${shownCommand(args[0] ?? "")}"`);
   const gcBinRefused = verb === "set-gc-bin" ? gcBinIssue(args[0] ?? "") : null;
   if (gcBinRefused !== null) return err(`set-gc-bin: ${gcBinRefused}`);
-  const urlRefused = verb === "set-dashboard-url" && args[0] !== "none" ? dashboardUrlIssue(args[0] ?? "") : null;
-  if (urlRefused !== null) return err(`set-dashboard-url: ${urlRefused}`);
+  const urlRefused = (verb === "set-dashboard-url" || verb === "set-runs-url") && args[0] !== "none" ? dashboardUrlIssue(args[0] ?? "") : null;
+  if (urlRefused !== null) return err(`${verb}: ${urlRefused}`);
   return ok({ command: spec.build(args, confirm), nonce });
 }
 
@@ -339,6 +346,7 @@ export function formatCommand(c: Command, nonce: string | null = null): string {
       case "set-gc-bin":
         return [c.verb, c.gcBin];
       case "set-dashboard-url":
+      case "set-runs-url":
         return [c.verb, c.url ?? "none"];
       case "wake":
       case "suspend":

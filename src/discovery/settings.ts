@@ -22,6 +22,8 @@ export interface Settings {
   gcBin: string;
   /** The web dashboard (mdash) to link to, e.g. https://mdash.example.com; null: no links. */
   dashboardUrl: string | null;
+  /** The dashboard formula runs link to (factory), e.g. https://factory.example.com; null: no run links. */
+  runsUrl: string | null;
 }
 
 /** A change to the stored settings; `apiUrl: null` clears it. */
@@ -30,6 +32,8 @@ export interface SettingsPatch {
   gcBin?: string;
   /** null clears it. */
   dashboardUrl?: string | null;
+  /** null clears it. */
+  runsUrl?: string | null;
 }
 
 type HostDecodeError = Extract<GcError, { kind: "host-decode" }>;
@@ -64,9 +68,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Reads the stored value; absent means the defaults. Unknown keys are ignored. */
 export function decodeSettings(raw: unknown): Result<Settings, HostDecodeError> {
-  if (raw === undefined || raw === null) return ok({ apiUrl: null, gcBin: DEFAULT_GC_BIN, dashboardUrl: null });
+  if (raw === undefined || raw === null) return ok({ apiUrl: null, gcBin: DEFAULT_GC_BIN, dashboardUrl: null, runsUrl: null });
   if (!isRecord(raw)) return err(invalid("", `expected an object, got ${JSON.stringify(raw)}`));
-  const { apiUrl, gcBin, dashboardUrl } = raw;
+  const { apiUrl, gcBin, dashboardUrl, runsUrl } = raw;
   if (apiUrl !== undefined && (typeof apiUrl !== "string" || apiUrl === "")) {
     return err(invalid("apiUrl", `expected a non-empty string, got ${JSON.stringify(apiUrl)}`));
   }
@@ -80,7 +84,13 @@ export function decodeSettings(raw: unknown): Result<Settings, HostDecodeError> 
     const issue = dashboardUrlIssue(dashboardUrl);
     if (issue) return err(invalid("dashboardUrl", issue));
   }
-  return ok({ apiUrl: apiUrl ?? null, gcBin: gcBin ?? DEFAULT_GC_BIN, dashboardUrl: typeof dashboardUrl === "string" ? dashboardUrl.replace(/\/+$/, "") : null });
+  if (runsUrl !== undefined) {
+    if (typeof runsUrl !== "string") return err(invalid("runsUrl", `expected a string, got ${JSON.stringify(runsUrl)}`));
+    const issue = dashboardUrlIssue(runsUrl);
+    if (issue) return err(invalid("runsUrl", issue));
+  }
+  const trim = (u: unknown) => (typeof u === "string" ? u.replace(/\/+$/, "") : null);
+  return ok({ apiUrl: apiUrl ?? null, gcBin: gcBin ?? DEFAULT_GC_BIN, dashboardUrl: trim(dashboardUrl), runsUrl: trim(runsUrl) });
 }
 
 /**
@@ -108,6 +118,12 @@ export function patchSettings(raw: unknown, patch: SettingsPatch): Result<Record
     const issue = dashboardUrlIssue(patch.dashboardUrl);
     if (issue) return err(invalid("dashboardUrl", issue));
     next["dashboardUrl"] = patch.dashboardUrl.replace(/\/+$/, "");
+  }
+  if (patch.runsUrl === null) delete next["runsUrl"];
+  else if (patch.runsUrl !== undefined) {
+    const issue = dashboardUrlIssue(patch.runsUrl);
+    if (issue) return err(invalid("runsUrl", issue));
+    next["runsUrl"] = patch.runsUrl.replace(/\/+$/, "");
   }
   return ok(next);
 }

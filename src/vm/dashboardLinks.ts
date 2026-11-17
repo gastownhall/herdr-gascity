@@ -9,6 +9,11 @@ export function cityLink(dashboardUrl: string | null, city: string): string | nu
   return dashboardUrl === null ? null : `${dashboardUrl}/city/${seg(city)}/`;
 }
 
+/** A formula run in the runs dashboard (factory): /city/<city>/runs/<runId>. */
+export function runLink(runsUrl: string | null, city: string, runId: string): string | null {
+  return runsUrl === null ? null : `${runsUrl}/city/${seg(city)}/runs/${seg(runId)}`;
+}
+
 /** A bead in the dashboard. */
 export function beadLink(dashboardUrl: string | null, city: string, bead: string): string | null {
   return dashboardUrl === null ? null : `${dashboardUrl}/city/${seg(city)}/beads?bead=${seg(bead)}`;

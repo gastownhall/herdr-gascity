@@ -3,6 +3,7 @@ import type { CitiesSnapshot } from "../../../src/sync/cities.ts";
 import type { CityNeeds, NeedsSnapshot } from "../../../src/sync/needs.ts";
 import type * as T from "../../../src/gc/types.gen.ts";
 import { SIDEBAR_DECISIONS, firstLine, inboxModel, sidebarModel } from "../../../src/vm/sidebar.ts";
+import { projectRuns } from "../../../src/sync/runs.ts";
 import { NOW, bead } from "./snap.ts";
 
 const DAY = 86_400_000;
@@ -27,7 +28,7 @@ function status(extra: Partial<T.StatusBody> = {}): T.StatusBody {
 function needs(city: string, parts: Partial<CityNeeds> = {}): [string, CityNeeds] {
   const human = parts.human ?? [];
   const reasons = new Map(human.map((b) => [b.id, ["human" as const]]));
-  return [city, { city, waiting: [], human, reasons, humanTotal: human.length, status: status(), fetchedAt: NOW, error: null, ...parts }];
+  return [city, { city, waiting: [], human, reasons, humanTotal: human.length, status: status(), runs: null, fetchedAt: NOW, error: null, ...parts }];
 }
 
 function snap(...entries: [string, CityNeeds][]): NeedsSnapshot {
@@ -51,7 +52,7 @@ describe("the sidebar block", () => {
     expect(m.cities.map((c) => c.name)).toEqual(["gamma", "beta", "alpha", "delta"]);
     expect([m.total, m.questions]).toEqual([6, 1]);
     const gamma = m.cities[0]!;
-    expect(gamma.rows).toEqual([{ kind: "question", city: "gamma", session: "s-1", who: "reviewer", text: "Ship it?", age: "2 d" }]);
+    expect(gamma.rows).toEqual([{ kind: "question", city: "gamma", session: "s-1", who: "reviewer", text: "Ship it?", age: "2 d", run: null }]);
     const beta = m.cities[1]!;
     expect(beta.rows.length).toBe(SIDEBAR_DECISIONS);
     expect(beta.more).toBe(5 - SIDEBAR_DECISIONS);
@@ -111,7 +112,7 @@ describe("the Needs a human pane", () => {
   test("questions first, then decisions, from every running city, with counts by kind and city", () => {
     const m = inboxModel({ ...input, filter: "all" });
     expect(m.groups.map((g) => [g.title, g.rows.length])).toEqual([["Blocking a live session", 1], ["Waiting on a decision", 3]]);
-    expect(m.counts).toEqual({ all: 62, questions: 1, decisions: 61 });
+    expect(m.counts).toEqual({ all: 62, questions: 1, approvals: 0, decisions: 61 });
     expect(m.byCity).toEqual([{ name: "alpha", count: 2 }, { name: "beta", count: 60 }]);
     expect(m.notListed).toBe(58);
   });
@@ -120,7 +121,7 @@ describe("the Needs a human pane", () => {
     expect(inboxModel({ ...input, filter: "questions" }).groups.map((g) => g.title)).toEqual(["Blocking a live session"]);
     const beta = inboxModel({ ...input, filter: "decisions", city: "beta" });
     expect(beta.groups.flatMap((g) => g.rows.map((r) => r.city))).toEqual(["beta", "beta"]);
-    expect(beta.counts).toEqual({ all: 60, questions: 0, decisions: 60 });
+    expect(beta.counts).toEqual({ all: 60, questions: 0, approvals: 0, decisions: 60 });
   });
 
   test("loading before the first poll", () => {
@@ -144,3 +145,50 @@ describe("mdash links", () => {
     expect(m.cities[0]?.link).toBe("https://mdash.example.com/city/a/");
   });
 });
+
+describe("approvals: runs waiting at the human gate", () => {
+  const runs = projectRuns(JSON.parse(require("node:fs").readFileSync(new URL("../../fixtures/runs/summary.json", import.meta.url), "utf8")));
+  const FACTORY = "https://factory.example.com";
+
+  test("live gate runs are approvals, longest wait first, linked to the runs dashboard; dormant ones are a count", () => {
+    const m = inboxModel({ cities: cities({ name: "a" }), needs: snap(needs("a", { runs })), filter: "all", city: null, now: NOW, runsUrl: FACTORY });
+    expect(m.counts).toEqual({ all: 2, questions: 0, approvals: 2, decisions: 0 });
+    const rows = m.groups[0]!.rows;
+    expect(m.groups[0]!.title).toStartWith("Waiting for your approval");
+    expect(rows.map((r) => r.kind === "approval" && [r.ref, r.title, r.session, r.link])).toEqual([
+      ["PR #102", "feat(ui): dark mode toggle", "sc-6", `${FACTORY}/city/a/runs/run-102`],
+      ["PR #101", "fix(api): retry the flaky upload", "sc-20", `${FACTORY}/city/a/runs/run-101`],
+    ]);
+    expect(m.dormantApprovals).toBe(1);
+  });
+
+  test("a question on the run's own session absorbs its approval; a decision bead naming the PR folds into the approval", () => {
+    const waiting = [{ sessionId: "sc-20", requestId: "r", kind: "question", who: "operator", lastActive: null, prompt: "Merge it?" }];
+    const human = [bead("ga-1", "Approval needed: PR #102 dark mode", { labels: ["needs/operator"] }), bead("ga-2", "Pick a logo", { labels: ["human"] })];
+    const reasons = new Map<string, ("human" | "operator" | "decision")[]>([["ga-1", ["operator"]], ["ga-2", ["human"]]]);
+    const m = inboxModel({ cities: cities({ name: "a" }), needs: snap(needs("a", { runs, waiting, human, reasons, humanTotal: 2 })), filter: "all", city: null, now: NOW, runsUrl: FACTORY });
+    expect(m.counts).toEqual({ all: 3, questions: 1, approvals: 1, decisions: 1 });
+    const [q, a, d] = m.groups.map((g) => g.rows[0]);
+    expect(q).toMatchObject({ kind: "question", session: "sc-20", run: { ref: "PR #101", link: `${FACTORY}/city/a/runs/run-101` } });
+    expect(a).toMatchObject({ kind: "approval", ref: "PR #102", also: ["ga-1 needs/operator"] });
+    expect(d).toMatchObject({ kind: "decision", bead: "ga-2" });
+  });
+
+  test("the sidebar: a runs line, approvals after questions, and the total counts them", () => {
+    const m = sidebarModel({ cities: cities({ name: "a" }), needs: snap(needs("a", { runs })), expanded: new Set(), now: NOW, runsUrl: FACTORY });
+    const c = m.cities[0]!;
+    expect(c.runs).toEqual({ live: 4, approvals: 2, partial: false, cells: ["done", "done", "done", "done", "done", "gate", "pending", "pending"] });
+    expect(c.rows.map((r) => r.kind)).toEqual(["approval", "approval"]);
+    expect(m.total).toBe(2);
+  });
+
+  test("the Approvals filter", () => {
+    const m = inboxModel({ cities: cities({ name: "a" }), needs: snap(needs("a", { runs, human: human1() })), filter: "approvals", city: null, now: NOW });
+    expect(m.groups.map((g) => g.rows[0]?.kind)).toEqual(["approval"]);
+    expect(m.notListed).toBe(0);
+  });
+});
+
+function human1() {
+  return [bead("x", "something", { labels: ["human"] })];
+}

@@ -37,6 +37,8 @@ const EXAMPLES: Command[] = [
   { verb: "set-gc-bin", gcBin: "gc" },
   { verb: "set-dashboard-url", url: "https://mdash.example.com" },
   { verb: "set-dashboard-url", url: null },
+  { verb: "set-runs-url", url: "https://factory.example.com" },
+  { verb: "set-runs-url", url: null },
   { verb: "session-new", city: "scratch", agent: "frontend/builder", alias: null },
   { verb: "session-new", city: "scratch", agent: "worker", alias: "canary-n1" },
   { verb: "wake", city: "scratch", session: "sc-20" },
@@ -86,7 +88,7 @@ describe("round trip", () => {
       if (isMutating(c)) expect(usage(verb)).toStartWith(`${verb}:<city>`);
     }
     expect(Object.entries(GRAMMAR).filter(([, s]) => !s.mutating).map(([v]) => v).sort())
-      .toEqual(["back", "bead", "cancel", "city", "focus", "probe", "refresh", "session", "set-dashboard-url", "set-gc-bin"]);
+      .toEqual(["back", "bead", "cancel", "city", "focus", "probe", "refresh", "session", "set-dashboard-url", "set-gc-bin", "set-runs-url"]);
   });
 
   test("the canary's commands read as written", () => {

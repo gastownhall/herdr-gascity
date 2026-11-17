@@ -1,0 +1,444 @@
+{
+  "totalActive": 4,
+  "totalHistorical": 120,
+  "runCounts": {
+    "total": 4
+  },
+  "lanes": [
+    {
+      "id": "run-101",
+      "title": "PR #101: fix(api): retry the flaky upload",
+      "formula": {
+        "status": "known",
+        "name": "mol-adopt-pr-v2"
+      },
+      "scope": {
+        "status": "available",
+        "kind": "rig",
+        "ref": "frontend"
+      },
+      "external": {
+        "status": "available",
+        "label": "PR #101",
+        "url": "https://github.com/example/repo/pull/101"
+      },
+      "phase": "active",
+      "phaseLabel": "active",
+      "statusCounts": {
+        "open": 10,
+        "in_progress": 2,
+        "closed": 37
+      },
+      "activeAssignees": [
+        "sc-20"
+      ],
+      "updatedAt": {
+        "status": "available",
+        "at": "2026-11-09T08:00:00Z"
+      },
+      "stages": [
+        {
+          "key": "preflight",
+          "label": "Preflight",
+          "status": "complete"
+        },
+        {
+          "key": "rebase",
+          "label": "Worktree / rebase",
+          "status": "complete"
+        },
+        {
+          "key": "pre-review-ci",
+          "label": "Pre-review CI",
+          "status": "complete"
+        },
+        {
+          "key": "review",
+          "label": "Review loop",
+          "status": "complete"
+        },
+        {
+          "key": "ci",
+          "label": "Pre-approval CI",
+          "status": "complete"
+        },
+        {
+          "key": "approval",
+          "label": "Human approval",
+          "status": "active"
+        },
+        {
+          "key": "finalize",
+          "label": "Merge-ready",
+          "status": "pending"
+        },
+        {
+          "key": "cleanup",
+          "label": "Cleanup",
+          "status": "pending"
+        }
+      ],
+      "progress": {
+        "status": "active_step",
+        "stepId": "approval",
+        "stage": {
+          "status": "available",
+          "index": 5,
+          "key": "approval",
+          "label": "Human approval"
+        }
+      },
+      "health": {
+        "status": "available",
+        "data": {
+          "needsOperator": true,
+          "thrashingDetected": false
+        }
+      }
+    },
+    {
+      "id": "run-102",
+      "title": "PR #102: feat(ui): dark mode toggle",
+      "formula": {
+        "status": "known",
+        "name": "mol-adopt-pr-v2"
+      },
+      "scope": {
+        "status": "available",
+        "kind": "rig",
+        "ref": "frontend"
+      },
+      "external": {
+        "status": "available",
+        "label": "PR #102",
+        "url": "https://github.com/example/repo/pull/102"
+      },
+      "phase": "active",
+      "phaseLabel": "active",
+      "statusCounts": {
+        "open": 10,
+        "in_progress": 2,
+        "closed": 37
+      },
+      "activeAssignees": [
+        "sc-6"
+      ],
+      "updatedAt": {
+        "status": "available",
+        "at": "2026-11-08T12:00:00Z"
+      },
+      "stages": [
+        {
+          "key": "preflight",
+          "label": "Preflight",
+          "status": "complete"
+        },
+        {
+          "key": "rebase",
+          "label": "Worktree / rebase",
+          "status": "complete"
+        },
+        {
+          "key": "pre-review-ci",
+          "label": "Pre-review CI",
+          "status": "complete"
+        },
+        {
+          "key": "review",
+          "label": "Review loop",
+          "status": "complete"
+        },
+        {
+          "key": "ci",
+          "label": "Pre-approval CI",
+          "status": "complete"
+        },
+        {
+          "key": "approval",
+          "label": "Human approval",
+          "status": "pending"
+        },
+        {
+          "key": "finalize",
+          "label": "Merge-ready",
+          "status": "pending"
+        },
+        {
+          "key": "cleanup",
+          "label": "Cleanup",
+          "status": "pending"
+        }
+      ],
+      "progress": {
+        "status": "active_step",
+        "stepId": "mol-adopt-pr-v2",
+        "stage": {
+          "status": "unavailable",
+          "error": "active run stage unavailable"
+        }
+      },
+      "health": {
+        "status": "available",
+        "data": {
+          "needsOperator": false,
+          "thrashingDetected": false
+        }
+      }
+    },
+    {
+      "id": "run-103",
+      "title": "PR #103: docs: explain the cache",
+      "formula": {
+        "status": "known",
+        "name": "mol-adopt-pr-v2"
+      },
+      "scope": {
+        "status": "available",
+        "kind": "rig",
+        "ref": "frontend"
+      },
+      "external": {
+        "status": "available",
+        "label": "PR #103",
+        "url": "https://github.com/example/repo/pull/103"
+      },
+      "phase": "active",
+      "phaseLabel": "active",
+      "statusCounts": {
+        "open": 10,
+        "in_progress": 2,
+        "closed": 37
+      },
+      "activeAssignees": [],
+      "updatedAt": {
+        "status": "available",
+        "at": "2026-11-09T11:00:00Z"
+      },
+      "stages": [
+        {
+          "key": "preflight",
+          "label": "Preflight",
+          "status": "complete"
+        },
+        {
+          "key": "rebase",
+          "label": "Worktree / rebase",
+          "status": "complete"
+        },
+        {
+          "key": "pre-review-ci",
+          "label": "Pre-review CI",
+          "status": "complete"
+        },
+        {
+          "key": "review",
+          "label": "Review loop",
+          "status": "complete"
+        },
+        {
+          "key": "ci",
+          "label": "Pre-approval CI",
+          "status": "pending"
+        },
+        {
+          "key": "approval",
+          "label": "Human approval",
+          "status": "pending"
+        },
+        {
+          "key": "finalize",
+          "label": "Merge-ready",
+          "status": "pending"
+        },
+        {
+          "key": "cleanup",
+          "label": "Cleanup",
+          "status": "pending"
+        }
+      ],
+      "progress": {
+        "status": "active_step",
+        "stepId": "mol-adopt-pr-v2",
+        "stage": {
+          "status": "unavailable",
+          "error": "active run stage unavailable"
+        }
+      },
+      "health": {
+        "status": "available",
+        "data": {
+          "needsOperator": false,
+          "thrashingDetected": false
+        }
+      }
+    },
+    {
+      "id": "run-104",
+      "title": "cp c1 fe-7: build.widget",
+      "formula": {
+        "status": "known",
+        "name": "cp-build-pair-judge"
+      },
+      "scope": {
+        "status": "available",
+        "kind": "rig",
+        "ref": "frontend"
+      },
+      "external": {
+        "status": "unavailable"
+      },
+      "phase": "active",
+      "phaseLabel": "active",
+      "statusCounts": {
+        "open": 10,
+        "in_progress": 2,
+        "closed": 37
+      },
+      "activeAssignees": [],
+      "updatedAt": {
+        "status": "available",
+        "at": "2026-11-09T11:30:00Z"
+      },
+      "stages": [
+        {
+          "key": "intake",
+          "label": "Intake",
+          "status": "complete"
+        },
+        {
+          "key": "implementation",
+          "label": "Implementation",
+          "status": "active"
+        },
+        {
+          "key": "review",
+          "label": "Review",
+          "status": "pending"
+        },
+        {
+          "key": "approval",
+          "label": "Approval",
+          "status": "pending"
+        },
+        {
+          "key": "finalization",
+          "label": "Finalization",
+          "status": "pending"
+        }
+      ],
+      "progress": {
+        "status": "active_step",
+        "stepId": "cp-build",
+        "stage": {
+          "status": "available",
+          "index": 1,
+          "key": "implementation",
+          "label": "Implementation"
+        }
+      },
+      "health": {
+        "status": "available",
+        "data": {
+          "needsOperator": false,
+          "thrashingDetected": false
+        }
+      }
+    },
+    {
+      "id": "run-090",
+      "title": "PR #90: chore: bump deps",
+      "formula": {
+        "status": "known",
+        "name": "mol-adopt-pr-v2"
+      },
+      "scope": {
+        "status": "available",
+        "kind": "rig",
+        "ref": "frontend"
+      },
+      "external": {
+        "status": "available",
+        "label": "PR #90",
+        "url": "https://github.com/example/repo/pull/90"
+      },
+      "phase": "active",
+      "phaseLabel": "active",
+      "statusCounts": {
+        "open": 10,
+        "in_progress": 2,
+        "closed": 37
+      },
+      "activeAssignees": [],
+      "updatedAt": {
+        "status": "available",
+        "at": "2026-11-01T00:00:00Z"
+      },
+      "stages": [
+        {
+          "key": "preflight",
+          "label": "Preflight",
+          "status": "complete"
+        },
+        {
+          "key": "rebase",
+          "label": "Worktree / rebase",
+          "status": "complete"
+        },
+        {
+          "key": "pre-review-ci",
+          "label": "Pre-review CI",
+          "status": "complete"
+        },
+        {
+          "key": "review",
+          "label": "Review loop",
+          "status": "complete"
+        },
+        {
+          "key": "ci",
+          "label": "Pre-approval CI",
+          "status": "complete"
+        },
+        {
+          "key": "approval",
+          "label": "Human approval",
+          "status": "pending"
+        },
+        {
+          "key": "finalize",
+          "label": "Merge-ready",
+          "status": "pending"
+        },
+        {
+          "key": "cleanup",
+          "label": "Cleanup",
+          "status": "pending"
+        }
+      ],
+      "progress": {
+        "status": "active_step",
+        "stepId": "mol-adopt-pr-v2",
+        "stage": {
+          "status": "unavailable",
+          "error": "active run stage unavailable"
+        }
+      },
+      "health": {
+        "status": "available",
+        "data": {
+          "needsOperator": false,
+          "thrashingDetected": false
+        }
+      },
+      "stale": true,
+      "staleSince": "2026-11-01T00:00:00Z"
+    },
+    {
+      "title": "a lane gc sent without an id"
+    }
+  ],
+  "historicalLanes": [],
+  "blockedLanes": [],
+  "recentChanges": [],
+  "lanesPartial": false
+}

@@ -2,7 +2,7 @@
 // against the fake gc: what it reads, how often, and what it keeps.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { LABEL_POLL_MS, NEEDS_POLL_MS, STATUS_POLL_MS } from "../../../src/sync/needs.ts";
+import { LABEL_POLL_MS, NEEDS_POLL_MS, RUNS_POLL_MS, STATUS_POLL_MS } from "../../../src/sync/needs.ts";
 import { SyncRegistry, TICK_MS, type NeedsSubscription } from "../../../src/sync/registry.ts";
 import { FakeGc, FakeHost } from "./fakes.ts";
 
@@ -150,5 +150,17 @@ describe("a long round", () => {
     live.push(s);
     await host.advance(400_000);
     expect([...s.snapshot().cities.keys()].sort()).toEqual([...cities].sort());
+  });
+});
+
+describe("formula runs", () => {
+  test("each city's run summary is read every RUNS_POLL_MS and slimmed", async () => {
+    const { host, gc, sub } = await setup();
+    const start = gc.seen.length;
+    await host.advance(RUNS_POLL_MS * 2);
+    const reads = gc.seen.slice(start).filter((r) => r.path === "/api/city/scratch/runs/summary").length;
+    expect(reads).toBe(2);
+    const runs = sub.snapshot().cities.get("scratch")?.runs;
+    expect(runs?.lanes.filter((l) => l.gate && !l.dormant).map((l) => l.id).sort()).toEqual(["run-101", "run-102"]);
   });
 });

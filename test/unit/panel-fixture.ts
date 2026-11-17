@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 // The panel's render-test fixture: gc at the default URL serving the
 // recorded contract fixtures through the fake herdr fetch, and a copy that
 // discovered it and ran a few periods of its timer (test/harness.ts).
@@ -42,6 +43,7 @@ export function gc(overrides: Record<string, FakeReply> = {}) {
     const bead = /\/bead\/([^/]+)$/.exec(p);
     if (bead) return { status: 200, body: recordedBead(decodeURIComponent(bead[1] ?? "")) };
     if (p.endsWith("/pending")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-pending", "ok") };
+    if (p.endsWith("/runs/summary")) return { status: 200, body: JSON.parse(readFileSync(new URL("../fixtures/runs/summary.json", import.meta.url), "utf8")) as unknown };
     if (p.endsWith("/status")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-status", "ok") };
     if (p.endsWith("/beads")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-beads", "human") };
     if (p.endsWith("/rigs")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-rigs", "ok") };

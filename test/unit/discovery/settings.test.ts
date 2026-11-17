@@ -13,20 +13,20 @@ describe("decodeSettings", () => {
   test("the key is gascity.settings; nothing stored means the defaults", () => {
     expect(SETTINGS_KEY).toBe("gascity.settings");
     expect(DEFAULT_GC_BIN).toBe("gc");
-    expect(decodeSettings(undefined)).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: null } });
-    expect(decodeSettings(null)).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: null } });
-    expect(decodeSettings({})).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: null } });
+    expect(decodeSettings(undefined)).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: null, runsUrl: null } });
+    expect(decodeSettings(null)).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: null, runsUrl: null } });
+    expect(decodeSettings({})).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: null, runsUrl: null } });
   });
 
   test("stored values; unknown keys are ignored", () => {
     expect(decodeSettings({ apiUrl: "http://127.0.0.1:9443", gcBin: "/opt/homebrew/bin/gc", later: 1 })).toEqual({
-      ok: true, value: { apiUrl: "http://127.0.0.1:9443", gcBin: "/opt/homebrew/bin/gc", dashboardUrl: null },
+      ok: true, value: { apiUrl: "http://127.0.0.1:9443", gcBin: "/opt/homebrew/bin/gc", dashboardUrl: null, runsUrl: null },
     });
   });
 
   test("an apiUrl is kept as written: the loopback guard runs when it is resolved, so its refusal names its source", () => {
     expect(decodeSettings({ apiUrl: "http://10.0.0.5:8372" })).toEqual({
-      ok: true, value: { apiUrl: "http://10.0.0.5:8372", gcBin: "gc", dashboardUrl: null },
+      ok: true, value: { apiUrl: "http://10.0.0.5:8372", gcBin: "gc", dashboardUrl: null, runsUrl: null },
     });
   });
 
@@ -99,7 +99,7 @@ describe("patchSettings: what a settings command writes", () => {
 
 describe("the web dashboard setting", () => {
   test("an https URL, kept without its trailing slash; anything else is refused", () => {
-    expect(decodeSettings({ dashboardUrl: "https://mdash.example.com/" })).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: "https://mdash.example.com" } });
+    expect(decodeSettings({ dashboardUrl: "https://mdash.example.com/" })).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: "https://mdash.example.com", runsUrl: null } });
     for (const bad of ["http://mdash.example.com", "https://x.com/?q=1", "https://user@x.com", "https://x.com/a b", "javascript:alert(1)", 7]) {
       expect(decodeSettings({ dashboardUrl: bad }).ok).toBe(false);
     }
@@ -109,5 +109,14 @@ describe("the web dashboard setting", () => {
     expect(patchSettings({ gcBin: "gc" }, { dashboardUrl: "https://mdash.example.com/" })).toEqual({ ok: true, value: { gcBin: "gc", dashboardUrl: "https://mdash.example.com" } });
     expect(patchSettings({ dashboardUrl: "https://mdash.example.com" }, { dashboardUrl: null })).toEqual({ ok: true, value: {} });
     expect(patchSettings({}, { dashboardUrl: "file:///etc/passwd" }).ok).toBe(false);
+  });
+});
+
+describe("the runs dashboard setting", () => {
+  test("an https URL, kept without its trailing slash; patch stores it and null removes it", () => {
+    expect(decodeSettings({ runsUrl: "https://factory.example.com/" })).toEqual({ ok: true, value: { apiUrl: null, gcBin: "gc", dashboardUrl: null, runsUrl: "https://factory.example.com" } });
+    expect(decodeSettings({ runsUrl: "http://factory.example.com" }).ok).toBe(false);
+    expect(patchSettings({}, { runsUrl: "https://factory.example.com" })).toEqual({ ok: true, value: { runsUrl: "https://factory.example.com" } });
+    expect(patchSettings({ runsUrl: "https://factory.example.com" }, { runsUrl: null })).toEqual({ ok: true, value: {} });
   });
 });

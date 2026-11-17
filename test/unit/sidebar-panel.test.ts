@@ -9,10 +9,12 @@ import { gc, running, text } from "./panel-fixture.ts";
 const pending = { items: [{ session_id: "sc-20", request_id: "r-1", kind: "question" }], total: 1 };
 const prompt = { supported: true, pending: { request_id: "r-1", kind: "question", prompt: "Ship the release?\nDetails follow.", options: ["yes", "no"] } };
 
+/** A gc with a question and the human beads, and no run summary (approvals have their own tests below). */
 function route() {
   return gc({
     "/v0/city/scratch/pending": { status: 200, body: pending },
     "/v0/city/scratch/session/sc-20/pending": { status: 200, body: prompt },
+    "/api/city/scratch/runs/summary": { status: 404, body: { title: "Not Found", status: 404 } },
   });
 }
 
@@ -151,5 +153,32 @@ describe("Resolve… on a decision", () => {
     const root = mod.render();
     expect(text(root, "gascity-window-target")).toBe("Needs a decision: bead sc-90 in city scratch");
     expect(findById(root, "gascity-bead-actions")).toBeDefined();
+  });
+});
+
+describe("approvals in the views", () => {
+  const settings = { "gascity.settings": { runsUrl: "https://factory.example.com" } };
+
+  test("the pane lists them with a strip, Answer attaches to the run's session, Review opens the run in factory", async () => {
+    const mod = await running({ route: gc(), props: { view: "inbox" }, shared: settings }, 8);
+    const root = mod.render();
+    expect(text(root, "gascity-inbox-approvals")).toBe("Approvals 2");
+    expect(text(root, "gascity-inbox-group-0")).toStartWith("Waiting for your approval");
+    expect(text(root, "gascity-inbox-0-0-title")).toBe("PR #102  feat(ui): dark mode toggle");
+    expect(findById(root, "gascity-inbox-0-0-strip")).toBeDefined();
+    expect(text(root, "gascity-inbox-dormant")).toBe("1 older approval has had no activity for 72 h+");
+    mod.click("gascity-inbox-0-0-answer");
+    expect(mod.shared.get(FOCUS_KEY)).toMatchObject({ city: "scratch", session: "sc-6", attach: true });
+    mod.click("gascity-inbox-0-0-review");
+    await mod.settle();
+    const opened = mod.herdrCalls.filter((c) => c.name === "exec").map((c) => c.args[1]);
+    expect(opened.at(-1)).toEqual(["https://factory.example.com/city/scratch/runs/run-102"]);
+  });
+
+  test("the sidebar shows the city's runs line and its approvals", async () => {
+    const mod = await running({ route: gc(), props: { view: "sidebar" }, shared: settings }, 8);
+    const root = mod.render();
+    expect(text(root, "gascity-side-city-0-runs-text")).toBe("4 runs · 2 await approval");
+    expect(text(root, "gascity-side-city-0-row-0-head")).toBe("✓ PR #102 · frontend · " + text(root, "gascity-side-city-0-row-0-head")!.split(" · ").at(-1));
   });
 });
