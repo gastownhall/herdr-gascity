@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # report.sh: the canary workflow's report job (.github/workflows/canary.yml).
 # Writes the job summary from each planned run's canary-result.json, the
-# soak's product-stage flake rate, and on a product failure files or updates
-# one issue.
+# soak's product-stage flake rate, the targets job's check of the private
+# target list, and on a product failure or a target-list mismatch files or
+# updates one issue for each.
 #
 # The results come from jobs that run downloaded code, so nothing in them is
 # trusted:
@@ -16,13 +17,22 @@
 #   - an issue is filed only on the default branch, and only an open issue
 #     with this workflow's label that the Actions bot opened is updated.
 #
+# The targets job's report is targets.ts's output, which names only this
+# canary's entry (the list is private): it is used only when every line is
+# one targets.ts writes and its status agrees with the job's result.
+#
 # Environment: RESULTS (the download directory), PLANNED (JSON array of run
 # numbers), ATTEMPT, CANARY_STAGES, SOAK, EVENT, REASON, RUN_URL, REPO, REF,
-# DEFAULT_BRANCH, GITHUB_STEP_SUMMARY; gh reads GH_TOKEN.
+# DEFAULT_BRANCH, GITHUB_STEP_SUMMARY, TARGETS (the targets job's result),
+# TARGETS_STATUS (ok, mismatch, error or empty), TARGETS_REPORT (its lines);
+# gh reads GH_TOKEN.
 set -euo pipefail
 
 LABEL=canary-failure
 TITLE="Nightly canary: product-stage failure"
+TARGETS_TITLE="Nightly canary: target list mismatch"
+# shellcheck disable=SC2016 # a markdown fence, not an expansion
+FENCE='```'
 BOT="github-actions[bot]"
 
 summary=${GITHUB_STEP_SUMMARY:?}
@@ -90,27 +100,78 @@ product=$(jq '[.[] | select(.state == "ok" and .r.product_failure)] | length' <<
 
 rc=0
 (( unreadable == 0 )) || rc=1
-(( product > 0 )) || exit "$rc"
 
-if [[ ${REF:-} != "refs/heads/${DEFAULT_BRANCH:?}" ]]; then
-  echo "Not the default branch (${REF:-unset}): no issue filed." >>"$summary"
-  exit 1
+# The target list: targets is ok, mismatch, unchecked, incomplete or unreadable.
+treport=$(printf '%s' "${TARGETS_REPORT:-}") # without trailing newlines
+targets=unreadable
+case ${TARGETS:?}:${TARGETS_STATUS:-} in
+  skipped:*) targets=unchecked ;;
+  success:ok) targets=ok ;;
+  failure:mismatch) targets=mismatch ;;
+  failure:error | failure: | cancelled:*) targets=incomplete ;;
+esac
+if [[ $targets == ok || $targets == mismatch ]]; then
+  [[ -n $treport ]] || targets=unreadable
+  while IFS= read -r line; do
+    [[ $line =~ ^target\ list:\ [\ -~]+$ && $line != *'`'* && $line != *@* ]] || targets=unreadable
+  done <<<"$treport"
+fi
+{
+  echo
+  echo "### Target list"
+  echo
+  case $targets in
+    unchecked) echo "Not checked: the check runs on main, nightly and on dispatch." ;;
+    incomplete) echo "**The check did not complete (${TARGETS})**: see the targets job." ;;
+    unreadable) echo "**The targets job's report could not be read**: see the targets job." ;;
+    *)
+      [[ $targets == ok ]] || echo "**This canary's entry on the target list does not check out.**"
+      printf '%s\n%s\n%s\n' "$FENCE" "$treport" "$FENCE"
+      ;;
+  esac
+} >>"$summary"
+[[ $targets != unreadable ]] || rc=1
+
+# file_issue <title> <body>: comments on this workflow's open issue with that
+# title, or files one.
+file_issue() {
+  local title=$1 body=$2 existing
+  gh label create "$LABEL" --repo "${REPO:?}" --color B60205 --description "Filed by the nightly canary on a product-stage failure or a target-list mismatch" --force >/dev/null
+  existing=$(gh api "repos/$REPO/issues?state=open&labels=$LABEL&creator=github-actions%5Bbot%5D&per_page=100" |
+    jq -r --arg t "$title" --arg bot "$BOT" 'map(select(.title == $t and .user.login == $bot and (has("pull_request") | not))) | first | .number // empty')
+  if [[ -n $existing ]]; then
+    gh issue comment "$existing" --repo "$REPO" --body "$body" >/dev/null
+    echo "Updated issue #$existing." >>"$summary"
+  else
+    gh issue create --repo "$REPO" --title "$title" --label "$LABEL" --body "$body" >/dev/null
+    echo "Filed an issue." >>"$summary"
+  fi
+}
+
+default=false
+[[ ${REF:-} != "refs/heads/${DEFAULT_BRANCH:?}" ]] || default=true
+
+if (( product > 0 )); then
+  if [[ $default == true ]]; then
+    file_issue "$TITLE" "$(jq -r --arg url "${RUN_URL:?}" '
+      [.[] | select(.state == "ok" and .r.product_failure) | .r][0] as $f
+      | "The Herdr app canary failed at stage `\($f.failed_stage)` (class \($f.failure_class)).\n\n"
+        + "- run: \($url)\n- herdr-app \($f.ui_version), core \($f.core_version), gc \($f.gc_version), \($f.integration_version)\n"
+        + "- artifacts: \($url)#artifacts"' <<<"$records")"
+  else
+    echo "Not the default branch (${REF:-unset}): no issue filed." >>"$summary"
+    rc=1
+  fi
 fi
 
-body=$(jq -r --arg url "${RUN_URL:?}" '
-  [.[] | select(.state == "ok" and .r.product_failure) | .r][0] as $f
-  | "The Herdr app canary failed at stage `\($f.failed_stage)` (class \($f.failure_class)).\n\n"
-    + "- run: \($url)\n- herdr-app \($f.ui_version), core \($f.core_version), gc \($f.gc_version), \($f.integration_version)\n"
-    + "- artifacts: \($url)#artifacts"' <<<"$records")
-
-gh label create "$LABEL" --repo "${REPO:?}" --color B60205 --description "Filed by the nightly canary on a product-stage failure" --force >/dev/null
-existing=$(gh api "repos/$REPO/issues?state=open&labels=$LABEL&creator=github-actions%5Bbot%5D&per_page=100" |
-  jq -r --arg t "$TITLE" --arg bot "$BOT" 'map(select(.title == $t and .user.login == $bot and (has("pull_request") | not))) | first | .number // empty')
-if [[ -n $existing ]]; then
-  gh issue comment "$existing" --repo "$REPO" --body "$body" >/dev/null
-  echo "Updated issue #$existing." >>"$summary"
-else
-  gh issue create --repo "$REPO" --title "$TITLE" --label "$LABEL" --body "$body" >/dev/null
-  echo "Filed an issue." >>"$summary"
+if [[ $targets == mismatch ]]; then
+  if [[ $default == true ]]; then
+    file_issue "$TARGETS_TITLE" "$(printf '%s\n\n%s\n%s\n%s\n\n- run: %s\n' \
+      "The private target list's entry for this canary does not check out (the lines name only this canary's entry)." \
+      "$FENCE" "$treport" "$FENCE" "${RUN_URL:?}")"
+  else
+    echo "Not the default branch (${REF:-unset}): no target-list issue filed." >>"$summary"
+    rc=1
+  fi
 fi
 exit "$rc"

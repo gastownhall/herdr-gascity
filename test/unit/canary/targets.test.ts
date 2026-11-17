@@ -3,7 +3,10 @@
 // for the Herdr app, with every step of the list mapped to canary stages.
 // The fixture is synthetic: the other UIs here are made up.
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { checkCanaryEntry, parseTargetList, publicReport } from "../../../canary/targets.ts";
 
 const STAGES = ["preflight", "install-app", "install-mod", "discover", "session", "output", "attach", "keyboard", "bead-input", "bead-closed", "authority"];
@@ -111,5 +114,56 @@ describe("publicReport", () => {
 
   test("a file that does not parse is reported without its contents", () => {
     expect(publicReport(parseTargetList('owner = "secret value\n'), ME)).toEqual(["target list: the target list is not valid TOML"]);
+  });
+});
+
+describe("the CLI (the canary workflow's targets job)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "canary-targets-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const SCRIPT = join(import.meta.dir, "../../../canary/targets.ts");
+  // Run from the repo root as the workflow does: --workflow is both the file read and the job's name on the list.
+  const ROOT = join(import.meta.dir, "../../..");
+
+  // The fixture's entry maps onto stages the real canary.yml runs.
+  function cli(list: string | null) {
+    const file = join(dir, "list.toml");
+    if (list !== null) writeFileSync(file, list);
+    else rmSync(file, { force: true });
+    const p = Bun.spawnSync(["bun", SCRIPT, "--file", file], {
+      cwd: ROOT,
+      env: { PATH: process.env["PATH"], GITHUB_REPOSITORY: "gastownhall/herdr-gascity" },
+    });
+    return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+  }
+
+  test("the entry checks out: exit 0 and one line naming only this canary's entry", () => {
+    const r = cli(LIST);
+    expect(r).toEqual({ code: 0, out: "target list: herdr-app, lane latest-release, 3 steps mapped onto this canary's stages\n", err: "" });
+  });
+
+  test("a mismatch in this canary's entry: exit 1, and the line says what", () => {
+    const r = cli(LIST.replace('session = ["session", "attach"]', 'session = ["session", "pane"]'));
+    expect(r.code).toBe(1);
+    expect(r.out).toBe('target list: step "session" maps to stage "pane", which this canary does not run\n');
+  });
+
+  test("a problem in another entry: exit 1, counted and never quoted", () => {
+    const r = cli(LIST.replace('job = "no job yet"', 'job = "soon"'));
+    expect(r.code).toBe(1);
+    expect(r.out).not.toContain("ui-b");
+    expect(r.out).not.toContain("owner@example.com");
+    expect(r.out).toContain("target list: 1 problem in other entries (not shown: the list is private)");
+  });
+
+  test("a list it cannot read: exit 2 with one line, no stack and nothing from the file", () => {
+    const r = cli(null);
+    expect(r.code).toBe(2);
+    expect(r.out).toBe("");
+    expect(r.err).toBe("targets: could not read the target list (ENOENT)\n");
+  });
+
+  test("a list that is not TOML: exit 1, and nothing from it is printed", () => {
+    const r = cli('owner = "secret value\n');
+    expect(r).toEqual({ code: 1, out: "target list: the target list is not valid TOML\n", err: "" });
   });
 });

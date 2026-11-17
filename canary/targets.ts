@@ -9,7 +9,8 @@
 // counted, never quoted, and a parse error quotes nothing from the file.
 //
 // CLI: bun canary/targets.ts --file <list.toml> [--workflow .github/workflows/canary.yml]
-// exits 0 when the entry checks out, 1 on any problem, 2 on a usage error.
+// exits 0 when the entry checks out, 1 on any problem in the list, 2 when it
+// cannot check (a usage error, a file it cannot read).
 
 import { readFileSync } from "node:fs";
 
@@ -186,6 +187,16 @@ export function workflowStages(yaml: string): string[] {
   return stages.split(/\s+/).filter((s) => s !== "");
 }
 
+/** Reads a file for the CLI; a failure names the file's role and the error code, never its contents. */
+function read(path: string, what: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (e) {
+    const code = (e as { code?: unknown }).code;
+    throw new Error(`could not read ${what} (${typeof code === "string" ? code : "error"})`);
+  }
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const flag = (name: string) => {
@@ -198,8 +209,16 @@ if (import.meta.main) {
     console.error("usage: bun canary/targets.ts --file <list.toml> [--workflow .github/workflows/canary.yml]");
     process.exit(2);
   }
-  const me: Canary = { repo: process.env["GITHUB_REPOSITORY"] ?? "gastownhall/herdr-gascity", workflow, stages: workflowStages(readFileSync(workflow, "utf8")) };
-  const parsed = parseTargetList(readFileSync(file, "utf8"));
+  let me: Canary;
+  let text: string;
+  try {
+    me = { repo: process.env["GITHUB_REPOSITORY"] ?? "gastownhall/herdr-gascity", workflow, stages: workflowStages(read(workflow, "the workflow")) };
+    text = read(file, "the target list");
+  } catch (e) {
+    console.error(`targets: ${(e as Error).message}`);
+    process.exit(2);
+  }
+  const parsed = parseTargetList(text);
   const lines = publicReport(parsed, me);
   for (const l of lines) console.log(l);
   const ok = parsed.errors.length === 0 && parsed.list !== null && checkCanaryEntry(parsed.list, me).findings.length === 0;

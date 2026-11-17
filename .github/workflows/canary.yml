@@ -26,8 +26,16 @@ name: Canary - Gas City end to end in the released herdr-app
 #   canary  builds and runs gc at api/PIN, herdr's installer and herdr-app.
 #           It has no token permissions, no secret, and only restores the
 #           mirror (a miss fills from the network, sha256-checked, unsaved).
+#   targets checks that the private agent-UI target list designates this
+#           canary with stages it runs (canary/targets.ts). Main only, in the
+#           canary-targets environment: its App's contents:read token for the
+#           list's repo is the job's only credential (no token permissions).
+#           It runs only this repo's targets.ts; the list goes to the
+#           runner's temp dir, is never printed or uploaded, and only
+#           targets.ts's lines (this canary's entry) leave the job.
 #   report  runs no downloaded code; it reads the results as JSON, writes
-#           the summary and files or updates one issue on a product failure.
+#           the summary and files or updates one issue on a product failure,
+#           and one on a target-list mismatch.
 #
 # Triggers: nightly; weekly a soak of 5 sequential runs whose product-stage
 # flake rate goes to the summary; dispatched by types-drift.yml when a new
@@ -297,9 +305,69 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  targets:
+    name: Target list
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: canary-targets
+    permissions: {}
+    outputs:
+      status: ${{ steps.check.outputs.status }}
+      report: ${{ steps.check.outputs.report }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+          no-cache: true
+
+      - name: Token for the target list (contents:read, one repo)
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CANARY_TARGETS_APP_ID }}
+          private-key: ${{ secrets.CANARY_TARGETS_APP_KEY }}
+          owner: gascity
+          repositories: gas-city-inc
+          permission-contents: read
+
+      # The token goes to curl on stdin; the list goes to a file only.
+      - name: Fetch the target list (never printed)
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+          LIST_API: ${{ github.api_url }}/repos/gascity/gas-city-inc/contents/packs/measure/config/agent-ui-targets.toml
+          LIST: ${{ runner.temp }}/targets/list.toml
+        run: |
+          mkdir -m 700 "${LIST%/*}"
+          trap 'rc=$?; [[ $rc -eq 0 ]] || rm -f "$LIST"; exit "$rc"' EXIT
+          curl --fail --silent --show-error --proto '=https' --max-time 60 \
+            -H @- -H 'Accept: application/vnd.github.raw+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -o "$LIST" "$LIST_API" <<<"Authorization: Bearer $TOKEN"
+          [[ -s $LIST ]] || { echo "::error::the target list came back empty"; exit 1; }
+
+      # targets.ts prints only this canary's entry; exit 1 is a mismatch,
+      # anything else means it could not check.
+      - name: Check this canary's entry
+        id: check
+        env:
+          LIST: ${{ runner.temp }}/targets/list.toml
+        run: |
+          trap 'rm -rf "${LIST%/*}"' EXIT
+          rc=0
+          report=$(bun canary/targets.ts --file "$LIST") || rc=$?
+          case $rc in 0) status=ok ;; 1) status=mismatch ;; *) status=error ;; esac
+          [[ -z $report ]] || printf '%s\n' "$report"
+          delim=EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          { echo "status=$status"; echo "report<<$delim"; printf '%s\n' "$report"; echo "$delim"; } >>"$GITHUB_OUTPUT"
+          [[ $status == ok ]] || { echo "::error::target list check: $status"; exit 1; }
+
   report:
     name: Report
-    needs: [plan, canary]
+    needs: [plan, canary, targets]
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -334,4 +402,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           REASON: ${{ inputs.reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TARGETS: ${{ needs.targets.result }}
+          TARGETS_STATUS: ${{ needs.targets.outputs.status }}
+          TARGETS_REPORT: ${{ needs.targets.outputs.report }}
         run: canary/report.sh
