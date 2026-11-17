@@ -238,6 +238,14 @@ export const BeadSchema: z.ZodMiniType<T.Bead> = z.object({
   close_reason: z.optional(z.string()),
 });
 
+export const ListBodyBeadSchema: z.ZodMiniType<T.ListBodyBead> = z.object({
+  items: nullableList(z.unknown()),
+  total: z.int(),
+  next_cursor: z.optional(z.string()),
+  partial: z.optional(z.boolean()),
+  partial_errors: optionalNullableList(z.string()),
+});
+
 export const TypedEventStreamEnvelopeSchema: z.ZodMiniType<T.TypedEventStreamEnvelope> = z.object({
   seq: z.int(),
   type: z.string(),

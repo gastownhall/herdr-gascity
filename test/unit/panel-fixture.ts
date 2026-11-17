@@ -42,6 +42,7 @@ export function gc(overrides: Record<string, FakeReply> = {}) {
     const bead = /\/bead\/([^/]+)$/.exec(p);
     if (bead) return { status: 200, body: recordedBead(decodeURIComponent(bead[1] ?? "")) };
     if (p.endsWith("/pending")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-pending", "ok") };
+    if (p.endsWith("/beads")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-beads", "human") };
     if (p.endsWith("/rigs")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-rigs", "ok") };
     if (p.endsWith("/agents")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-agents", "ok") };
     if (p.endsWith("/work/ready")) {

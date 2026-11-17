@@ -103,6 +103,17 @@ export function listWork(
   return c.call("get-v0-city-by-city-name-work-ready", { path: { cityName: city }, query });
 }
 
+/**
+ * The bead label gc gives work that waits on a person's decision (gc's
+ * beadmeta.HumanLabel; `bd human list` lists the beads that carry it).
+ */
+export const HUMAN_LABEL = "human";
+
+/** GET the open beads waiting on a person (label `human`), one bounded page. */
+export function listHumanBeads(c: GcClient, city: string, query: { limit: number }) {
+  return c.call("get-v0-city-by-city-name-beads", { path: { cityName: city }, query: { label: HUMAN_LABEL, status: "open", limit: query.limit } });
+}
+
 /** GET one bead. */
 export function getBead(c: GcClient, city: string, id: string) {
   return c.call("get-v0-city-by-city-name-bead-by-id", { path: { cityName: city, id } });

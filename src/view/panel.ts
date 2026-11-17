@@ -10,12 +10,13 @@ import { renderBoard, type BoardActions } from "./board.ts";
 import { renderDetail, type DetailActions } from "./detail.ts";
 import { renderActivity, renderDialog, renderNotice, type DialogActions, type DialogInputs } from "./dialogs.ts";
 import { renderHeader, type HeaderActions } from "./header.ts";
+import { renderHuman, type HumanActions } from "./human.ts";
 import { renderWindowHead, type WindowActions } from "./needsYou.ts";
 import { label, muted, shrinkIf, themedRoot } from "./text.ts";
 import type { PanelLayout } from "../vm/layout.ts";
 
 /** What a click may do; main.ts supplies them. */
-export interface PanelActions extends HeaderActions, AgentsActions, BoardActions, DetailActions, DialogActions, WindowActions {
+export interface PanelActions extends HeaderActions, AgentsActions, BoardActions, DetailActions, DialogActions, WindowActions, HumanActions {
   toggleDiagnostics(cx: GpuiContext): void;
 }
 
@@ -102,6 +103,9 @@ export function renderPanel(model: PanelModel): GpuiElement {
     if (log !== null) root = root.child(log);
     return themeIssues(root, theme);
   }
+  // What waits on a person first: answering it unblocks the city.
+  const human = view.human === null ? null : renderHuman(view.human, theme, actions);
+  if (human !== null) root = root.child(human);
   // Agents beside the work board when the panel is wide enough, else the board under them; the session detail below both.
   const beside = size.layout === "side-by-side";
   const regions: GpuiElement[] = [];

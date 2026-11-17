@@ -321,6 +321,7 @@ export class FakeGc {
       const name = status === "closed" ? "closed-seed" : status === "in_progress" ? "in-progress" : "ready";
       return { status: 200, body: fixtureBody("get-v0-city-by-city-name-work-ready", name) };
     }
+    if (p.endsWith("/beads")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-beads", "human") };
     const bead = /\/bead\/([^/]+)$/.exec(p);
     if (bead) {
       const body = fixtureBody("get-v0-city-by-city-name-bead-by-id", "ok") as Record<string, unknown>;

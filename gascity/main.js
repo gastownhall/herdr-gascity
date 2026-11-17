@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:4c2501754d4599c041030a5b12ee561ac14acae9688394cf648335809c170cd8 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:cf751ee1413cec1df98ae72840474082b75a33b635a1accb5798e676df823808 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -1957,6 +1957,13 @@ var BeadSchema = object({
   updated_at: optional(string2()),
   close_reason: optional(string2())
 });
+var ListBodyBeadSchema = object({
+  items: nullableList(unknown()),
+  total: int(),
+  next_cursor: optional(string2()),
+  partial: optional(boolean2()),
+  partial_errors: optionalNullableList(string2())
+});
 var TypedEventStreamEnvelopeSchema = object({
   seq: int(),
   type: string2(),
@@ -2262,6 +2269,17 @@ var OPERATIONS = {
     success: 200,
     response: BeadSchema,
     item: null
+  },
+  "get-v0-city-by-city-name-beads": {
+    method: "GET",
+    path: "/v0/city/{cityName}/beads",
+    pathParams: ["cityName"],
+    csrf: false,
+    idempotencyKey: false,
+    body: null,
+    success: 200,
+    response: ListBodyBeadSchema,
+    item: BeadSchema
   },
   "get-v0-city-by-city-name-events": {
     method: "GET",
@@ -3026,6 +3044,10 @@ function getSessionPending(c, city, id2) {
 }
 function listWork(c, city, query) {
   return c.call("get-v0-city-by-city-name-work-ready", { path: { cityName: city }, query });
+}
+var HUMAN_LABEL = "human";
+function listHumanBeads(c, city, query) {
+  return c.call("get-v0-city-by-city-name-beads", { path: { cityName: city }, query: { label: HUMAN_LABEL, status: "open", limit: query.limit } });
 }
 function getBead(c, city, id2) {
   return c.call("get-v0-city-by-city-name-bead-by-id", { path: { cityName: city, id: id2 } });
@@ -4303,8 +4325,22 @@ function step(m, event) {
   }
 }
 
+// src/gc/events.ts
+var BEAD_PAYLOAD_EVENTS = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted"]);
+function eventBead(e) {
+  if (!BEAD_PAYLOAD_EVENTS.has(e.type)) return ok(null);
+  const r = decodeValue(BeadEventPayloadSchema, e.payload, "get-v0-city-by-city-name-events", `event ${e.seq} ${e.type} payload`);
+  return r.ok ? ok(r.value.bead) : r;
+}
+
 // src/sync/invalidate.ts
-var ALL_DOMAINS = ["rigs", "agents", "sessions", "pending", "ready", "inProgress"];
+var ALL_DOMAINS = ["rigs", "agents", "sessions", "pending", "human", "ready", "inProgress"];
+function touchesHuman(e, known) {
+  if (e.subject !== void 0 && known.humanIds.has(e.subject)) return true;
+  const r = eventBead(e);
+  if (!r.ok || r.value === null) return true;
+  return known.humanIds.has(r.value.id) || (r.value.labels ?? []).includes(HUMAN_LABEL);
+}
 var SESSION_REFRESH = /* @__PURE__ */ new Set(["request.failed", "worker.operation"]);
 var BOARD_CHANGES = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted", "bead.dead_assignee_reopened"]);
 var PENDING = /* @__PURE__ */ new Set(["session.pending", "session.pending_cleared"]);
@@ -4329,6 +4365,7 @@ function invalidationFor(events, known) {
       if (BOARD_CHANGES.has(t)) {
         inv.domains.add("ready");
         inv.domains.add("inProgress");
+        if (!inv.domains.has("human") && touchesHuman(e, known)) inv.domains.add("human");
       }
     } else if (t.startsWith("city.")) {
       inv.cities = true;
@@ -4846,8 +4883,8 @@ var ActionLedger = class {
   /** The action goes on as `watch` (from its request's answer, with whether gc accepted a change, or from its previous step). */
   watch(rec, watch, wrote) {
     const s = rec.state;
-    const since = s.kind === "watching" ? s.since : this.deps.clock.now();
-    rec.state = { kind: "watching", since, watch, inFlight: false, wrote: s.kind === "watching" ? s.wrote || wrote : wrote };
+    const since2 = s.kind === "watching" ? s.since : this.deps.clock.now();
+    rec.state = { kind: "watching", since: since2, watch, inFlight: false, wrote: s.kind === "watching" ? s.wrote || wrote : wrote };
     this.commit();
   }
   /** Runs a watched action's next step, in the turn of the copy that started it. */
@@ -5064,14 +5101,6 @@ function activityModel(activity, city, now) {
   return { rows: [...activity.entries].reverse().map((e) => row(e, city, now)), busy };
 }
 
-// src/gc/events.ts
-var BEAD_PAYLOAD_EVENTS = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted"]);
-function eventBead(e) {
-  if (!BEAD_PAYLOAD_EVENTS.has(e.type)) return ok(null);
-  const r = decodeValue(BeadEventPayloadSchema, e.payload, "get-v0-city-by-city-name-events", `event ${e.seq} ${e.type} payload`);
-  return r.ok ? ok(r.value.bead) : r;
-}
-
 // src/sync/closedList.ts
 var INFRASTRUCTURE = new Set(INFRASTRUCTURE_BEAD_TYPES);
 var CLOSED = "closed";
@@ -5240,12 +5269,13 @@ function readEventPage(cursor, page) {
 var SESSION_PAGE = 500;
 var MAX_SESSION_ROWS = 2e3;
 var BOARD_LIMIT = 50;
+var HUMAN_LIMIT = 50;
 var MAX_CLOSED_RECENT = 20;
 var BEAD_FETCHES_PER_STEP = 10;
 var ERROR_RING = 100;
 var STEP_STALL_MS = 4 * RECLAIM_AFTER_MS;
 var EMPTY_SLOT = { value: null, fetchedAt: null, error: null, dirty: true, held: false };
-var EVENT_DRIVEN = /* @__PURE__ */ new Set(["rigs", "agents", "ready", "inProgress"]);
+var EVENT_DRIVEN = /* @__PURE__ */ new Set(["rigs", "agents", "ready", "inProgress", "human"]);
 var PRIORITY_RANK = { mutation: 0, events: 1, snapshot: 2, peek: 3, sweep: 4 };
 function freshSlot() {
   return { value: null, fetchedAt: null, error: null, held: false };
@@ -5286,7 +5316,8 @@ var CityStore = class {
     sessions: freshSlot(),
     pending: freshSlot(),
     ready: freshSlot(),
-    inProgress: freshSlot()
+    inProgress: freshSlot(),
+    human: freshSlot()
   };
   due = /* @__PURE__ */ new Map();
   /** Beads to fetch by id for the closed list: a close (`seq`) whose event carried no readable bead, or a recheck (`seq` null). */
@@ -5708,7 +5739,8 @@ var CityStore = class {
   }
   known() {
     const sessionIds = new Set((this.slots.sessions.value?.items ?? []).map((s) => s.id));
-    return { sessionIds };
+    const humanIds = new Set((this.slots.human.value?.items ?? []).map((b) => b.id));
+    return { sessionIds, humanIds };
   }
   workQuery(extra) {
     const q = {
@@ -5733,6 +5765,8 @@ var CityStore = class {
         return await listWork(c, city, this.workQuery({ limit: BOARD_LIMIT }));
       case "inProgress":
         return await listWork(c, city, this.workQuery({ limit: BOARD_LIMIT, status: "in_progress" }));
+      case "human":
+        return await listHumanBeads(c, city, { limit: HUMAN_LIMIT });
       default:
         return await this.loadSessions(step2, priority);
     }
@@ -6060,6 +6094,7 @@ var CityStore = class {
       pending: this.slotOf(this.slots.pending, dirty("pending")),
       ready: this.slotOf(this.slots.ready, dirty("ready")),
       inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
+      human: this.slotOf(this.slots.human, dirty("human")),
       closed: { seed: this.seedSlot(), recent: this.closed.recent(), incomplete: this.incomplete, hidden: this.closed.hidden() },
       transcripts: new Map([...this.peeks].map(([id2, s]) => [id2, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id2, w]) => [id2, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),
@@ -6335,6 +6370,67 @@ function agentsModel(input) {
     banners,
     needsYou: pending.size,
     drift: [...drift3]
+  };
+}
+
+// src/vm/human.ts
+var DAY_MS = 864e5;
+function unreadableText(what, u) {
+  return `unreadable ${what} ${u.id === null ? `(entry ${u.index})` : cleanLine(u.id)}: ${errorText(u.error)}`;
+}
+function since(createdAt, now) {
+  if (createdAt === void 0) return null;
+  const t = Date.parse(createdAt);
+  if (!Number.isFinite(t)) return null;
+  const ms = Math.max(0, now - t);
+  return ms >= DAY_MS ? `${Math.floor(ms / DAY_MS)} d` : ageText(ms);
+}
+function priorityRank(p) {
+  return typeof p === "number" && Number.isFinite(p) ? p : Number.POSITIVE_INFINITY;
+}
+function createdRank(b) {
+  const t = b.created_at === void 0 ? Number.NaN : Date.parse(b.created_at);
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+}
+function decisionOrder(a, b) {
+  return priorityRank(a.priority) - priorityRank(b.priority) || createdRank(a) - createdRank(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+function humanModel(input) {
+  const { snapshot: s, now } = input;
+  const sessions = new Map((s.sessions.value?.items ?? []).map((x) => [x.id, x]));
+  const questions = (s.pending.value?.items ?? []).map((p) => {
+    const x = sessions.get(p.session_id);
+    return {
+      kind: "question",
+      session: cleanLine(p.session_id),
+      who: cleanLine(x?.alias || x?.template || p.session_id),
+      what: cleanLine(p.kind || "question"),
+      selected: input.selectedSession === p.session_id
+    };
+  });
+  const beads = [...s.human.value?.items ?? []].filter((b) => b.status !== "closed" && (b.labels ?? []).includes(HUMAN_LABEL)).sort(decisionOrder);
+  const decisions = beads.map((b) => ({
+    kind: "decision",
+    bead: cleanLine(b.id),
+    title: cleanLine(b.title),
+    priority: typeof b.priority === "number" ? `P${b.priority}` : null,
+    labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL).map(cleanLine),
+    assignee: b.assignee ? cleanLine(b.assignee) : null,
+    age: since(b.created_at, now),
+    selected: input.selectedBead === b.id
+  }));
+  const total = s.human.value === null ? 0 : Math.max(s.human.value.total ?? 0, decisions.length);
+  const unreadable2 = [
+    ...(s.pending.value?.unreadable ?? []).map((u) => unreadableText("question", u)),
+    ...(s.human.value?.unreadable ?? []).map((u) => unreadableText("decision", u))
+  ];
+  return {
+    rows: [...questions, ...decisions],
+    questions: questions.length,
+    decisions: total,
+    more: Math.max(0, total - decisions.length),
+    region: regionModel([["Questions", domainFreshness(s, "pending", now)], ["Decisions", domainFreshness(s, "human", now)]]),
+    unreadable: unreadable2
   };
 }
 
@@ -6845,6 +6941,12 @@ function probeDocument(input) {
     data_age: input.agents?.region.age ?? null,
     sessions: sessionsOf(input.agents),
     board: probeBoard(input.board),
+    human: input.human == null ? null : {
+      questions: input.human.questions,
+      decisions: input.human.decisions,
+      rows: input.human.rows.map((r) => r.kind === "question" ? { kind: r.kind, session: r.session, who: r.who, what: r.what } : { kind: r.kind, bead: r.bead, title: r.title, priority: r.priority }),
+      error: input.human.region.error
+    },
     bead_detail: probeBeadDetail(input.beadDetail),
     detail: detail.kind !== "session" ? null : {
       session: detail.id,
@@ -6974,17 +7076,17 @@ function openTerminal(binding, name, deps) {
     if (!runsProgram(t)) return exited;
     return now - openedAt >= EXIT_WATCH_MS ? { kind: "done", detail: `opened in a new tab (terminal ${seen})` } : confirm(openedAt, before, seen);
   };
-  const waitRunning = (since, woken, polls, last) => ({
+  const waitRunning = (since2, woken, polls, last) => ({
     detail: `${woken ? "woken" : "starting"}: waiting for gc to report session ${id2} running`,
     nextAt: clock.now() + (WAKE_POLL_DELAYS_MS[polls] ?? WAKE_POLL_EVERY_MS),
-    deadline: since + WAKE_DEADLINE_MS,
+    deadline: since2 + WAKE_DEADLINE_MS,
     expired: notStarted(id2, "not-running-after-wake", last.ok ? `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s; it is ${stateText(last.value)}${last.value.running ? ", running" : ""}` : `gc did not report the session running within ${WAKE_DEADLINE_MS / 1e3} s; last read failed: ${errorText(last.error)}`),
     abandoned: notOpened(`the Gas City view that asked closed before gc reported the session running${woken ? " (gc was asked to wake it)" : ""}`),
     step: async (c, city) => {
       const r = await getSession(c, city, id2);
       if (r.ok && readiness(r.value) === "ready") return openNow();
       if (r.ok && readiness(r.value) === "stopping") return stopping(r.value);
-      return waitRunning(since, woken, polls + 1, r);
+      return waitRunning(since2, woken, polls + 1, r);
     }
   });
   const send = async (c, city, key) => {
@@ -7178,6 +7280,7 @@ var CopyController = class {
     const s = this.city?.snapshot() ?? null;
     const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed, shown: this.shown }) : null;
     const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
+    const human = s ? humanModel({ snapshot: s, now, selectedSession: this.selected, selectedBead: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
     const header = headerModel(discovery.machine, discovery.hostErrors, live);
@@ -7185,6 +7288,7 @@ var CopyController = class {
       header,
       agents,
       board,
+      human,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
       detail: s ? detailModel({ snapshot: s, now, selected: this.selected, keepAwake: this.selected !== null ? this.city?.keepAwake(this.selected) ?? null : null }) : { kind: "none" },
       activity: this.city ? activityModel(this.city.activity(), s, now) : null,
@@ -7199,7 +7303,7 @@ var CopyController = class {
           ...this.failures
         ],
         drift: [...agents?.drift ?? [], ...board?.drift ?? []],
-        unreadable: [...agents?.unreadable.map((u) => u.text) ?? [], ...board?.unreadable ?? []]
+        unreadable: [...agents?.unreadable.map((u) => u.text) ?? [], ...board?.unreadable ?? [], ...human?.unreadable ?? []]
       }),
       diagnosticsOpen: this.diagnosticsOpen,
       refreshCount: this.refreshCount,
@@ -8028,6 +8132,7 @@ var CopyController = class {
       keyboard: this.deps.host.keyboard(),
       agents: v.agents,
       board: v.board,
+      human: v.human,
       beadDetail: v.beadDetail,
       detail: v.detail,
       activity: v.activity,
@@ -9202,8 +9307,8 @@ function panelLayout(width) {
 }
 
 // src/view/panel.ts
-import { div as div6 } from "gpui-kit";
-import { h_flex as h_flex7, v_flex as v_flex7 } from "gpui-base";
+import { div as div7 } from "gpui-kit";
+import { h_flex as h_flex7, v_flex as v_flex8 } from "gpui-base";
 
 // src/view/agents.ts
 import { div as div2 } from "gpui-kit";
@@ -9556,14 +9661,54 @@ function renderHeader(h, theme2, actions) {
   return out;
 }
 
+// src/view/human.ts
+import { div as div6 } from "gpui-kit";
+import { v_flex as v_flex6 } from "gpui-base";
+function questionText(r) {
+  return `${r.selected ? "▸ " : ""}? ${r.who} asks (${r.what}) · session ${r.session}`;
+}
+function decisionText(r) {
+  const parts = [r.bead];
+  if (r.priority !== null) parts.push(r.priority);
+  parts.push(`"${r.title}"`);
+  if (r.age !== null) parts.push(r.age);
+  if (r.labels.length > 0) parts.push(`[${r.labels.join(", ")}]`);
+  if (r.assignee !== null) parts.push(`→ ${r.assignee}`);
+  return `${r.selected ? "▸ " : ""}◆ ${parts.join(" · ")}`;
+}
+function humanTitle(m) {
+  const parts = ["Needs a human"];
+  if (m.questions > 0) parts.push(`${m.questions} question${m.questions === 1 ? "" : "s"}`);
+  if (m.decisions > 0) parts.push(`${m.decisions} decision${m.decisions === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+function renderHuman(m, theme2, actions) {
+  const state = m.region;
+  if (state.kind === "ok" && state.error === null && m.rows.length === 0 && m.unreadable.length === 0) return null;
+  let region = v_flex6().id("gascity-human").gap(4).child(label("gascity-human-title", humanTitle(m)));
+  if (state.kind === "loading") region = region.child(muted(label("gascity-human-loading", "loading…"), theme2));
+  if (state.error !== null) region = region.child(label("gascity-human-error", state.error));
+  const rows = m.rows.map((r, i) => {
+    const id2 = `gascity-human-${i}`;
+    const el = r.kind === "question" ? label(id2, questionText(r)).on_click((_, cx) => actions.selectSession(r.selected ? null : r.session, cx)) : label(id2, decisionText(r)).on_click((_, cx) => actions.selectBead(r.selected ? null : r.bead, cx));
+    return r.kind === "question" || r.selected ? el : muted(el, theme2);
+  });
+  let body = v_flex6().id("gascity-human-body").gap(2).children(rows);
+  if (m.more > 0) body = body.child(muted(label("gascity-human-more", `${m.more} more decision${m.more === 1 ? "" : "s"} not listed`), theme2));
+  m.unreadable.forEach((u, k) => {
+    body = body.child(label(`gascity-human-unreadable-${k}`, u));
+  });
+  return region.child(greyedIf(div6().id("gascity-human-data").child(body), state.stale, theme2));
+}
+
 // src/view/needsYou.ts
-import { h_flex as h_flex6, v_flex as v_flex6 } from "gpui-base";
+import { h_flex as h_flex6, v_flex as v_flex7 } from "gpui-base";
 function renderWindowHead(m, theme2, actions) {
   const target = m.target === null ? muted(label("gascity-window-target", "No toast to follow: pick a session below."), theme2) : label("gascity-window-target", `Needs you: session ${m.target.session} in city ${m.target.city}`);
   const tabs = m.tabs.length === 1 ? [button("gascity-window-tab-0", "Show Gas City tab", (cx) => actions.showTab(m.tabs[0] ?? "", cx))] : m.tabs.map((t, i) => button(`gascity-window-tab-${i}`, `Show Gas City tab ${t}`, (cx) => actions.showTab(t, cx)));
   const bar = h_flex6().id("gascity-window-bar").gap(8).children([...tabs, button("gascity-window-close", "Close", (cx) => actions.closeWindow(cx))]);
-  const list = m.pending.length === 0 ? muted(label("gascity-window-none", "No session needs you right now."), theme2) : v_flex6().id("gascity-window-pending").gap(2).children(m.pending.map((p, i) => label(`gascity-window-pending-${i}`, `${p.label} (session ${p.session}): ${p.kind}`).on_click((_, cx) => actions.selectSession(p.session, cx))));
-  let el = v_flex6().id("gascity-window").gap(6).child(target);
+  const list = m.pending.length === 0 ? muted(label("gascity-window-none", "No session needs you right now."), theme2) : v_flex7().id("gascity-window-pending").gap(2).children(m.pending.map((p, i) => label(`gascity-window-pending-${i}`, `${p.label} (session ${p.session}): ${p.kind}`).on_click((_, cx) => actions.selectSession(p.session, cx))));
+  let el = v_flex7().id("gascity-window").gap(6).child(target);
   if (m.next !== null) {
     el = el.child(h_flex6().id("gascity-window-next").gap(8).child(label("gascity-window-next-text", `Session ${m.next.session} in city ${m.next.city} needs you too.`)).child(button("gascity-window-next-show", "Show", (cx) => actions.showNext(cx))));
   }
@@ -9584,18 +9729,18 @@ function themeIssues(el, theme2) {
 function diagnostics(model) {
   const { view, theme: theme2, actions } = model;
   if (view.diagnostics.length === 0) return null;
-  const toggle = div6().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
+  const toggle = div7().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
   if (!view.diagnosticsOpen) return toggle;
   const lines = view.diagnostics.map((d, i) => muted(label(`gascity-diag-${i}`, `${d.at ?? ""} ${d.source}: ${d.text}`.trim()), theme2));
-  return v_flex7().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
+  return v_flex8().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
 }
 function renderPanel(model) {
-  const title = div6().id("gascity-title").text_size(16).font_semibold().child(TITLE);
+  const title = div7().id("gascity-title").text_size(16).font_semibold().child(TITLE);
   if (model.kind === "host-incompatible") {
-    const root2 = v_flex7().id("gascity-root").size_full().p(12).gap(8);
+    const root2 = v_flex8().id("gascity-root").size_full().p(12).gap(8);
     return root2.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  let root = themedRoot(model.theme, v_flex7().id("gascity-root").size_full().p(12).gap(8)).child(title);
+  let root = themedRoot(model.theme, v_flex8().id("gascity-root").size_full().p(12).gap(8)).child(title);
   if (model.kind === "copy-invalid") {
     return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
@@ -9615,11 +9760,13 @@ function renderPanel(model) {
     if (log !== null) root = root.child(log);
     return themeIssues(root, theme2);
   }
+  const human = view.human === null ? null : renderHuman(view.human, theme2, actions);
+  if (human !== null) root = root.child(human);
   const beside = size.layout === "side-by-side";
   const regions = [];
-  if (view.agents !== null) regions.push(shrinkIf(div6().id("gascity-agents-region"), beside).child(renderAgents(view.agents, theme2, actions, view.activity)));
+  if (view.agents !== null) regions.push(shrinkIf(div7().id("gascity-agents-region"), beside).child(renderAgents(view.agents, theme2, actions, view.activity)));
   if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions, view.activity, size.layout));
-  if (regions.length > 0) root = root.child((beside ? h_flex7().items_start() : v_flex7()).id("gascity-main").gap(12).children(regions));
+  if (regions.length > 0) root = root.child((beside ? h_flex7().items_start() : v_flex8()).id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme2, actions, { activity: view.activity, message: inputs?.message ?? null });
   if (detail !== null) root = root.child(detail);
   const activity = renderActivity(view.activity, theme2, actions);

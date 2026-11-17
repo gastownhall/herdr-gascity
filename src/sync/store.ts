@@ -95,6 +95,8 @@ export const SESSION_PAGE = 500;
 export const MAX_SESSION_ROWS = 2_000;
 /** Ready and in-progress columns download at most this many beads. */
 export const BOARD_LIMIT = 50;
+/** At most this many beads waiting on a person are listed (gc's total says how many there are). */
+export const HUMAN_LIMIT = 50;
 /** The closed list keeps the newest this many closes, and is seeded with this many. */
 export const MAX_CLOSED_RECENT = 20;
 /** Closed-bead refetches per step. */
@@ -129,6 +131,8 @@ export type RigList = Listed<T.ListBodyRigResponse, T.RigResponse>;
 export type AgentList = Listed<T.ListBodyAgentResponse, T.AgentResponse>;
 export type PendingList = Listed<T.ListBodyCityPendingEntry, T.CityPendingEntry>;
 export type WorkList = Listed<T.WorkReadyBody, T.ReadyBead>;
+/** Open beads labeled `human`: work waiting on a person's decision. */
+export type HumanList = Listed<T.ListBodyBead, T.Bead>;
 
 /** Every session page, joined. */
 export interface SessionList {
@@ -214,6 +218,8 @@ export interface CitySnapshot {
   readonly pending: Slot<PendingList>;
   readonly ready: Slot<WorkList>;
   readonly inProgress: Slot<WorkList>;
+  /** Open beads waiting on a person (label `human`), at most HUMAN_LIMIT. */
+  readonly human: Slot<HumanList>;
   readonly closed: ClosedState;
   /** Watched sessions' conversations (transcript.ts), polled while on screen. */
   readonly transcripts: ReadonlyMap<string, Slot<Transcript>>;
@@ -259,10 +265,11 @@ type DomainValue = {
   pending: PendingList;
   ready: WorkList;
   inProgress: WorkList;
+  human: HumanList;
 };
 
 const EMPTY_SLOT: Slot<never> = { value: null, fetchedAt: null, error: null, dirty: true, held: false };
-const EVENT_DRIVEN: ReadonlySet<Domain> = new Set(["rigs", "agents", "ready", "inProgress"]);
+const EVENT_DRIVEN: ReadonlySet<Domain> = new Set(["rigs", "agents", "ready", "inProgress", "human"]);
 const PRIORITY_RANK: Record<FetchPriority, number> = { mutation: 0, events: 1, snapshot: 2, peek: 3, sweep: 4 };
 
 interface Due {
@@ -334,7 +341,7 @@ interface Step {
 export class CityStore implements EndpointListener {
   private snap: CitySnapshot;
   private readonly slots: { [D in Domain]: MutableSlot<DomainValue[D]> } = {
-    rigs: freshSlot(), agents: freshSlot(), sessions: freshSlot(), pending: freshSlot(), ready: freshSlot(), inProgress: freshSlot(),
+    rigs: freshSlot(), agents: freshSlot(), sessions: freshSlot(), pending: freshSlot(), ready: freshSlot(), inProgress: freshSlot(), human: freshSlot(),
   };
   private readonly due = new Map<Domain, Due>();
   /** Beads to fetch by id for the closed list: a close (`seq`) whose event carried no readable bead, or a recheck (`seq` null). */
@@ -791,7 +798,8 @@ export class CityStore implements EndpointListener {
 
   private known() {
     const sessionIds = new Set((this.slots.sessions.value?.items ?? []).map((s) => s.id));
-    return { sessionIds };
+    const humanIds = new Set((this.slots.human.value?.items ?? []).map((b) => b.id));
+    return { sessionIds, humanIds };
   }
 
   private workQuery(extra: { limit: number; status?: "in_progress" | "closed"; sort?: "newest" }) {
@@ -818,6 +826,8 @@ export class CityStore implements EndpointListener {
         return (await ops.listWork(c, city, this.workQuery({ limit: BOARD_LIMIT }))) as Result<DomainValue[D], GcError>;
       case "inProgress":
         return (await ops.listWork(c, city, this.workQuery({ limit: BOARD_LIMIT, status: "in_progress" }))) as Result<DomainValue[D], GcError>;
+      case "human":
+        return (await ops.listHumanBeads(c, city, { limit: HUMAN_LIMIT })) as Result<DomainValue[D], GcError>;
       default:
         return (await this.loadSessions(step, priority)) as Result<DomainValue[D], GcError>;
     }
@@ -1172,6 +1182,7 @@ export class CityStore implements EndpointListener {
       pending: this.slotOf(this.slots.pending, dirty("pending")),
       ready: this.slotOf(this.slots.ready, dirty("ready")),
       inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
+      human: this.slotOf(this.slots.human, dirty("human")),
       closed: { seed: this.seedSlot(), recent: this.closed.recent(), incomplete: this.incomplete, hidden: this.closed.hidden() },
       transcripts: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),

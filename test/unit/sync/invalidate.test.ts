@@ -8,11 +8,19 @@ import { ALL_DOMAINS, HANDLED_BY_NAME, SESSION_LIFECYCLE, invalidationFor, type 
 import type { TypedEventStreamEnvelope } from "../../../src/gc/types.gen.ts";
 
 let seq = 100;
-function ev(type: string, subject?: string): TypedEventStreamEnvelope {
-  return { seq: ++seq, type, ts: "2026-11-09T00:00:00Z", actor: "test", ...(subject === undefined ? {} : { subject }), payload: {} };
+const BEAD_PAYLOADS = new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted"]);
+
+/** A bead event carries its bead, as gc's do; `labels` are the bead's. */
+function beadPayload(id: string, labels: string[]) {
+  return { bead: { id, title: "t", status: "open", issue_type: "task", labels, created_at: "2026-11-09T00:00:00Z" } };
 }
 
-const known = { sessionIds: new Set(["sc-20", "sc-6"]) };
+function ev(type: string, subject?: string, payload?: unknown): TypedEventStreamEnvelope {
+  const body = payload ?? (BEAD_PAYLOADS.has(type) ? beadPayload(subject ?? "fe-1", []) : {});
+  return { seq: ++seq, type, ts: "2026-11-09T00:00:00Z", actor: "test", ...(subject === undefined ? {} : { subject }), payload: body };
+}
+
+const known = { sessionIds: new Set(["sc-20", "sc-6"]), humanIds: new Set(["ga-h1"]) };
 
 function domains(...events: TypedEventStreamEnvelope[]): Domain[] {
   return [...invalidationFor(events, known).domains].sort();
@@ -38,7 +46,7 @@ describe("event type → domains", () => {
     ["bead.created", "fe-9", ["inProgress", "ready"]],
     ["bead.updated", "fe-9", ["inProgress", "ready"]],
     ["bead.deleted", "fe-9", ["inProgress", "ready"]],
-    ["bead.dead_assignee_reopened", "fe-9", ["inProgress", "ready"]],
+    ["bead.dead_assignee_reopened", "fe-9", ["human", "inProgress", "ready"]],
     ["bead.updated", "sc-20", ["inProgress", "ready", "sessions"]],
     ["bead.created", "sc-6", ["inProgress", "ready", "sessions"]],
     ["bead.claim_released", "sc-20", ["sessions"]],
@@ -56,7 +64,7 @@ describe("event type → domains", () => {
   }
 
   test("ALL_DOMAINS lists every domain once", () => {
-    expect([...ALL_DOMAINS].sort()).toEqual(["agents", "inProgress", "pending", "ready", "rigs", "sessions"]);
+    expect([...ALL_DOMAINS].sort()).toEqual(["agents", "human", "inProgress", "pending", "ready", "rigs", "sessions"]);
   });
 });
 
@@ -104,5 +112,24 @@ describe("bead events without a subject, and the city list", () => {
   test("no events, no work", () => {
     const inv = invalidationFor([], known);
     expect(inv.domains.size).toBe(0);
+  });
+});
+
+describe("the Needs-a-human list", () => {
+  test("a bead labeled human refetches it", () => {
+    expect(domains(ev("bead.created", "ga-2", beadPayload("ga-2", ["human"])))).toEqual(["human", "inProgress", "ready"]);
+  });
+
+  test("a listed bead that lost the label, or closed, refetches it", () => {
+    expect(domains(ev("bead.updated", "ga-h1", beadPayload("ga-h1", [])))).toEqual(["human", "inProgress", "ready"]);
+    expect(domains(ev("bead.closed", undefined, beadPayload("ga-h1", ["human"])))).toEqual(["human", "inProgress", "ready"]);
+  });
+
+  test("a bead event whose bead cannot be read refetches it", () => {
+    expect(domains(ev("bead.updated", "fe-9", {}))).toEqual(["human", "inProgress", "ready"]);
+  });
+
+  test("other bead changes leave it alone", () => {
+    expect(domains(ev("bead.updated", "fe-9", beadPayload("fe-9", ["needs-review"])), ev("bead.deleted", "fe-8"))).toEqual(["inProgress", "ready"]);
   });
 });

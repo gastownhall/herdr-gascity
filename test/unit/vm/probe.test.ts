@@ -9,6 +9,7 @@ import { agentsModel } from "../../../src/vm/agents.ts";
 import { beadDetailModel, boardModel } from "../../../src/vm/board.ts";
 import { detailModel } from "../../../src/vm/detail.ts";
 import { headerModel } from "../../../src/vm/header.ts";
+import { humanModel } from "../../../src/vm/human.ts";
 import { PROBE_SCHEMA, probeDocument } from "../../../src/vm/probe.ts";
 import { NOW, agent, bead, list, ready, session, sessions, slot, snapshot } from "./snap.ts";
 
@@ -27,12 +28,14 @@ describe("probeDocument", () => {
       transcripts: new Map([["s-1", slot({ format: "text" as const, turns: [{ role: "output", text: "CANARY READY canary-1" }], olderHidden: false, bounded: false })]]),
       recent: [{ seq: 7, bead: bead("fe-2", "done thing", { status: "closed", close_reason: "canary n1", assignee: "w" }) }],
       beads: new Map([["fe-2", slot(bead("fe-2", "done thing", { status: "closed", close_reason: "canary n1", description: "the canary's bead" }))]]),
+      human: slot(list([bead("fe-h", "Approve the charter", { labels: ["human"], priority: 1 })], { total: 3 })),
     });
     const agents = agentsModel({ snapshot: snap, now: NOW, selected: "s-1", collapsed: new Set() });
     const header = headerModel(m, [], { connection: snap.connection, now: NOW, needsYou: agents.needsYou, age: agents.region.age });
     const doc = probeDocument({
       modVersion: "0.0.0", herdrVersion: "0.1.14", machine: m, header, onScreen: true, keyboard: false, agents,
       board: boardModel({ snapshot: snap, now: NOW, selected: "fe-2" }),
+      human: humanModel({ snapshot: snap, now: NOW, selectedSession: "s-1", selectedBead: "fe-2" }),
       beadDetail: beadDetailModel({ snapshot: snap, now: NOW, selected: "fe-2" }),
       detail: detailModel({ snapshot: snap, now: NOW, selected: "s-1" }),
       activity: activityModel({
@@ -64,6 +67,7 @@ describe("probeDocument", () => {
         { id: "s-1", label: "s-1", agent: "w", group: "city", status: "working", status_kind: "working", status_source: "program", attached: false, active_bead: "fe-1" },
         { id: "s-9", label: "s-9", agent: null, group: null, status: "unknown", status_kind: "unknown", status_source: "none", attached: false, active_bead: null },
       ],
+      human: { questions: 0, decisions: 3, rows: [{ kind: "decision", bead: "fe-h", title: "Approve the charter", priority: "P1" }], error: null },
       board: {
         filter: "hiding infrastructure beads (session, message, molecule, gate)",
         hidden: 1,

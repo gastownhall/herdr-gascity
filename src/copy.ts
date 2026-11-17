@@ -71,6 +71,7 @@ import { MOD_NAME, mayBeOnScreen, type VisibilityInput } from "./sync/visibility
 import { MOD_VERSION } from "./version.ts";
 import { activityModel, isBusy, type ActivityModel } from "./vm/activity.ts";
 import { AGENT_PAGE, agentsModel, type AgentsModel } from "./vm/agents.ts";
+import { humanModel, type HumanModel } from "./vm/human.ts";
 import { beadDetailModel, boardModel, type BeadDetailModel, type BoardModel } from "./vm/board.ts";
 import { detailModel, type DetailModel } from "./vm/detail.ts";
 import { diagnosticsModel, type DiagnosticLine } from "./vm/diagnostics.ts";
@@ -172,6 +173,8 @@ export interface CopyView {
   agents: AgentsModel | null;
   /** Null until a running city is subscribed. */
   board: BoardModel | null;
+  /** What waits on a person; null until a running city is subscribed. */
+  human: HumanModel | null;
   beadDetail: BeadDetailModel;
   detail: DetailModel;
   /** The city's activity log; null until a running city is subscribed. */
@@ -373,6 +376,7 @@ export class CopyController {
     const s = this.city?.snapshot() ?? null;
     const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed, shown: this.shown }) : null;
     const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
+    const human = s ? humanModel({ snapshot: s, now, selectedSession: this.selected, selectedBead: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
     const header = headerModel(discovery.machine, discovery.hostErrors, live);
@@ -380,6 +384,7 @@ export class CopyController {
       header,
       agents,
       board,
+      human,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
       detail: s ? detailModel({ snapshot: s, now, selected: this.selected, keepAwake: this.selected !== null ? this.city?.keepAwake(this.selected) ?? null : null }) : { kind: "none" },
       activity: this.city ? activityModel(this.city.activity(), s, now) : null,
@@ -394,7 +399,7 @@ export class CopyController {
           ...this.failures,
         ],
         drift: [...(agents?.drift ?? []), ...(board?.drift ?? [])],
-        unreadable: [...(agents?.unreadable.map((u) => u.text) ?? []), ...(board?.unreadable ?? [])],
+        unreadable: [...(agents?.unreadable.map((u) => u.text) ?? []), ...(board?.unreadable ?? []), ...(human?.unreadable ?? [])],
       }),
       diagnosticsOpen: this.diagnosticsOpen,
       refreshCount: this.refreshCount,
@@ -1314,6 +1319,7 @@ export class CopyController {
       keyboard: this.deps.host.keyboard(),
       agents: v.agents,
       board: v.board,
+      human: v.human,
       beadDetail: v.beadDetail,
       detail: v.detail,
       activity: v.activity,

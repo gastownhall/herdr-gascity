@@ -220,3 +220,30 @@ describe("diagnostics and the probe", () => {
     expect(written.size).toBe(0);
   });
 });
+
+describe("Needs a human", () => {
+  test("lists the city's questions, then its human beads, above the agents; a row opens the session's or the bead's detail", async () => {
+    const pending = { items: [{ session_id: "sc-20", request_id: "r-1", kind: "question" }], total: 1 };
+    const mod = await running({ route: gc({ "/v0/city/scratch/pending": { status: 200, body: pending } }) });
+    for (let i = 0; i < 3; i++) await mod.tick();
+    let root = mod.render();
+    expect(text(root, "gascity-human-title")).toBe("Needs a human · 1 question · 2 decisions");
+    expect(text(root, "gascity-human-0")).toMatch(/^\? .+ asks \(question\) · session sc-20$/);
+    expect(text(root, "gascity-human-1")).toMatch(/^◆ sc-90 · P1 · "Approve the release checklist" · \d+ (s|min|h|d) · \[release\]$/);
+    expect(text(root, "gascity-human-2")).toMatch(/^◆ sc-91 · "Pick a canary channel" · \d+ (s|min|h|d)$/);
+    mod.click("gascity-human-1");
+    for (let i = 0; i < 3; i++) await mod.tick();
+    root = mod.render();
+    expect(text(root, "gascity-bead-title")).toMatch(/^Bead sc-90: /);
+    expect(text(root, "gascity-human-1")).toMatch(/^▸ ◆ sc-90/);
+    mod.click("gascity-human-0");
+    for (let i = 0; i < 3; i++) await mod.tick();
+    expect(findById(mod.render(), "gascity-detail")).toBeDefined();
+  });
+
+  test("a city with nothing waiting on a person shows no region", async () => {
+    const mod = await running({ route: gc({ "/v0/city/scratch/beads": { status: 200, body: { items: [], total: 0 } } }) });
+    for (let i = 0; i < 3; i++) await mod.tick();
+    expect(findById(mod.render(), "gascity-human")).toBeUndefined();
+  });
+});

@@ -132,6 +132,17 @@ export const OPERATIONS = {
     response: S.BeadSchema,
     item: null,
   },
+  "get-v0-city-by-city-name-beads": {
+    method: "GET",
+    path: "/v0/city/{cityName}/beads",
+    pathParams: ["cityName"],
+    csrf: false,
+    idempotencyKey: false,
+    body: null,
+    success: 200,
+    response: S.ListBodyBeadSchema,
+    item: S.BeadSchema,
+  },
   "get-v0-city-by-city-name-events": {
     method: "GET",
     path: "/v0/city/{cityName}/events",
@@ -424,6 +435,12 @@ export interface OperationTypes {
     query: {};
     body: undefined;
     decoded: T.Bead;
+  };
+  "get-v0-city-by-city-name-beads": {
+    path: { cityName: string; };
+    query: { "index"?: string; "wait"?: string; "cursor"?: string; "limit"?: number; "status"?: string; "type"?: string; "label"?: string; "assignee"?: string; "rig"?: string; "all"?: boolean; };
+    body: undefined;
+    decoded: Listed<T.ListBodyBead, T.Bead>;
   };
   "get-v0-city-by-city-name-events": {
     path: { cityName: string; };

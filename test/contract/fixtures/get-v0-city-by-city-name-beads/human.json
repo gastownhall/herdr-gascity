@@ -1,0 +1,36 @@
+{
+  "provenance": "synthesized: shaped after a running gc's answer to GET /beads?label=human&status=open (ids, titles and metadata replaced); the recorder's scratch scenario labels no bead human",
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/beads",
+    "query": "label=human&status=open&limit=50"
+  },
+  "status": 200,
+  "body": {
+    "items": [
+      {
+        "id": "sc-90",
+        "title": "Approve the release checklist",
+        "status": "open",
+        "issue_type": "task",
+        "priority": 1,
+        "created_at": "2026-11-09T06:24:47Z",
+        "parent": "sc-89",
+        "description": "a decision waiting on a person",
+        "labels": ["human", "release"],
+        "metadata": { "gc.routed_to": "worker" },
+        "dependencies": [{ "issue_id": "sc-90", "depends_on_id": "sc-89", "type": "parent-child" }],
+        "is_blocked": false
+      },
+      {
+        "id": "sc-91",
+        "title": "Pick a canary channel",
+        "status": "open",
+        "issue_type": "bug",
+        "created_at": "2026-11-08T06:24:47Z",
+        "labels": ["human"]
+      }
+    ],
+    "total": 2
+  }
+}

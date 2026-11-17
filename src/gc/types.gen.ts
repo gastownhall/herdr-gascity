@@ -266,6 +266,16 @@ export interface Bead {
   close_reason?: string | undefined;
 }
 
+/** The fields of ListBodyBead this mod uses, decoded from gc's ListBodyBead. */
+export interface ListBodyBead {
+  /** Raw elements; the client decodes each one (item-level decode errors). */
+  items: unknown[];
+  total: number;
+  next_cursor?: string | undefined;
+  partial?: boolean | undefined;
+  partial_errors: string[];
+}
+
 /** The fields of TypedEventStreamEnvelope this mod uses, decoded from gc's TypedEventStreamEnvelope. */
 export interface TypedEventStreamEnvelope {
   seq: number;

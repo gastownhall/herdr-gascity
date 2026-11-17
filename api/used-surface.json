@@ -12,6 +12,7 @@
     "get-v0-city-by-city-name-session-by-id-transcript": "the open session pane's conversation, polled while the pane is open and on screen (herdr's fetch cannot read the session stream)",
     "get-v0-city-by-city-name-work-ready": "work board columns and the bounded closed seed",
     "get-v0-city-by-city-name-bead-by-id": "targeted bead refetch and active-bead titles",
+    "get-v0-city-by-city-name-beads": "open beads labeled human (Needs a human)",
     "get-v0-city-by-city-name-events": "short non-blocking change-signal poll (no index)",
     "get-request-outcome": "outcome of 202 requests (session create/submit/message)",
     "create-session": "start a session",
@@ -65,6 +66,7 @@
 
     "WorkReadyBody": { "fields": ["items"], "itemLevel": "items" },
     "ReadyBead": { "fields": ["id", "title", "status", "issue_type", "priority", "assignee", "labels", "created_at", "updated_at", "close_reason", "is_blocked"] },
+    "ListBodyBead": { "fields": ["items", "total", "next_cursor", "partial", "partial_errors"], "itemLevel": "items" },
     "Bead": { "fields": ["id", "title", "status", "issue_type", "priority", "assignee", "labels", "description", "created_at", "updated_at", "close_reason"] },
 
     "ListBodyWireEvent": { "fields": ["items", "total", "next_cursor", "partial", "partial_errors"], "itemLevel": "items" },
