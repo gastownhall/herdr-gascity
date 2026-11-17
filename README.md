@@ -469,9 +469,11 @@ read from gc's `/api/city/<city>/config`, default `needs/operator`), or of
 type `decision`. Each bead is listed once, with every reason.
 
 With `gascity.settings.dashboardUrl` set (an https URL;
-`herdr-app do gascity.set-dashboard-url:<percent-encoded url>`), decisions,
-cities and the pane get "Open in mdash" links (`/city/<city>/beads?bead=<id>`),
-opened with the platform opener; only URLs under that host are opened. One shared poll per
+`herdr-app do gascity.set-dashboard-url:<percent-encoded url>`), beads with
+the decision label (mdash's queue) get an "mdash" link
+(`/city/<city>/beads?bead=<id>`), and cities and the pane an "Open in mdash"
+link; the other decisions are answered here. Links open with the platform
+opener; only URLs under that host are opened. One shared poll per
 API (`src/sync/needs.ts`) reads, for each running city, `/pending` and
 `/beads?label=human&status=open` every 15 s and `/status` every 30 s,
 never the agent or session lists.

@@ -127,3 +127,20 @@ describe("the Needs a human pane", () => {
     expect(inboxModel({ ...input, needs: null, filter: "all" }).note).toBe("loading…");
   });
 });
+
+describe("mdash links", () => {
+  test("only beads with the decision label link into the dashboard", () => {
+    const beads = [bead("op", "operator", { labels: ["needs/operator"] }), bead("hu", "human", { labels: ["human"] }), bead("de", "decide", { issue_type: "decision" })];
+    const reasons = new Map<string, ("human" | "operator" | "decision")[]>([["op", ["operator"]], ["hu", ["human"]], ["de", ["decision"]]]);
+    const m = sidebarModel({
+      cities: cities({ name: "a" }),
+      needs: { rev: 1, decisionLabel: "needs/operator", error: null, cities: new Map([needs("a", { human: beads, reasons })]) },
+      expanded: new Set(["a"]),
+      now: NOW,
+      dashboardUrl: "https://mdash.example.com",
+    });
+    const links = Object.fromEntries(m.cities[0]!.rows.map((r) => [r.kind === "decision" ? r.bead : "", r.kind === "decision" ? r.link : null]));
+    expect(links).toEqual({ op: "https://mdash.example.com/city/a/beads?bead=op", hu: null, de: null });
+    expect(m.cities[0]?.link).toBe("https://mdash.example.com/city/a/");
+  });
+});

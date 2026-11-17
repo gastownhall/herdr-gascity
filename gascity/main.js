@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:5d98a290696c0d746dd4fcccef97e8507ce7799ddc6650b523e5bdc00340a32c over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:be0c3af9b97587cae284f8972c183802174b92fb85fc7e20eb2dcfdcf7954a11 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -6823,7 +6823,7 @@ function needRows(needs, city, now, decisionLabel = DEFAULT_DECISION_LABEL, dash
     labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL && l !== decisionLabel).map(cleanLine),
     age: since(b.created_at, now),
     why: (needs.reasons.get(b.id) ?? []).map((r) => cleanLine(r === "operator" ? decisionLabel : r)),
-    link: beadLink(dashboardUrl, city, b.id)
+    link: needs.reasons.get(b.id)?.includes("operator") ? beadLink(dashboardUrl, city, b.id) : null
   }));
   return { questions, decisions };
 }

@@ -32,7 +32,11 @@ export type NeedRow =
     kind: "decision"; city: string; bead: string; title: string; priority: string | null; labels: string[]; age: string | null;
     /** Why it is listed: "human", the decision label (e.g. "needs/operator"), "decision" (its type). */
     why: string[];
-    /** The bead in the web dashboard; null without one set. */
+    /**
+     * The bead in the web dashboard: only for beads with the decision label
+     * (mdash's queue); the others are answered here (a session, a bead's
+     * Close…). Null without a dashboard set.
+     */
     link: string | null;
   };
 
@@ -107,7 +111,7 @@ export function needRows(
       labels: (b.labels ?? []).filter((l) => l !== HUMAN_LABEL && l !== decisionLabel).map(cleanLine),
       age: since(b.created_at, now),
       why: (needs.reasons.get(b.id) ?? []).map((r) => cleanLine(r === "operator" ? decisionLabel : r)),
-      link: beadLink(dashboardUrl, city, b.id),
+      link: needs.reasons.get(b.id)?.includes("operator") ? beadLink(dashboardUrl, city, b.id) : null,
     }));
   return { questions, decisions };
 }
