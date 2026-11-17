@@ -3,13 +3,13 @@
 // staleness and errors. Nothing gc lists is dropped.
 
 import { describe, expect, test } from "bun:test";
-import { agentsModel, type AgentsModel, type SessionRow } from "../../../src/vm/agents.ts";
+import { AGENT_PAGE, agentsModel, type AgentsModel, type SessionRow } from "../../../src/vm/agents.ts";
 import { NOW, failed, agent, bead, list, ready, rig, session, sessions, slot, snapshot, EMPTY } from "./snap.ts";
 
 const decodeError = (id: string) => ({ kind: "decode" as const, operationId: "get-v0-city-by-city-name-sessions", path: "items[1].state", issues: [`state: expected string (${id})`] });
 
-function model(parts: Parameters<typeof snapshot>[0], opts: { selected?: string | null; collapsed?: string[] } = {}): AgentsModel {
-  return agentsModel({ snapshot: snapshot(parts), now: NOW, selected: opts.selected ?? null, collapsed: new Set(opts.collapsed ?? []) });
+function model(parts: Parameters<typeof snapshot>[0], opts: { selected?: string | null; collapsed?: string[]; shown?: Record<string, number> } = {}): AgentsModel {
+  return agentsModel({ snapshot: snapshot(parts), now: NOW, selected: opts.selected ?? null, collapsed: new Set(opts.collapsed ?? []), shown: new Map(Object.entries(opts.shown ?? {})) });
 }
 
 const sessionIds = (rows: SessionRow[]) => rows.map((r) => r.id);
@@ -70,8 +70,37 @@ describe("the join", () => {
 
   test("a collapsed group keeps its header and counts but hides its agents", () => {
     const m = model(parts, { collapsed: ["rig:frontend"] });
-    expect(m.groups[0]).toMatchObject({ collapsed: true, agents: [] });
+    expect(m.groups[0]).toMatchObject({ collapsed: true, agents: [], hidden: 0 });
     expect(m.groups[1]!.collapsed).toBe(false);
+  });
+
+  describe("a group with more agents than a page", () => {
+    const many = Array.from({ length: AGENT_PAGE * 2 + 5 }, (_, i) => agent(`big/a${String(i).padStart(2, "0")}`, { rig: "big" }));
+    const big = {
+      rigs: slot(list([rig("big", { agent_count: many.length })])),
+      agents: slot(list(many)),
+      sessions: slot(sessions([session("s-late", "big/a44", { agent_name: "big/a44" })])),
+    };
+
+    test("lists one page, agents with sessions first, and counts the rest", () => {
+      const g = model(big).groups[0]!;
+      expect(g.agents).toHaveLength(AGENT_PAGE);
+      expect(g.hidden).toBe(many.length - AGENT_PAGE);
+      expect(g.agents[0]!.name).toBe("big/a44");
+      expect(g.agents[1]!.name).toBe("big/a00");
+    });
+
+    test("lists as many as asked, never fewer than a page, and all of them once asked for more than there are", () => {
+      expect(model(big, { shown: { "rig:big": AGENT_PAGE * 2 } }).groups[0]).toMatchObject({ hidden: 5 });
+      expect(model(big, { shown: { "rig:big": 1 } }).groups[0]!.agents).toHaveLength(AGENT_PAGE);
+      const all = model(big, { shown: { "rig:big": AGENT_PAGE * 3 } }).groups[0]!;
+      expect(all.hidden).toBe(0);
+      expect(all.agents.map((a) => a.name)).toEqual(many.map((a) => a.name));
+    });
+
+    test("collapsed, it hides every agent and counts none as hidden", () => {
+      expect(model(big, { collapsed: ["rig:big"] }).groups[0]).toMatchObject({ agents: [], hidden: 0 });
+    });
   });
 
   test("the selected session is marked", () => {

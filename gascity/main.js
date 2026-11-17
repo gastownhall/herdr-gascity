@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:81fca4fb860797867d86e8a4e97286390f70fdd80d9d36a61ebae3f627969021 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:4c2501754d4599c041030a5b12ee561ac14acae9688394cf648335809c170cd8 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2785,10 +2785,13 @@ function focusToApply(current, appliedSeq, now) {
 var ESCAPES = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]?|(?:\u001b[\]PX^_]|[\u0090\u009d\u0098\u009e\u009f])[^\u0007\u001b\u009c]*(?:\u0007|\u001b\\|\u009c)?|\u001b[@-Z\\-_]?/g;
 var CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]|\udb40[\udc00-\udc7f]/g;
 var BREAKS = /\r\n?|[\u2028\u2029]/g;
+var SUSPECT = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\udb40]/;
 function cleanText(text2) {
+  if (!SUSPECT.test(text2)) return text2;
   return text2.replace(BREAKS, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
 }
 function cleanLine(text2) {
+  if (!SUSPECT.test(text2)) return text2;
   return cleanText(text2).replace(/[\n\t]+/g, " ");
 }
 
@@ -6175,6 +6178,7 @@ function mostUrgent(list) {
 }
 
 // src/vm/agents.ts
+var AGENT_PAGE = 20;
 var CITY_GROUP = "city";
 function rigKey(rig) {
   return `rig:${rig}`;
@@ -6216,7 +6220,7 @@ function partialBanner(what, partial2, errors) {
   return [`gc's ${what} list is partial: ${detail}`];
 }
 function agentsModel(input) {
-  const { snapshot: s, now, selected, collapsed } = input;
+  const { snapshot: s, now, selected, collapsed, shown } = input;
   const rigs = s.rigs.value?.items ?? [];
   const agents = s.agents.value?.items ?? [];
   const sessionList = s.sessions.value;
@@ -6268,7 +6272,7 @@ function agentsModel(input) {
   const group = (key, make) => {
     let g = groups.get(key);
     if (!g) {
-      g = { key, ...make(), collapsed: collapsed.has(key), agents: [] };
+      g = { key, ...make(), collapsed: collapsed.has(key), agents: [], hidden: 0 };
       groups.set(key, g);
     }
     return g;
@@ -6284,10 +6288,24 @@ function agentsModel(input) {
   }
   const unlisted = [...new Set(agents.map((a) => a.rig).filter((r) => r !== void 0 && r !== "" && !groups.has(rigKey(r))))].sort();
   for (const r of unlisted) group(rigKey(r), () => ({ rig: null, title: `rig: ${cleanLine(r)}`, counts: null, suspended: false, listed: false }));
+  const members2 = /* @__PURE__ */ new Map();
   for (const a of agents) {
     const key = a.rig !== void 0 && a.rig !== "" ? rigKey(a.rig) : CITY_GROUP;
     const g = group(key, () => ({ rig: null, title: "city", counts: null, suspended: false, listed: true }));
-    if (!g.collapsed) g.agents.push(agentRow2(a));
+    if (g.collapsed) continue;
+    let m = members2.get(g);
+    if (!m) {
+      m = { all: [], busy: [], idle: [] };
+      members2.set(g, m);
+    }
+    m.all.push(a);
+    (joined.has(a.name) ? m.busy : m.idle).push(a);
+  }
+  for (const [g, m] of members2) {
+    const limit = Math.max(AGENT_PAGE, shown?.get(g.key) ?? AGENT_PAGE);
+    const listed = m.all.length <= limit ? m.all : [...m.busy, ...m.idle].slice(0, limit);
+    g.agents = listed.map(agentRow2);
+    g.hidden = m.all.length - listed.length;
   }
   const banners = [];
   if (sessionList?.truncated) {
@@ -7027,6 +7045,8 @@ var CopyController = class {
   selected = null;
   selectedBead = null;
   collapsed = /* @__PURE__ */ new Set();
+  /** Agents listed per expanded group, past the first page. */
+  shown = /* @__PURE__ */ new Map();
   diagnosticsOpen = false;
   refreshCount = 0;
   onScreen = true;
@@ -7156,7 +7176,7 @@ var CopyController = class {
   view(now) {
     const { discovery } = this.deps;
     const s = this.city?.snapshot() ?? null;
-    const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed }) : null;
+    const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed, shown: this.shown }) : null;
     const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
@@ -7223,6 +7243,10 @@ var CopyController = class {
   /** Collapses or expands a rig group. */
   toggleGroup(key) {
     if (!this.collapsed.delete(key)) this.collapsed.add(key);
+  }
+  /** Lists another page of a group's agents. */
+  showMoreAgents(key) {
+    this.shown.set(key, (this.shown.get(key) ?? AGENT_PAGE) + AGENT_PAGE);
   }
   toggleDiagnostics() {
     this.diagnosticsOpen = !this.diagnosticsOpen;
@@ -7698,7 +7722,7 @@ var CopyController = class {
   sessionOrder() {
     const s = this.city?.snapshot();
     if (!s) return [];
-    const m = agentsModel({ snapshot: s, now: this.deps.clock.now(), selected: this.selected, collapsed: this.collapsed });
+    const m = agentsModel({ snapshot: s, now: this.deps.clock.now(), selected: this.selected, collapsed: this.collapsed, shown: this.shown });
     return [...m.groups.flatMap((g) => g.agents.flatMap((a) => a.sessions.map((r) => r.id))), ...m.other.map((r) => r.id)];
   }
   // ---- the "needs you" window and focus -------------------------------------------------
@@ -9333,7 +9357,12 @@ function renderAgents(m, theme2, actions, activity = null) {
   m.banners.forEach((b, i) => {
     region = region.child(label(`gascity-agents-banner-${i}`, b));
   });
-  const groups = m.groups.map((g, i) => v_flex2().id(`gascity-group-${i}-body`).gap(4).child(groupHead(g, i, theme2, actions, activity)).children(g.agents.map((a, j) => agentRow(a, `gascity-agent-${i}-${j}`, theme2, actions, activity))));
+  const groups = m.groups.map((g, i) => {
+    const body2 = v_flex2().id(`gascity-group-${i}-body`).gap(4).child(groupHead(g, i, theme2, actions, activity)).children(g.agents.map((a, j) => agentRow(a, `gascity-agent-${i}-${j}`, theme2, actions, activity)));
+    if (g.hidden === 0) return body2;
+    const more = Math.min(g.hidden, AGENT_PAGE);
+    return body2.child(button(`gascity-group-${i}-more`, `Show ${more} more · ${g.hidden} not shown`, (cx) => actions.showMoreAgents(g.key, cx)));
+  });
   let body = v_flex2().id("gascity-agents-body").gap(6).children(groups);
   if (m.other.length > 0) {
     body = body.child(v_flex2().id("gascity-other").gap(2).child(label("gascity-other-title", "Other sessions")).children(m.other.map((r, k) => sessionRow(r, `gascity-other-${k}`, theme2, actions))));
@@ -9755,6 +9784,10 @@ function actionsFor(state, inputs) {
     },
     toggleGroup: (key, cx) => {
       copy.toggleGroup(key);
+      cx.notify();
+    },
+    showMoreAgents: (key, cx) => {
+      copy.showMoreAgents(key);
       cx.notify();
     },
     close: (cx) => {

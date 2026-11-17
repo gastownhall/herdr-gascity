@@ -70,7 +70,7 @@ import { ALL_DOMAINS } from "./sync/invalidate.ts";
 import { MOD_NAME, mayBeOnScreen, type VisibilityInput } from "./sync/visibility.ts";
 import { MOD_VERSION } from "./version.ts";
 import { activityModel, isBusy, type ActivityModel } from "./vm/activity.ts";
-import { agentsModel, type AgentsModel } from "./vm/agents.ts";
+import { AGENT_PAGE, agentsModel, type AgentsModel } from "./vm/agents.ts";
 import { beadDetailModel, boardModel, type BeadDetailModel, type BoardModel } from "./vm/board.ts";
 import { detailModel, type DetailModel } from "./vm/detail.ts";
 import { diagnosticsModel, type DiagnosticLine } from "./vm/diagnostics.ts";
@@ -232,6 +232,8 @@ export class CopyController {
   private selected: string | null = null;
   private selectedBead: string | null = null;
   private readonly collapsed = new Set<string>();
+  /** Agents listed per expanded group, past the first page. */
+  private readonly shown = new Map<string, number>();
   private diagnosticsOpen = false;
   private refreshCount = 0;
   private onScreen = true;
@@ -369,7 +371,7 @@ export class CopyController {
   view(now: number): CopyView {
     const { discovery } = this.deps;
     const s = this.city?.snapshot() ?? null;
-    const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed }) : null;
+    const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed, shown: this.shown }) : null;
     const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
@@ -442,6 +444,11 @@ export class CopyController {
   /** Collapses or expands a rig group. */
   toggleGroup(key: string): void {
     if (!this.collapsed.delete(key)) this.collapsed.add(key);
+  }
+
+  /** Lists another page of a group's agents. */
+  showMoreAgents(key: string): void {
+    this.shown.set(key, (this.shown.get(key) ?? AGENT_PAGE) + AGENT_PAGE);
   }
 
   toggleDiagnostics(): void {
@@ -962,7 +969,7 @@ export class CopyController {
   private sessionOrder(): string[] {
     const s = this.city?.snapshot();
     if (!s) return [];
-    const m = agentsModel({ snapshot: s, now: this.deps.clock.now(), selected: this.selected, collapsed: this.collapsed });
+    const m = agentsModel({ snapshot: s, now: this.deps.clock.now(), selected: this.selected, collapsed: this.collapsed, shown: this.shown });
     return [...m.groups.flatMap((g) => g.agents.flatMap((a) => a.sessions.map((r) => r.id))), ...m.other.map((r) => r.id)];
   }
 

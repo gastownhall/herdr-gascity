@@ -11,7 +11,12 @@
 //   - a truncated session list says "showing N of M"; gc's partial_errors
 //     are shown; an entry that cannot be read is an "unreadable" row;
 //   - the region says how old the data is, and keeps stale data with the
-//     error above it.
+//     error above it;
+//   - an expanded group lists at most a page of agents (AGENT_PAGE, more on
+//     request): herdr stops a render that runs too long, and a city with
+//     hundreds of agents never finished one. Agents with sessions come
+//     first when some are left out, so the running ones never are; a row is
+//     built only for an agent that is listed.
 // Every string from gc is cleaned before it reaches the model.
 
 import type { Unreadable } from "../gc/decode.ts";
@@ -21,6 +26,9 @@ import { errorText } from "./errorText.ts";
 import { regionModel, type RegionModel } from "./region.ts";
 import { cleanLine } from "./sanitize.ts";
 import { agentStatus, mostUrgent, sessionStatus, type PendingMark, type Status } from "./status.ts";
+
+/** How many agents an expanded group lists before "show more". */
+export const AGENT_PAGE = 20;
 
 /** The group of the city's own (rig-less) agents. */
 export const CITY_GROUP = "city";
@@ -68,7 +76,10 @@ export interface GroupModel {
   /** The rig is in gc's rig list (an agent may name a rig gc does not list). */
   listed: boolean;
   collapsed: boolean;
+  /** The agents listed: at most the group's page limit, those with sessions first when some are left out. */
   agents: AgentRow[];
+  /** Agents of an expanded group left out by its page limit. */
+  hidden: number;
 }
 
 export interface UnreadableRow {
@@ -86,7 +97,7 @@ export interface AgentsModel {
   banners: string[];
   /** Sessions with a pending interaction ("N need you"). */
   needsYou: number;
-  /** Distinct values this pin does not know, for the diagnostics. */
+  /** Distinct values this pin does not know, for the diagnostics (from sessions and listed agents). */
   drift: string[];
 }
 
@@ -97,6 +108,8 @@ export interface AgentsInput {
   selected: string | null;
   /** Collapsed group keys. */
   collapsed: ReadonlySet<string>;
+  /** How many agents an expanded group lists, by group key; AGENT_PAGE when absent. */
+  shown?: ReadonlyMap<string, number>;
 }
 
 function rigKey(rig: string): string {
@@ -148,7 +161,7 @@ function partialBanner(what: string, partial: boolean | undefined, errors: reado
 
 /** The agents panel for one snapshot. */
 export function agentsModel(input: AgentsInput): AgentsModel {
-  const { snapshot: s, now, selected, collapsed } = input;
+  const { snapshot: s, now, selected, collapsed, shown } = input;
   const rigs = s.rigs.value?.items ?? [];
   const agents = s.agents.value?.items ?? [];
   const sessionList = s.sessions.value;
@@ -204,10 +217,10 @@ export function agentsModel(input: AgentsInput): AgentsModel {
 
   // Groups: listed rigs in gc's order, then rigs only agents name, then the city.
   const groups = new Map<string, GroupModel>();
-  const group = (key: string, make: () => Omit<GroupModel, "key" | "collapsed" | "agents">): GroupModel => {
+  const group = (key: string, make: () => Omit<GroupModel, "key" | "collapsed" | "agents" | "hidden">): GroupModel => {
     let g = groups.get(key);
     if (!g) {
-      g = { key, ...make(), collapsed: collapsed.has(key), agents: [] };
+      g = { key, ...make(), collapsed: collapsed.has(key), agents: [], hidden: 0 };
       groups.set(key, g);
     }
     return g;
@@ -223,10 +236,25 @@ export function agentsModel(input: AgentsInput): AgentsModel {
   }
   const unlisted = [...new Set(agents.map((a) => a.rig).filter((r): r is string => r !== undefined && r !== "" && !groups.has(rigKey(r))))].sort();
   for (const r of unlisted) group(rigKey(r), () => ({ rig: null, title: `rig: ${cleanLine(r)}`, counts: null, suspended: false, listed: false }));
+  // Each expanded group's agents in gc's order; past its page, those with sessions first.
+  const members = new Map<GroupModel, { all: T.AgentResponse[]; busy: T.AgentResponse[]; idle: T.AgentResponse[] }>();
   for (const a of agents) {
     const key = a.rig !== undefined && a.rig !== "" ? rigKey(a.rig) : CITY_GROUP;
     const g = group(key, () => ({ rig: null, title: "city", counts: null, suspended: false, listed: true }));
-    if (!g.collapsed) g.agents.push(agentRow(a));
+    if (g.collapsed) continue;
+    let m = members.get(g);
+    if (!m) {
+      m = { all: [], busy: [], idle: [] };
+      members.set(g, m);
+    }
+    m.all.push(a);
+    (joined.has(a.name) ? m.busy : m.idle).push(a);
+  }
+  for (const [g, m] of members) {
+    const limit = Math.max(AGENT_PAGE, shown?.get(g.key) ?? AGENT_PAGE);
+    const listed = m.all.length <= limit ? m.all : [...m.busy, ...m.idle].slice(0, limit);
+    g.agents = listed.map(agentRow);
+    g.hidden = m.all.length - listed.length;
   }
 
   const banners: string[] = [];

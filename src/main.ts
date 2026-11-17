@@ -247,6 +247,10 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
       copy.toggleGroup(key);
       cx.notify();
     },
+    showMoreAgents: (key, cx) => {
+      copy.showMoreAgents(key);
+      cx.notify();
+    },
     close: (cx) => {
       copy.selectSession(null);
       cx.notify();

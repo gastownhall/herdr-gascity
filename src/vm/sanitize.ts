@@ -18,12 +18,21 @@ const CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2
 /** Line breaks other than LF: CRLF, a lone CR, and the line and paragraph separators U+2028/U+2029. */
 const BREAKS = /\r\n?|[\u2028\u2029]/g;
 
+/**
+ * Every character any of the patterns above (or cleanLine's tab and line feed)
+ * starts from. Text without one is already clean and is returned as is: most
+ * names are, and a render cleans thousands of them in herdr's interpreter.
+ */
+const SUSPECT = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff\udb40]/;
+
 /** Removes escape sequences and control characters; keeps line feeds and tabs. CRLF, lone CR, U+2028 and U+2029 become LF. */
 export function cleanText(text: string): string {
+  if (!SUSPECT.test(text)) return text;
   return text.replace(BREAKS, "\n").replace(ESCAPES, "").replace(CONTROLS, "");
 }
 
 /** One display line: like cleanText, and every run of line breaks and tabs becomes one space. */
 export function cleanLine(text: string): string {
+  if (!SUSPECT.test(text)) return text;
   return cleanText(text).replace(/[\n\t]+/g, " ");
 }

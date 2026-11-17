@@ -90,6 +90,22 @@ describe("agents panel", () => {
     expect(all).toContain("session sc-20:");
   });
 
+  test("a rig with more agents than a page lists one page and a Show more button that lists the next", async () => {
+    const recorded = fixtureBody("get-v0-city-by-city-name-agents", "ok") as { items: Record<string, unknown>[]; total: number };
+    const template = recorded.items[0]!;
+    const extra = Array.from({ length: 30 }, (_, i) => ({ ...template, name: `frontend/extra-${i}`, display_name: "", rig: "frontend" }));
+    const items = [...recorded.items, ...extra];
+    const mod = await running({ route: gc({ "/v0/city/scratch/agents": { status: 200, body: { ...recorded, items, total: items.length } } }) });
+    const inFrontend = items.filter((a) => a.rig === "frontend").length;
+    expect(findById(mod.render(), "gascity-agent-0-19")).toBeDefined();
+    expect(findById(mod.render(), "gascity-agent-0-20")).toBeUndefined();
+    expect(text(mod.render(), "gascity-group-0-more")).toBe(`[Show ${Math.min(20, inFrontend - 20)} more · ${inFrontend - 20} not shown]`);
+    mod.click("gascity-group-0-more");
+    const root = mod.render();
+    expect(findById(root, `gascity-agent-0-${Math.min(40, inFrontend) - 1}`)).toBeDefined();
+    if (inFrontend <= 40) expect(findById(root, "gascity-group-0-more")).toBeUndefined();
+  });
+
   test("clicking a group collapses it", async () => {
     const mod = await running();
     mod.click("gascity-group-0");
