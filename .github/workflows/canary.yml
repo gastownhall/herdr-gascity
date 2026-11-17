@@ -28,14 +28,16 @@ name: Canary - Gas City end to end in the released herdr-app
 #           mirror (a miss fills from the network, sha256-checked, unsaved).
 #   targets checks that the private agent-UI target list designates this
 #           canary with stages it runs (canary/targets.ts). Main only, in the
-#           canary-targets environment: its App's contents:read token for the
-#           list's repo is the job's only credential (no token permissions).
+#           canary-targets environment: its App's token, read access to the
+#           list's single file and nothing else, is the job's only credential
+#           (no token permissions).
 #           It runs only this repo's targets.ts; the list goes to the
 #           runner's temp dir, is never printed or uploaded, and only
-#           targets.ts's lines (this canary's entry) leave the job.
+#           targets.ts's lines (this canary's entry) leave the job, as
+#           outputs only. Problems only in other entries keep it green.
 #   report  runs no downloaded code; it reads the results as JSON, writes
 #           the summary and files or updates one issue on a product failure,
-#           and one on a target-list mismatch.
+#           and one on a mismatch in this canary's own target-list entry.
 #
 # Triggers: nightly; weekly a soak of 5 sequential runs whose product-stage
 # flake rate goes to the summary; dispatched by types-drift.yml when a new
@@ -325,17 +327,21 @@ jobs:
           bun-version-file: .bun-version
           no-cache: true
 
-      - name: Token for the target list (contents:read, one repo)
+      # The App's only permission is Single file (read) on the list's path.
+      - name: Token for the target list (single file, read)
         id: token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.CANARY_TARGETS_APP_ID }}
+          client-id: ${{ vars.CANARY_TARGETS_CLIENT_ID }}
           private-key: ${{ secrets.CANARY_TARGETS_APP_KEY }}
           owner: gascity
           repositories: gas-city-inc
-          permission-contents: read
+          permission-single-file: read
 
       # The token goes to curl on stdin; the list goes to a file only.
+      # Anything but HTTP 200 with the raw media type is a fetch error: no -L,
+      # so a redirect is one too, and a directory or error body never reaches
+      # targets.ts to be misread as a list that does not parse.
       - name: Fetch the target list (never printed)
         env:
           TOKEN: ${{ steps.token.outputs.token }}
@@ -344,13 +350,18 @@ jobs:
         run: |
           mkdir -m 700 "${LIST%/*}"
           trap 'rc=$?; [[ $rc -eq 0 ]] || rm -f "$LIST"; exit "$rc"' EXIT
-          curl --fail --silent --show-error --proto '=https' --max-time 60 \
+          got=$(curl --fail --silent --show-error --proto '=https' --max-time 60 \
             -H @- -H 'Accept: application/vnd.github.raw+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
-            -o "$LIST" "$LIST_API" <<<"Authorization: Bearer $TOKEN"
+            -w '%{http_code} %{content_type}' -o "$LIST" "$LIST_API" <<<"Authorization: Bearer $TOKEN")
+          read -r code type <<<"$got"
+          [[ $code == 200 ]] || { echo "::error::fetching the target list returned HTTP ${code//[^0-9]/}, not 200"; exit 1; }
+          [[ $type =~ ^application/vnd\.github\.raw(\+json)?(;|$) ]] || { echo "::error::fetching the target list returned something other than the raw file"; exit 1; }
           [[ -s $LIST ]] || { echo "::error::the target list came back empty"; exit 1; }
 
-      # targets.ts prints only this canary's entry; exit 1 is a mismatch,
-      # anything else means it could not check.
+      # targets.ts prints only this canary's entry: exit 0 ok, 3 ok with
+      # problems only elsewhere in the list (green), 1 a mismatch in this
+      # canary's entry, anything else an error (it could not check). Its lines
+      # leave as an output only: report.sh checks them before they are shown.
       - name: Check this canary's entry
         id: check
         env:
@@ -359,11 +370,10 @@ jobs:
           trap 'rm -rf "${LIST%/*}"' EXIT
           rc=0
           report=$(bun canary/targets.ts --file "$LIST") || rc=$?
-          case $rc in 0) status=ok ;; 1) status=mismatch ;; *) status=error ;; esac
-          [[ -z $report ]] || printf '%s\n' "$report"
+          case $rc in 0) status=ok ;; 3) status=ok-others ;; 1) status=mismatch ;; *) status=error ;; esac
           delim=EOF_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
           { echo "status=$status"; echo "report<<$delim"; printf '%s\n' "$report"; echo "$delim"; } >>"$GITHUB_OUTPUT"
-          [[ $status == ok ]] || { echo "::error::target list check: $status"; exit 1; }
+          case $status in ok | ok-others) ;; *) echo "::error::target list check: $status"; exit 1 ;; esac
 
   report:
     name: Report

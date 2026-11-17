@@ -9,8 +9,12 @@
 // counted, never quoted, and a parse error quotes nothing from the file.
 //
 // CLI: bun canary/targets.ts --file <list.toml> [--workflow .github/workflows/canary.yml]
-// exits 0 when the entry checks out, 1 on any problem in the list, 2 when it
-// cannot check (a usage error, a file it cannot read).
+// exits (EXIT) 0 when the whole list checks out; 3 when this canary's entry
+// checks out but other entries or the list as a whole have problems (not this
+// canary's to report: the list's own repository tests those); 1 when this
+// canary's own entry has a problem or is missing; 2 when it cannot check (a
+// usage error, a file it cannot read, a list that does not parse, so whose
+// entry is at fault is unknown).
 
 import { readFileSync } from "node:fs";
 
@@ -163,6 +167,20 @@ export function checkCanaryEntry(list: TargetList, me: Canary): EntryCheck {
   return { ui: ui.id, lane: ui.job.lane, steps: Object.keys(ui.job.stages).length, findings };
 }
 
+/** The check's outcome for this canary; see the CLI's exit codes. */
+export type Verdict = "ok" | "ok-others" | "mismatch" | "unchecked";
+
+/** The CLI's exit code for each verdict. */
+export const EXIT: Readonly<Record<Verdict, number>> = { ok: 0, mismatch: 1, unchecked: 2, "ok-others": 3 };
+
+/** Whose problem the list has: none, only others', this canary's own, or unknown (it does not parse). */
+export function verdict(parsed: Parsed, me: Canary): Verdict {
+  if (parsed.list === null) return "unchecked";
+  const check = checkCanaryEntry(parsed.list, me);
+  if (check.ui === null || check.findings.length > 0 || parsed.errors.some((e) => e.ui === check.ui)) return "mismatch";
+  return parsed.errors.length > 0 ? "ok-others" : "ok";
+}
+
 /** What may go to a public log: this canary's entry and counts, nothing else from the list. */
 export function publicReport(parsed: Parsed, me: Canary): string[] {
   if (parsed.list === null) return parsed.errors.map((e) => `target list: ${e.message}`);
@@ -207,7 +225,7 @@ if (import.meta.main) {
   const workflow = flag("--workflow") ?? ".github/workflows/canary.yml";
   if (file === undefined) {
     console.error("usage: bun canary/targets.ts --file <list.toml> [--workflow .github/workflows/canary.yml]");
-    process.exit(2);
+    process.exit(EXIT.unchecked);
   }
   let me: Canary;
   let text: string;
@@ -216,11 +234,9 @@ if (import.meta.main) {
     text = read(file, "the target list");
   } catch (e) {
     console.error(`targets: ${(e as Error).message}`);
-    process.exit(2);
+    process.exit(EXIT.unchecked);
   }
   const parsed = parseTargetList(text);
-  const lines = publicReport(parsed, me);
-  for (const l of lines) console.log(l);
-  const ok = parsed.errors.length === 0 && parsed.list !== null && checkCanaryEntry(parsed.list, me).findings.length === 0;
-  process.exit(ok ? 0 : 1);
+  for (const l of publicReport(parsed, me)) console.log(l);
+  process.exit(EXIT[verdict(parsed, me)]);
 }

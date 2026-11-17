@@ -7,7 +7,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkCanaryEntry, parseTargetList, publicReport } from "../../../canary/targets.ts";
+import { checkCanaryEntry, parseTargetList, publicReport, verdict } from "../../../canary/targets.ts";
 
 const STAGES = ["preflight", "install-app", "install-mod", "discover", "session", "output", "attach", "keyboard", "bead-input", "bead-closed", "authority"];
 const ME = { repo: "gastownhall/herdr-gascity", workflow: ".github/workflows/canary.yml", stages: STAGES };
@@ -117,6 +117,28 @@ describe("publicReport", () => {
   });
 });
 
+describe("verdict", () => {
+  test("ok when nothing anywhere is wrong", () => {
+    expect(verdict(parseTargetList(LIST), ME)).toBe("ok");
+  });
+
+  test("ok-others when this canary's entry checks out but another entry or the list as a whole does not", () => {
+    expect(verdict(parseTargetList(mutate('job = "no job yet"', 'job = "soon"')), ME)).toBe("ok-others");
+    expect(verdict(parseTargetList(mutate('owner = "owner@example.com"', 'owner = "nobody"')), ME)).toBe("ok-others");
+  });
+
+  test("mismatch for a problem in this canary's own entry, or no entry at all", () => {
+    expect(verdict(parseTargetList(mutate('session = ["session", "attach"]', 'session = ["session", "pane"]')), ME)).toBe("mismatch");
+    expect(verdict(parseTargetList(mutate('lane = "latest-release"', 'lane = "nightly"')), ME)).toBe("mismatch");
+    expect(verdict(parseTargetList(mutate('workflow = ".github/workflows/canary.yml"', 'workflow = ".github/workflows/other.yml"')), ME)).toBe("mismatch");
+  });
+
+  test("unchecked when the list does not parse: this canary cannot tell whose entry is at fault", () => {
+    expect(verdict(parseTargetList('owner = "secret value\n'), ME)).toBe("unchecked");
+    expect(verdict(parseTargetList("x = 1979-05-27\n"), ME)).toBe("unchecked");
+  });
+});
+
 describe("the CLI (the canary workflow's targets job)", () => {
   const dir = mkdtempSync(join(tmpdir(), "canary-targets-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -147,12 +169,32 @@ describe("the CLI (the canary workflow's targets job)", () => {
     expect(r.out).toBe('target list: step "session" maps to stage "pane", which this canary does not run\n');
   });
 
-  test("a problem in another entry: exit 1, counted and never quoted", () => {
-    const r = cli(LIST.replace('job = "no job yet"', 'job = "soon"'));
+  test("a problem in this canary's own entry other than a stage: exit 1", () => {
+    const r = cli(LIST.replace('lane = "latest-release"', 'lane = "nightly"'));
+    expect(r).toEqual({ code: 1, out: "target list: herdr-app: lane must be latest-release or main\n", err: "" });
+  });
+
+  test("no entry designates this canary: exit 1", () => {
+    const r = cli(LIST.replace('workflow = ".github/workflows/canary.yml"', 'workflow = ".github/workflows/other.yml"'));
     expect(r.code).toBe(1);
+    expect(r.out).toBe("target list: no UI on the list designates gastownhall/herdr-gascity .github/workflows/canary.yml as its job\n");
+  });
+
+  test("a problem only in another entry: exit 3, this entry's line plus a count, never quoted", () => {
+    const r = cli(LIST.replace('job = "no job yet"', 'job = "soon"'));
+    expect(r).toEqual({
+      code: 3,
+      out: "target list: herdr-app, lane latest-release, 3 steps mapped onto this canary's stages\ntarget list: 1 problem in other entries (not shown: the list is private)\n",
+      err: "",
+    });
     expect(r.out).not.toContain("ui-b");
-    expect(r.out).not.toContain("owner@example.com");
+  });
+
+  test("a problem in the list outside any entry: exit 3, counted and never quoted", () => {
+    const r = cli(LIST.replace('owner = "owner@example.com"', 'owner = "nobody"'));
+    expect(r.code).toBe(3);
     expect(r.out).toContain("target list: 1 problem in other entries (not shown: the list is private)");
+    expect(r.out).not.toContain("nobody");
   });
 
   test("a list it cannot read: exit 2 with one line, no stack and nothing from the file", () => {
@@ -162,8 +204,8 @@ describe("the CLI (the canary workflow's targets job)", () => {
     expect(r.err).toBe("targets: could not read the target list (ENOENT)\n");
   });
 
-  test("a list that is not TOML: exit 1, and nothing from it is printed", () => {
+  test("a list that is not TOML: exit 2 (whose fault is unknown), and nothing from it is printed", () => {
     const r = cli('owner = "secret value\n');
-    expect(r).toEqual({ code: 1, out: "target list: the target list is not valid TOML\n", err: "" });
+    expect(r).toEqual({ code: 2, out: "target list: the target list is not valid TOML\n", err: "" });
   });
 });

@@ -2,8 +2,8 @@
 # report.sh: the canary workflow's report job (.github/workflows/canary.yml).
 # Writes the job summary from each planned run's canary-result.json, the
 # soak's product-stage flake rate, the targets job's check of the private
-# target list, and on a product failure or a target-list mismatch files or
-# updates one issue for each.
+# target list, and on a product failure or a mismatch in this canary's own
+# target-list entry files or updates one issue for each.
 #
 # The results come from jobs that run downloaded code, so nothing in them is
 # trusted:
@@ -19,12 +19,15 @@
 #
 # The targets job's report is targets.ts's output, which names only this
 # canary's entry (the list is private): it is used only when every line is
-# one targets.ts writes and its status agrees with the job's result.
+# one targets.ts writes and its status agrees with the job's result. Problems
+# only in other entries (ok-others) and a list that does not parse (error)
+# file nothing: they are not this canary's entry, or not known to be.
 #
 # Environment: RESULTS (the download directory), PLANNED (JSON array of run
 # numbers), ATTEMPT, CANARY_STAGES, SOAK, EVENT, REASON, RUN_URL, REPO, REF,
 # DEFAULT_BRANCH, GITHUB_STEP_SUMMARY, TARGETS (the targets job's result),
-# TARGETS_STATUS (ok, mismatch, error or empty), TARGETS_REPORT (its lines);
+# TARGETS_STATUS (ok, ok-others, mismatch, error or empty), TARGETS_REPORT
+# (its lines);
 # gh reads GH_TOKEN.
 set -euo pipefail
 
@@ -101,20 +104,29 @@ product=$(jq '[.[] | select(.state == "ok" and .r.product_failure)] | length' <<
 rc=0
 (( unreadable == 0 )) || rc=1
 
-# The target list: targets is ok, mismatch, unchecked, incomplete or unreadable.
+# The target list: targets is ok, ok-others (this entry checks out, others
+# do not), mismatch, unparsed (an error with targets.ts's line: the list does
+# not parse), late (the check passed, a later step failed), unchecked,
+# incomplete or unreadable.
 treport=$(printf '%s' "${TARGETS_REPORT:-}") # without trailing newlines
 targets=unreadable
 case ${TARGETS:?}:${TARGETS_STATUS:-} in
   skipped:*) targets=unchecked ;;
   success:ok) targets=ok ;;
+  success:ok-others) targets=ok-others ;;
   failure:mismatch) targets=mismatch ;;
-  failure:error | failure: | cancelled:*) targets=incomplete ;;
+  failure:ok | failure:ok-others) targets=late ;;
+  failure:error) [[ -n $treport ]] && targets=unparsed || targets=incomplete ;;
+  failure: | cancelled:*) targets=incomplete ;;
 esac
-if [[ $targets == ok || $targets == mismatch ]]; then
+if [[ $targets != unchecked && $targets != incomplete && $targets != unreadable ]]; then
   [[ -n $treport ]] || targets=unreadable
   while IFS= read -r line; do
     [[ $line =~ ^target\ list:\ [\ -~]+$ && $line != *'`'* && $line != *@* ]] || targets=unreadable
   done <<<"$treport"
+fi
+if [[ $targets == ok-others ]]; then
+  grep -Eq '^target list: [0-9]+ problems? in other entries ' <<<"$treport" || targets=unreadable
 fi
 {
   echo
@@ -125,7 +137,12 @@ fi
     incomplete) echo "**The check did not complete (${TARGETS})**: see the targets job." ;;
     unreadable) echo "**The targets job's report could not be read**: see the targets job." ;;
     *)
-      [[ $targets == ok ]] || echo "**This canary's entry on the target list does not check out.**"
+      case $targets in
+        ok-others) echo "This canary's entry checks out. The problems elsewhere in the list are not this canary's to report: no issue is filed." ;;
+        mismatch) echo "**This canary's entry on the target list does not check out.**" ;;
+        unparsed) echo "**The target list could not be checked**: it does not parse, so this canary cannot tell whose entry is at fault. No issue is filed; see the targets job." ;;
+        late) echo "**The check passed, but a later step in the targets job failed**: see the targets job." ;;
+      esac
       printf '%s\n%s\n%s\n' "$FENCE" "$treport" "$FENCE"
       ;;
   esac

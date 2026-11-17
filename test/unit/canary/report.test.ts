@@ -5,7 +5,9 @@
 // updates one issue on a product failure: only on the default branch, and
 // only an issue this workflow filed (its label and the Actions bot as author).
 // The targets job's report (the private target list, checked by targets.ts)
-// goes to the summary, and a mismatch files its own issue the same way.
+// goes to the summary; a mismatch in this canary's own entry files its own
+// issue the same way, while problems only elsewhere in the list, or a list that
+// does not parse, file nothing.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
@@ -168,6 +170,8 @@ describe("the target list", () => {
   const TARGETS_TITLE = "Nightly canary: target list mismatch";
   const OK = "target list: herdr-app, lane main, 6 steps mapped onto this canary's stages";
   const MISMATCH = 'target list: step "live" maps to stage "pane", which this canary does not run\ntarget list: 1 problem in other entries (not shown: the list is private)';
+  const OTHERS = OK + "\ntarget list: 2 problems in other entries (not shown: the list is private)";
+  const UNPARSED = "target list: the target list is not valid TOML";
   const checked = (TARGETS: string, TARGETS_STATUS: string, TARGETS_REPORT: string) => ({ TARGETS, TARGETS_STATUS, TARGETS_REPORT });
 
   test("not checked off main: the summary says so and nothing is filed", () => {
@@ -185,6 +189,47 @@ describe("the target list", () => {
     expect(r.code).toBe(0);
     expect(r.summary).toContain("```\n" + OK + "\n```");
     expect(r.gh).toEqual([]);
+  });
+
+  test("this entry checks out but other entries do not: the lines go to the summary, nothing is filed or commented", () => {
+    writeFileSync(join(root, "issues.json"), JSON.stringify([{ number: 12, title: TARGETS_TITLE, user: { login: BOT } }]));
+    put("", result());
+    const r = run([1], checked("success", "ok-others", OTHERS));
+    expect(r.code).toBe(0);
+    expect(r.summary).toContain("```\n" + OTHERS + "\n```");
+    expect(r.summary).toContain("This canary's entry checks out. The problems elsewhere in the list are not this canary's to report: no issue is filed.");
+    expect(r.summary).not.toContain("does not check out");
+    expect(r.gh).toEqual([]);
+  });
+
+  test("ok-others without the count line is refused unquoted", () => {
+    put("", result());
+    const r = run([1], checked("success", "ok-others", OK));
+    expect(r.code).toBe(1);
+    expect(r.summary).toContain("**The targets job's report could not be read**: see the targets job.");
+    expect(r.gh).toEqual([]);
+  });
+
+  test("a list that does not parse: an error in the summary, with its line, and nothing filed", () => {
+    put("", result());
+    const r = run([1], checked("failure", "error", UNPARSED));
+    expect(r.code).toBe(0);
+    expect(r.summary).toContain("**The target list could not be checked**: it does not parse, so this canary cannot tell whose entry is at fault. No issue is filed; see the targets job.");
+    expect(r.summary).toContain("```\n" + UNPARSED + "\n```");
+    expect(r.summary).not.toContain("does not check out");
+    expect(r.gh).toEqual([]);
+  });
+
+  test("the check passed but a later step failed: said so, its lines shown, and nothing filed", () => {
+    for (const [status, lines] of [["ok", OK], ["ok-others", OTHERS]] as const) {
+      put("", result());
+      const r = run([1], checked("failure", status, lines));
+      expect({ status, code: r.code }).toEqual({ status, code: 0 });
+      expect(r.summary).toContain("**The check passed, but a later step in the targets job failed**: see the targets job.");
+      expect(r.summary).toContain("```\n" + lines + "\n```");
+      expect(r.gh).toEqual([]);
+      rmSync(join(root, "summary.md"), { force: true });
+    }
   });
 
   test("a mismatch on the default branch files its own labelled issue with the public lines only", () => {
@@ -243,7 +288,9 @@ describe("the target list", () => {
       checked("failure", "mismatch", "target list: ```\n@someone"),
       checked("failure", "mismatch", "not a targets line"),
       checked("success", "mismatch", MISMATCH),
-      checked("failure", "ok", OK),
+      checked("success", "error", UNPARSED),
+      checked("failure", "error", "target list: ```\n@someone"),
+      checked("failure", "ok", "not a targets line"),
       checked("success", "bogus", OK),
       checked("success", "ok", ""),
     ]) {

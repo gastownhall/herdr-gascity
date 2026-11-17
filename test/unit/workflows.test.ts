@@ -10,7 +10,9 @@
 //     write contents; a tag must be on main.
 
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const DIR = join(import.meta.dir, "../../.github/workflows");
@@ -263,15 +265,16 @@ describe("canary.yml", () => {
       for (const s of j.steps) expect(s.run ?? "").not.toMatch(/bun (install|add|x)\b|bunx|npm|npx|pip|go (run|install)|curl[^\n]*\| *(ba)?sh/);
     });
 
-    test("mints a contents:read token for the list's repo only, from the environment's App", async () => {
+    test("mints a single-file read token for the list's repo only, from the environment's App", async () => {
       const app = (await targets()).steps.find((s) => s.uses?.startsWith("actions/create-github-app-token@"))!;
       expect(app.uses).toMatch(/^actions\/create-github-app-token@[0-9a-f]{40}$/);
+      expect(app.name).toBe("Token for the target list (single file, read)");
       expect(app.with).toEqual({
-        "app-id": "${{ vars.CANARY_TARGETS_APP_ID }}",
+        "client-id": "${{ vars.CANARY_TARGETS_CLIENT_ID }}",
         "private-key": "${{ secrets.CANARY_TARGETS_APP_KEY }}",
         owner: "gascity",
         repositories: "gas-city-inc",
-        "permission-contents": "read",
+        "permission-single-file": "read",
       });
     });
 
@@ -293,6 +296,87 @@ describe("canary.yml", () => {
         // The list is private: never printed, copied or uploaded.
         expect(s.run).not.toMatch(/\b(cat|head|tail|less|cp|mv|tee)\b[^\n]*\$LIST|GITHUB_STEP_SUMMARY/);
       }
+    });
+
+    // Runs a step's script as Actions does (bash -e), with stubs first on PATH.
+    function runStep(script: string, stubs: Record<string, string>, env: Record<string, string>) {
+      const root = mkdtempSync(join(tmpdir(), "canary-targets-step-"));
+      try {
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        for (const [name, body] of Object.entries(stubs)) {
+          writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`);
+          chmodSync(join(bin, name), 0o755);
+        }
+        const out = join(root, "output");
+        writeFileSync(out, "");
+        const list = join(root, "targets", "list.toml");
+        const p = Bun.spawnSync(["bash", "-e", "-c", script], {
+          env: { PATH: `${bin}:${process.env["PATH"]}`, GITHUB_OUTPUT: out, LIST: list, TOKEN: "t0ken", LIST_API: "https://api.example/x", ...env },
+        });
+        let listed: string | null = null;
+        try {
+          listed = readFileSync(list, "utf8");
+        } catch {
+          listed = null;
+        }
+        return { code: p.exitCode, stdout: p.stdout.toString(), output: readFileSync(out, "utf8"), list: listed, root };
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+
+    describe("the fetch step", () => {
+      // A curl that writes BODY to -o's file and prints WROTE as its -w output; exits CURL_RC.
+      const CURL = 'o=""; while (($#)); do [[ $1 == -o ]] && o=$2; shift; done; cat >/dev/null; printf %s "$BODY" >"$o"; printf %s "$WROTE"; exit "${CURL_RC:-0}"';
+      const fetch = async () => (await runs())[0]!.run!;
+
+      test("the raw file with HTTP 200 is kept", async () => {
+        const r = runStep(await fetch(), { curl: CURL }, { BODY: "a = 1\n", WROTE: "200 application/vnd.github.raw+json; charset=utf-8" });
+        expect(r.code).toBe(0);
+        expect(r.list).toBe("a = 1\n");
+      });
+
+      test("a redirect, another media type (a directory's JSON), an HTTP error or an empty file is a fetch error and leaves no file", async () => {
+        const cases: Record<string, string>[] = [
+          { BODY: "", WROTE: "302 text/html" },
+          { BODY: "[]", WROTE: "200 application/json; charset=utf-8" },
+          { BODY: "{}", WROTE: "404 application/json", CURL_RC: "22" },
+          { BODY: "", WROTE: "200 application/vnd.github.raw+json" },
+        ];
+        for (const env of cases) {
+          const r = runStep(await fetch(), { curl: CURL }, env);
+          expect({ env, failed: r.code !== 0, list: r.list }).toEqual({ env, failed: true, list: null });
+          if (env["CURL_RC"] === undefined) expect(r.stdout).toStartWith("::error::");
+        }
+      });
+
+      test("does not follow redirects", async () => {
+        expect(await fetch()).not.toMatch(/\s(-L|--location)\b/);
+      });
+    });
+
+    describe("the check step", () => {
+      const BUN = 'printf "%s" "$LINES"; exit "$RC"';
+      const check = async () => (await runs())[1]!.run!;
+      const LINE = "target list: herdr-app, lane main, 6 steps mapped onto this canary's stages";
+
+      test("maps targets.ts's exit to a status: 0 ok and 3 ok-others pass; 1 mismatch and 2 error fail", async () => {
+        for (const [rc, status, code] of [["0", "ok", 0], ["3", "ok-others", 0], ["1", "mismatch", 1], ["2", "error", 1], ["70", "error", 1]] as const) {
+          const r = runStep(await check(), { bun: BUN }, { RC: rc, LINES: LINE + "\n" });
+          expect({ rc, code: r.code }).toEqual({ rc, code });
+          expect({ rc, status: r.output.match(/^status=(.*)$/m)?.[1] }).toEqual({ rc, status });
+          expect(r.output).toContain(`\n${LINE}\n`);
+        }
+      });
+
+      test("never prints the report to the log: it leaves only as an output, for report.sh to check first", async () => {
+        const r = runStep(await check(), { bun: BUN }, { RC: "1", LINES: "::warning::target list: @someone\n" });
+        expect(r.stdout).not.toContain("@someone");
+        expect(r.stdout).toBe("::error::target list check: mismatch\n");
+        const ok = runStep(await check(), { bun: BUN }, { RC: "0", LINES: LINE + "\n" });
+        expect(ok.stdout).toBe("");
+      });
     });
 
     test("uploads nothing and touches no cache", async () => {
