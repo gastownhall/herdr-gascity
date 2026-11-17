@@ -500,8 +500,11 @@ never the agent or session lists.
 
 A row opens the **Needs you** tab (`props: {view: "follow"}`) on it, or
 selects the open one, which follows the newest row clicked as the "needs
-you" window follows toasts: a question shows its prompt and answer buttons;
-a decision shows the bead with Close… and Sling…. A toast still opens the
+you" window follows toasts. Answer on a question opens the session's
+terminal (Open terminal: `gc session attach`, waking it first only if gc
+says it is not running). Resolve… on a decision does the same for the
+bead's assignee when that is one of the city's sessions; otherwise it shows
+the bead with Close… and Sling…. A toast still opens the
 window (a toast's action can only be `mod.open`). These tabs hold only the
 mod: their `tab.new` passes no argv, and the authority lint allows that
 call only as written. The city tab's own "Needs a human" section lists the

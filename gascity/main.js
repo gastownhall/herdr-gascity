@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:88f84581eba64e17582395fef97944c21a1dc2ac592b13e7cbb827a08b7119a3 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:098150626bdeab3db3ae6a01aaa69235deca633ecc160d901e783ef87b213f4d over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -2846,6 +2846,7 @@ function decodeFocus(value) {
   if (!isText(city) || !isCount(seq) || !isCount(at3)) return null;
   if (isText(session) && bead === void 0 && attach === true) return { city, session, attach: true, seq, at: at3 };
   if (isText(session) && bead === void 0 && attach === void 0) return { city, session, seq, at: at3 };
+  if (isText(bead) && session === void 0 && attach === true) return { city, bead, attach: true, seq, at: at3 };
   if (isText(bead) && session === void 0 && attach === void 0) return { city, bead, seq, at: at3 };
   return null;
 }
@@ -8235,17 +8236,33 @@ var CopyController = class {
     this.followFocus();
   }
   /** Shows a bead's detail in this copy (the window's target from the sidebar or the Needs a human pane). */
-  focusBead(city, bead) {
+  focusBead(city, bead, attach = false) {
     const pinned = this.deps.discovery.machine.copy.pinned;
     if (pinned !== null && pinned !== city) {
       this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
       return;
     }
     if (!this.checkCity(city)) return;
-    this.focusing = { city, bead, since: this.deps.clock.now() };
+    this.focusing = { city, bead, ...attach ? { attach: true } : {}, since: this.deps.clock.now() };
     this.followFocus();
   }
   /** A session by gc's id, or by its exact alias or session name when exactly one session has it; else says why not. */
+  /**
+   * The session that owns a bead waiting on a decision: its assignee, when
+   * that names exactly one of the city's sessions (by id, alias or session
+   * name) that is not closing. Null otherwise (most such beads are unassigned).
+   */
+  ownerSession(beadId) {
+    const s = this.city?.snapshot();
+    const bead = s?.human.value?.items.find((b) => b.id === beadId) ?? s?.beads.get(beadId)?.value ?? null;
+    const ref = bead?.assignee;
+    if (!ref || !s?.sessions.value) return null;
+    const live = s.sessions.value.items.filter((x) => !["closing", "closed", "archived", "drained", "draining"].includes(x.state));
+    const byId = live.find((x) => x.id === ref);
+    if (byId) return byId.id;
+    const named = live.filter((x) => x.alias === ref || x.session_name === ref);
+    return named.length === 1 && named[0] ? named[0].id : null;
+  }
   resolveSession(ref) {
     const items = this.city?.snapshot().sessions.value?.items;
     if (!items) {
@@ -8290,7 +8307,8 @@ var CopyController = class {
       const t = focusToApply(this.deps.host.focusTarget(), this.focusApplied, now);
       if (t !== null) {
         this.focusApplied = t.seq;
-        this.focusNext = t.bead !== void 0 ? { city: t.city, bead: t.bead } : { city: t.city, session: t.session ?? "", ...t.attach ? { attach: true } : {} };
+        const attach = t.attach ? { attach: true } : {};
+        this.focusNext = t.bead !== void 0 ? { city: t.city, bead: t.bead, ...attach } : { city: t.city, session: t.session ?? "", ...attach };
       }
       const n = this.focusNext;
       const shown = this.focusShown;
@@ -8302,7 +8320,19 @@ var CopyController = class {
     const { discovery } = this.deps;
     if (selectedCity(discovery.machine.state) !== f.city) discovery.select(f.city);
     if (f.bead !== void 0 && this.city?.key.city === f.city) {
+      const s = this.city.snapshot();
+      if (f.attach && (s.sessions.value === null || s.human.value === null)) {
+        if (now - f.since <= FOCUS_WAIT_MS) return;
+      }
       this.focusing = null;
+      const owner = f.attach ? this.ownerSession(f.bead) : null;
+      if (owner !== null) {
+        this.selectBead(null);
+        this.selectSession(owner);
+        this.focusShown = { city: f.city, session: owner };
+        this.openTerminal(owner);
+        return;
+      }
       this.selectSession(null);
       this.selectBead(f.bead);
       this.focusShown = { city: f.city, bead: f.bead };
@@ -8329,7 +8359,7 @@ var CopyController = class {
     const n = this.focusNext;
     this.focusNext = null;
     if (n === null) return;
-    if (n.bead !== void 0) this.focusBead(n.city, n.bead);
+    if (n.bead !== void 0) this.focusBead(n.city, n.bead, n.attach === true);
     else this.focusSession(n.city, n.session ?? "", n.attach === true);
   }
   windowModel() {
@@ -10908,7 +10938,7 @@ function crossActionsFor(state) {
       cx.notify();
     },
     openDecision: (city, bead, cx) => {
-      report(openNeedsTab(city, { bead }));
+      report(openNeedsTab(city, { bead, attach: true }));
       cx.notify();
     },
     openInbox: (cx) => {

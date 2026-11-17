@@ -129,3 +129,27 @@ describe("Answer", () => {
     expect(mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new")).toHaveLength(1);
   });
 });
+
+describe("Resolve… on a decision", () => {
+  const ATTACH = ["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET", "gc", "--city", "/scratch/city", "session", "attach", "sc-6"];
+  const tabNews = (mod: Awaited<ReturnType<typeof running>>) =>
+    mod.herdrCalls.filter((c) => c.name === "run" && c.args[0] === "tab.new").map((c) => (c.args[1] as { argv?: string[] }).argv);
+
+  test("a decision whose assignee is one of the city's sessions opens that session's terminal", async () => {
+    const assigned = { items: [{ id: "sc-90", title: "Approve the release checklist", status: "open", issue_type: "decision", labels: [], created_at: "2026-11-09T06:24:47Z", assignee: "sc-6" }], total: 1 };
+    const mod = await running({ route: gc({ "/v0/city/scratch/beads": { status: 200, body: assigned } }), props: { view: "follow" } }, 4);
+    mod.shared.set(FOCUS_KEY, { city: "scratch", bead: "sc-90", attach: true, seq: 6, at: mod.clock.t });
+    for (let i = 0; i < 8; i++) await mod.tick();
+    expect(tabNews(mod)).toEqual([ATTACH]);
+  });
+
+  test("an unassigned decision shows the bead, with Close… and Sling…", async () => {
+    const mod = await running({ route: route(), props: { view: "follow" } }, 4);
+    mod.shared.set(FOCUS_KEY, { city: "scratch", bead: "sc-90", attach: true, seq: 6, at: mod.clock.t });
+    for (let i = 0; i < 8; i++) await mod.tick();
+    expect(tabNews(mod)).toEqual([]);
+    const root = mod.render();
+    expect(text(root, "gascity-window-target")).toBe("Needs a decision: bead sc-90 in city scratch");
+    expect(findById(root, "gascity-bead-actions")).toBeDefined();
+  });
+});

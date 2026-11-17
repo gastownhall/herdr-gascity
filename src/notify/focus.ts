@@ -21,7 +21,11 @@ export interface FocusTarget {
   /** Exactly one of session and bead is set. */
   session?: string;
   bead?: string;
-  /** With a session: also open its terminal (Answer: `gc session attach`). */
+  /**
+   * Answer: with a session, open its terminal (`gc session attach`); with a
+   * bead, open its assignee's terminal when the assignee is one of the
+   * city's sessions, else show the bead.
+   */
   attach?: true;
   seq: number;
   /** When it was written (ms since the epoch). */
@@ -39,12 +43,13 @@ export function decodeFocus(value: unknown): FocusTarget | null {
   if (!isText(city) || !isCount(seq) || !isCount(at)) return null;
   if (isText(session) && bead === undefined && attach === true) return { city, session, attach: true, seq, at };
   if (isText(session) && bead === undefined && attach === undefined) return { city, session, seq, at };
+  if (isText(bead) && session === undefined && attach === true) return { city, bead, attach: true, seq, at };
   if (isText(bead) && session === undefined && attach === undefined) return { city, bead, seq, at };
   return null;
 }
 
 /** What a target points at. */
-export type FocusWhat = { session: string; attach?: true } | { bead: string };
+export type FocusWhat = { session: string; attach?: true } | { bead: string; attach?: true };
 
 /** The next target after `current` (the shared value as read): a session by default, or `what`. */
 export function nextFocus(current: unknown, city: string, what: string | FocusWhat, now: number): FocusTarget {
