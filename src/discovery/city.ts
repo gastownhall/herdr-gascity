@@ -99,6 +99,14 @@ export function decodeCopy(props: unknown, lastSelection: string | null): Result
   return ok({ pinned: city, lastSelection });
 }
 
+/** What a copy shows, from props().view: "sidebar" (the cross-city sidebar block), "inbox" (the Needs a human pane), else a city. */
+export function decodeView(props: unknown): Result<"tab" | "sidebar" | "inbox", GcError> {
+  if (typeof props !== "object" || props === null || Array.isArray(props) || !Object.hasOwn(props, "view")) return ok("tab");
+  const view: unknown = (props as Record<string, unknown>)["view"];
+  if (view === "sidebar" || view === "inbox" || view === "tab") return ok(view);
+  return err({ kind: "host-decode", api: PROPS_API, path: "view", issues: [`view: expected "sidebar", "inbox" or "tab", got ${JSON.stringify(view)}`] });
+}
+
 /** A copy that has not discovered anything yet. */
 export function initialMachine(copy: CopyContext): CityMachine {
   return { copy, state: { phase: "discovering" } };

@@ -404,6 +404,7 @@ export function fakeHerdr(options: FakeHostOptions = {}, router = new CommandRou
     nextCommand: () => router.next(),
     run: () => null,
     closeOverlay: () => null,
+    openOverlay: () => "overlay-1",
     home: () => FAKE_HOME,
     readTextFile: (path) => {
       if (options.readTextFileRejects !== undefined) return Promise.reject(new Error(options.readTextFileRejects));

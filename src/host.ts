@@ -11,7 +11,7 @@ import { GC_STATUS_ARGS } from "./discovery/gcStatus.ts";
 import { SETTINGS_KEY, gcBinIssue, patchSettings } from "./discovery/settings.ts";
 import { decodeFocused, decodePanes, decodeScene, layoutModNames, type HostDecodeError, type HostScene } from "./host.schemas.ts";
 import { openUrlIssue, probeDir, probePathIssue } from "./hostGuards.ts";
-import { FOCUS_KEY, nextFocus } from "./notify/focus.ts";
+import { FOCUS_KEY, nextFocus, type FocusWhat } from "./notify/focus.ts";
 import { summaryText, toastText, type NeedsYou, type NeedsYouBatch } from "./notify/needsYou.ts";
 import { windowFlag, windowOpenAt } from "./notify/window.ts";
 import type { ProbeIo } from "./probe.ts";
@@ -215,6 +215,40 @@ export function postNeedsYou(batch: NeedsYouBatch): { failed: NeedsYou[]; errors
   return { failed, errors };
 }
 
+/**
+ * Opens the "needs you" window on a session's question or a bead (the
+ * sidebar's and the Needs a human pane's rows): writes the shared focus
+ * target, which an open window follows, and opens the window when it is
+ * not open (mod.open toggles, so never while it is).
+ */
+export function openNeedsWindow(city: string, what: FocusWhat): Result<null, GcError> {
+  try {
+    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), city, what, Date.now()));
+    if (!readWindowOpen()) {
+      logRecord("run", ["mod.open", MOD_NAME]);
+      herdr.run("mod.open", { name: MOD_NAME });
+    }
+    return ok(null);
+  } catch (cause) {
+    return err({ kind: "host-call", api: "run(mod.open)", cause: messageOf(cause) });
+  }
+}
+
+/** The Needs a human pane's window key: opening it again brings back the one open, in its place. */
+export const INBOX_WINDOW_KEY = "gascity-inbox";
+
+/** Opens the Needs a human pane (a window running this mod with props {view: "inbox"}). */
+export function openInboxPane(): Result<null, GcError> {
+  try {
+    if (typeof herdr.openOverlay !== "function") return err({ kind: "host-call", api: "openOverlay", cause: "this herdr-app cannot open mod windows" });
+    logRecord("run", ["openOverlay", MOD_NAME, "inbox"]);
+    herdr.openOverlay({ mod: MOD_NAME, props: { view: "inbox" }, kind: "window", key: INBOX_WINDOW_KEY, width: 0.6, height: 0.7 });
+    return ok(null);
+  } catch (cause) {
+    return err({ kind: "host-call", api: "openOverlay", cause: messageOf(cause) });
+  }
+}
+
 /** Selects a tab: one holding a Gas City pane (the window's "Show Gas City tab"), or one still running an attach. */
 export function selectTab(id: string): Result<null, GcError> {
   logRecord("run", ["tab.select", id]);
@@ -395,6 +429,42 @@ const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
 function isColor(value: string): value is GpuiColor {
   return HEX_COLOR.test(value);
+}
+
+/** Colours for the cross-city views' health dots and badges: the first the theme has of each list; none is required. */
+export interface StatusColors {
+  ok?: GpuiColor;
+  warn?: GpuiColor;
+  bad?: GpuiColor;
+  dim?: GpuiColor;
+  hover?: GpuiColor;
+}
+
+const STATUS_COLOR_NAMES: Record<keyof StatusColors, readonly string[]> = {
+  ok: ["green", "success"],
+  warn: ["yellow", "warning"],
+  bad: ["red", "error", "blocked"],
+  dim: ["dim", "muted"],
+  hover: ["hover"],
+};
+
+/** Used when the theme names no such colour: health reads green, amber, red whatever the theme. */
+const STATUS_COLOR_DEFAULTS: StatusColors = { ok: "#3fb950", warn: "#d29922", bad: "#f85149", dim: "#8b949e" };
+
+/** The theme's status colours (sidebar.ts); a theme without one leaves it unset. */
+export function readStatusColors(): StatusColors {
+  const theme = herdr.theme();
+  const out: StatusColors = { ...STATUS_COLOR_DEFAULTS };
+  for (const key of Object.keys(STATUS_COLOR_NAMES) as (keyof StatusColors)[]) {
+    for (const name of STATUS_COLOR_NAMES[key]) {
+      const v = Object.hasOwn(theme, name) ? theme[name] : undefined;
+      if (v !== undefined && isColor(v)) {
+        out[key] = v;
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /** Reads the current theme. Call only after `missingHostExports()` came back empty. */

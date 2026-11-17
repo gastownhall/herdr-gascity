@@ -37,6 +37,7 @@ import { FetchBudget, type BudgetStats } from "./budget.ts";
 import { systemClock, type Clock } from "./clock.ts";
 import { Endpoint, type EndpointListener } from "./endpoint.ts";
 import type { Domain } from "./invalidate.ts";
+import { NeedsPoller, type NeedsSnapshot } from "./needs.ts";
 import { CitiesPoller, type CitiesSnapshot } from "./cities.ts";
 import { NeedsYouNotifier, type NeedsYou, type NeedsYouBatch } from "../notify/needsYou.ts";
 import { KeepAwake, type KeepAwakeState, type PinBook } from "./keepAwake.ts";
@@ -129,6 +130,18 @@ export interface CitiesSubscription {
   unsubscribe(): void;
 }
 
+/** One copy's subscription to an API's shared "needs a human" poll. */
+export interface NeedsSubscription {
+  readonly apiUrl: string;
+  snapshot(): NeedsSnapshot;
+  /** Call from this copy's own periodic timer with the running cities. Returns the snapshot's rev. */
+  tick(cities: readonly string[]): number;
+  /** Polls at the next tick. */
+  refresh(): void;
+  /** Ends the subscription (the copy's close). Starts no work. Idempotent. */
+  unsubscribe(): void;
+}
+
 /** A fetch through the app-wide budget whose queued requests can be dropped together (discovery's requests). */
 export interface ProbeFetch {
   fetch: HostFetch;
@@ -175,6 +188,7 @@ export class SyncRegistry {
   private readonly endpoints = new Map<string, Endpoint>();
   private readonly stores = new Map<string, StoreEntry>();
   private readonly pollers = new Map<string, { poller: CitiesPoller; subs: number }>();
+  private readonly needs = new Map<string, { poller: NeedsPoller; subs: number }>();
   private readonly listeners = new Set<(batch: EventBatch) => void>();
   private onScreen = false;
   private readonly pins: PinBook;
@@ -265,6 +279,47 @@ export class SyncRegistry {
         const e = this.pollers.get(ep.baseUrl);
         if (e && --e.subs <= 0) {
           this.pollers.delete(ep.baseUrl);
+          poller.dispose();
+          this.releaseEndpoint(ep, poller);
+        }
+      },
+    });
+  }
+
+  /** Subscribes a copy to a loopback gc API's shared "needs a human" poll; `not-loopback` otherwise. */
+  subscribeNeeds(apiUrl: string): Result<NeedsSubscription, GcError> {
+    const endpoint = this.endpointFor(apiUrl);
+    if (!endpoint.ok) return endpoint;
+    const ep = endpoint.value;
+    let entry = this.needs.get(ep.baseUrl);
+    if (!entry) {
+      entry = { poller: new NeedsPoller(ep, this.clock), subs: 0 };
+      this.needs.set(ep.baseUrl, entry);
+    }
+    entry.subs++;
+    const { poller } = entry;
+    const owner = {};
+    let active = true;
+    return ok({
+      apiUrl: ep.baseUrl,
+      snapshot: () => poller.snapshot(),
+      tick: (cities) => {
+        if (active) {
+          this.budget.reclaim();
+          poller.tick(owner, cities);
+        }
+        return poller.snapshot().rev;
+      },
+      refresh: () => {
+        if (active) poller.refresh();
+      },
+      unsubscribe: () => {
+        if (!active) return;
+        active = false;
+        poller.abandonStartedBy(owner);
+        const e = this.needs.get(ep.baseUrl);
+        if (e && --e.subs <= 0) {
+          this.needs.delete(ep.baseUrl);
           poller.dispose();
           this.releaseEndpoint(ep, poller);
         }

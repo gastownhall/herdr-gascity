@@ -66,11 +66,13 @@ import type { Result } from "./result.ts";
 import type { Clock } from "./sync/clock.ts";
 import type { ErrorEntry, SyncError } from "./sync/store.ts";
 import type { CitiesSubscription, Subscription, SyncRegistry } from "./sync/registry.ts";
+import type { NeedsSubscription } from "./sync/registry.ts";
 import { ALL_DOMAINS } from "./sync/invalidate.ts";
 import { MOD_NAME, mayBeOnScreen, type VisibilityInput } from "./sync/visibility.ts";
 import { MOD_VERSION } from "./version.ts";
 import { activityModel, isBusy, type ActivityModel } from "./vm/activity.ts";
 import { AGENT_PAGE, agentsModel, type AgentsModel } from "./vm/agents.ts";
+import { inboxModel, sidebarModel, type InboxFilter, type InboxModel, type SidebarModel } from "./vm/sidebar.ts";
 import { humanModel, type HumanModel } from "./vm/human.ts";
 import { beadDetailModel, boardModel, type BeadDetailModel, type BoardModel } from "./vm/board.ts";
 import { detailModel, type DetailModel } from "./vm/detail.ts";
@@ -115,7 +117,15 @@ export interface CopyDeps {
   commands?: CommandBook;
   /** Whether any of this copy's text boxes holds text: the window then does not switch sessions on its own. */
   draft?: () => boolean;
+  /** What this copy shows (props().view): a city (default), the cross-city sidebar block, or the Needs a human pane. */
+  view?: CopyKind;
 }
+
+/** What a copy shows. */
+export type CopyKind = "tab" | "sidebar" | "inbox";
+
+/** A cross-city copy's model (the sidebar block or the Needs a human pane). */
+export type CrossCityView = { kind: "sidebar"; model: SidebarModel } | { kind: "inbox"; model: InboxModel };
 
 /** What only the view around a copy can do for a command (main.ts). */
 export interface CommandUi {
@@ -129,16 +139,28 @@ export interface CommandUi {
   beadTitle(title: string): void;
 }
 
+/** What the window shows: a session or a bead in a city. */
+export interface FocusOn {
+  city: string;
+  /** Exactly one of session and bead is set. */
+  session?: string;
+  bead?: string;
+}
+
+function cleanFocus(f: FocusOn): FocusOn {
+  return f.bead !== undefined ? { city: cleanLine(f.city), bead: cleanLine(f.bead) } : { city: cleanLine(f.city), session: cleanLine(f.session ?? "") };
+}
+
 /** The "needs you" window's model. */
 export interface WindowModel {
-  /** The session the newest focus target names (cleaned), or null. */
-  target: { city: string; session: string } | null;
+  /** The session or bead the newest focus target names (cleaned), or null. */
+  target: FocusOn | null;
   /** The city's sessions that need you, cleaned. */
   pending: { session: string; label: string; kind: string }[];
   /** Tabs holding a Gas City pane (herdr's ids), for "Show Gas City tab". */
   tabs: string[];
   /** A newer target held back while a draft is typed (cleaned): shown on request. */
-  next: { city: string; session: string } | null;
+  next: FocusOn | null;
 }
 
 /** A question the copy asks before acting, or a form. */
@@ -242,6 +264,13 @@ export class CopyController {
   private onScreen = true;
   private cities: CitiesSubscription | null = null;
   private citiesRev = -1;
+  /** The cross-city views' shared poll of what waits on a person. */
+  private needs: NeedsSubscription | null = null;
+  private needsRev = -1;
+  /** Cities unfolded in the sidebar. */
+  private readonly unfolded = new Set<string>();
+  private inboxFilter: InboxFilter = "all";
+  private inboxCity: string | null = null;
   private city: Subscription | null = null;
   /** The city the last subscription was to: a bead selected there means nothing in another city. */
   private lastCity: string | null = null;
@@ -268,12 +297,12 @@ export class CopyController {
   /** The discovery's progress count when it last moved, and when (stall detection). */
   private discoveryProgress = { count: 0, at: 0 };
   /** A session to show once its city is subscribed and lists it (focus command, or the window's target). */
-  private focusing: { city: string; session: string; since: number } | null = null;
+  private focusing: (FocusOn & { since: number }) | null = null;
   /** The seq of the last shared focus target the window applied. */
   private focusApplied = 0;
-  private focusShown: { city: string; session: string } | null = null;
+  private focusShown: FocusOn | null = null;
   /** A newer shared target the window holds back while a text box holds a draft. */
-  private focusNext: { city: string; session: string } | null = null;
+  private focusNext: FocusOn | null = null;
   private gascityTabs: string[] = [];
   /** The Idempotency-Key a command's nonce gives the action it sends (only while that command runs). */
   private commandKey: string | null = null;
@@ -315,6 +344,7 @@ export class CopyController {
 
     const before = discovery.machine.state;
     this.followCities("endpoint" in before ? before.endpoint.url : null, before.phase !== "city-running");
+    if (this.crossCity()) return this.stepCrossCity();
     // The city list may just have moved the machine.
     const state = discovery.machine.state;
     const endpoint = "endpoint" in state ? state.endpoint : null;
@@ -346,7 +376,7 @@ export class CopyController {
 
     const signature = [
       this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.city?.activity().rev ?? -1, this.onScreen, this.selected,
-      this.selectedBead, this.notice ?? "", this.gascityTabs.join(","), this.focusShown?.session ?? "", this.focusNext?.session ?? "",
+      this.selectedBead, this.notice ?? "", this.gascityTabs.join(","), JSON.stringify(this.focusShown), JSON.stringify(this.focusNext),
       this.selected !== null ? JSON.stringify(this.city?.keepAwake(this.selected) ?? null) : "",
     ].join("|");
     if (signature === this.signature) return false;
@@ -367,7 +397,78 @@ export class CopyController {
     this.city = null;
     this.cities?.unsubscribe();
     this.cities = null;
+    this.needs?.unsubscribe();
+    this.needs = null;
     this.deps.probe.release(this);
+  }
+
+  // ---- the cross-city views (the sidebar block, the Needs a human pane) -------------------
+
+  /** This copy is the sidebar block or the Needs a human pane: no city store, only the shared needs poll. */
+  crossCity(): boolean {
+    return this.deps.view === "sidebar" || this.deps.view === "inbox";
+  }
+
+  private stepCrossCity(): boolean {
+    const state = this.deps.discovery.machine.state;
+    const apiUrl = "endpoint" in state ? state.endpoint.url : null;
+    if (this.needs && this.needs.apiUrl !== apiUrl) {
+      this.needs.unsubscribe();
+      this.needs = null;
+    }
+    if (!this.needs && apiUrl !== null) {
+      const made = this.deps.registry.subscribeNeeds(apiUrl);
+      if (made.ok) {
+        this.needs = made.value;
+        this.needsRev = -1;
+      } else this.hostError(made.error);
+    }
+    const running = (this.cities?.snapshot().value?.items ?? []).filter((c) => c.running).map((c) => c.name);
+    const rev = this.needs?.tick(running) ?? -1;
+    const signature = [
+      this.machineVersion(), this.citiesRev, rev, [...this.unfolded].join(","), this.inboxFilter, this.inboxCity ?? "", this.notice ?? "",
+    ].join("|");
+    this.needsRev = rev;
+    if (signature === this.signature) return false;
+    this.signature = signature;
+    return true;
+  }
+
+  /** The cross-city model; null for a city copy. */
+  crossView(now: number): CrossCityView | null {
+    const cities = this.cities?.snapshot() ?? null;
+    const needs = this.needs?.snapshot() ?? null;
+    const notice = this.notice;
+    if (this.deps.view === "sidebar") {
+      const model = sidebarModel({ cities, needs, expanded: this.unfolded, now });
+      return { kind: "sidebar", model: notice !== null && model.note === null ? { ...model, note: notice } : model };
+    }
+    if (this.deps.view === "inbox") {
+      const model = inboxModel({ cities, needs, filter: this.inboxFilter, city: this.inboxCity, now });
+      return { kind: "inbox", model: notice !== null && model.note === null ? { ...model, note: notice } : model };
+    }
+    return null;
+  }
+
+  /** A host call made for a click failed: recorded, and said in the view. */
+  noteHostError(error: GcError): void {
+    this.hostError(error);
+    this.notice = `could not open it: ${errorText(error)}`;
+  }
+
+  /** Folds or unfolds a city in the sidebar. */
+  toggleCity(city: string): void {
+    if (!this.unfolded.delete(city)) this.unfolded.add(city);
+  }
+
+  /** Narrows the Needs a human pane to a kind. */
+  setInboxFilter(filter: InboxFilter): void {
+    this.inboxFilter = filter;
+  }
+
+  /** Narrows the Needs a human pane to a city; null for every city. */
+  setInboxCity(city: string | null): void {
+    this.inboxCity = city;
   }
 
   /** The view-models for render (and the probe). */
@@ -420,6 +521,7 @@ export class CopyController {
     this.refreshCount++;
     this.rediscovery = null;
     this.cities?.refresh();
+    this.needs?.refresh();
     if (this.city) {
       this.city.retryNow();
       this.city.refresh(ALL_DOMAINS);
@@ -936,6 +1038,18 @@ export class CopyController {
     this.followFocus();
   }
 
+  /** Shows a bead's detail in this copy (the window's target from the sidebar or the Needs a human pane). */
+  focusBead(city: string, bead: string): void {
+    const pinned = this.deps.discovery.machine.copy.pinned;
+    if (pinned !== null && pinned !== city) {
+      this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
+      return;
+    }
+    if (!this.checkCity(city)) return;
+    this.focusing = { city, bead, since: this.deps.clock.now() };
+    this.followFocus();
+  }
+
   /** A session by gc's id, or by its exact alias or session name when exactly one session has it; else says why not. */
   private resolveSession(ref: string): string | null {
     const items = this.city?.snapshot().sessions.value?.items;
@@ -988,22 +1102,32 @@ export class CopyController {
       const t = focusToApply(this.deps.host.focusTarget(), this.focusApplied, now);
       if (t !== null) {
         this.focusApplied = t.seq;
-        this.focusNext = { city: t.city, session: t.session };
+        this.focusNext = t.bead !== undefined ? { city: t.city, bead: t.bead } : { city: t.city, session: t.session ?? "" };
       }
       // While a text box holds a draft the window stays where the person is typing: the newer target waits for "Show".
       const n = this.focusNext;
       const shown = this.focusShown;
-      const same = shown !== null && shown.city === n?.city && (shown.session === n.session || this.selected === n.session);
+      const same = shown !== null && n !== null && shown.city === n.city && (n.bead !== undefined
+        ? shown.bead === n.bead
+        : shown.session === n.session || this.selected === n.session);
       if (n !== null && (same || !(this.deps.draft?.() ?? false))) this.showNext();
     }
     const f = this.focusing;
     if (f === null) return;
     const { discovery } = this.deps;
     if (selectedCity(discovery.machine.state) !== f.city) discovery.select(f.city);
-    if (this.city?.key.city === f.city && this.city.snapshot().sessions.value) {
+    if (f.bead !== undefined && this.city?.key.city === f.city) {
+      this.focusing = null;
+      this.selectSession(null);
+      this.selectBead(f.bead);
+      this.focusShown = { city: f.city, bead: f.bead };
+      return;
+    }
+    if (f.session !== undefined && this.city?.key.city === f.city && this.city.snapshot().sessions.value) {
       this.focusing = null;
       const id = this.resolveSession(f.session);
       if (id !== null) {
+        this.selectBead(null);
         this.selectSession(id);
         this.focusShown = { city: f.city, session: id };
       }
@@ -1011,7 +1135,7 @@ export class CopyController {
     }
     if (now - f.since > FOCUS_WAIT_MS) {
       this.focusing = null;
-      this.refuse(`could not show session ${cleanLine(f.session)}: city ${cleanLine(f.city)} is not running`);
+      this.refuse(`could not show ${f.bead !== undefined ? `bead ${cleanLine(f.bead)}` : `session ${cleanLine(f.session ?? "")}`}: city ${cleanLine(f.city)} is not running`);
     }
   }
 
@@ -1019,7 +1143,9 @@ export class CopyController {
   showNext(): void {
     const n = this.focusNext;
     this.focusNext = null;
-    if (n !== null) this.focusSession(n.city, n.session);
+    if (n === null) return;
+    if (n.bead !== undefined) this.focusBead(n.city, n.bead);
+    else this.focusSession(n.city, n.session ?? "");
   }
 
   private windowModel(): WindowModel {
@@ -1032,10 +1158,10 @@ export class CopyController {
     const t = this.focusShown;
     const n = this.focusNext;
     return {
-      target: t ? { city: cleanLine(t.city), session: cleanLine(t.session) } : null,
+      target: t ? cleanFocus(t) : null,
       pending,
       tabs: this.gascityTabs,
-      next: n ? { city: cleanLine(n.city), session: cleanLine(n.session) } : null,
+      next: n ? cleanFocus(n) : null,
     };
   }
 

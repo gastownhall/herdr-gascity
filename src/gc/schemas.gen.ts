@@ -246,6 +246,35 @@ export const ListBodyBeadSchema: z.ZodMiniType<T.ListBodyBead> = z.object({
   partial_errors: optionalNullableList(z.string()),
 });
 
+export const StatusAgentCountsSchema: z.ZodMiniType<T.StatusAgentCounts> = z.object({
+  total: z.int(),
+  running: z.int(),
+  suspended: z.int(),
+  quarantined: z.int(),
+});
+
+export const StatusRigCountsSchema: z.ZodMiniType<T.StatusRigCounts> = z.object({
+  total: z.int(),
+  suspended: z.int(),
+});
+
+export const StatusWorkCountsSchema: z.ZodMiniType<T.StatusWorkCounts> = z.object({
+  in_progress: z.int(),
+  ready: z.int(),
+  open: z.int(),
+});
+
+export const StatusBodySchema: z.ZodMiniType<T.StatusBody> = z.object({
+  name: z.string(),
+  suspended: z.boolean(),
+  uptime_sec: z.int(),
+  agents: StatusAgentCountsSchema,
+  rigs: StatusRigCountsSchema,
+  work: StatusWorkCountsSchema,
+  partial: z.optional(z.boolean()),
+  partial_errors: optionalNullableList(z.string()),
+});
+
 export const TypedEventStreamEnvelopeSchema: z.ZodMiniType<T.TypedEventStreamEnvelope> = z.object({
   seq: z.int(),
   type: z.string(),

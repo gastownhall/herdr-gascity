@@ -28,7 +28,9 @@ export interface WindowActions {
 export function renderWindowHead(m: WindowModel, theme: ThemeRead, actions: WindowActions): GpuiElement {
   const target = m.target === null
     ? muted(label("gascity-window-target", "No toast to follow: pick a session below."), theme)
-    : label("gascity-window-target", `Needs you: session ${m.target.session} in city ${m.target.city}`);
+    : label("gascity-window-target", m.target.bead !== undefined
+      ? `Needs a decision: bead ${m.target.bead} in city ${m.target.city}`
+      : `Needs you: session ${m.target.session ?? ""} in city ${m.target.city}`);
   const tabs = m.tabs.length === 1
     ? [button("gascity-window-tab-0", "Show Gas City tab", (cx) => actions.showTab(m.tabs[0] ?? "", cx))]
     : m.tabs.map((t, i) => button(`gascity-window-tab-${i}`, `Show Gas City tab ${t}`, (cx) => actions.showTab(t, cx)));
@@ -41,7 +43,9 @@ export function renderWindowHead(m: WindowModel, theme: ThemeRead, actions: Wind
   // A newer toast while a reply is typed: offered, never switched to under the person's typing.
   if (m.next !== null) {
     el = el.child(h_flex().id("gascity-window-next").gap(8)
-      .child(label("gascity-window-next-text", `Session ${m.next.session} in city ${m.next.city} needs you too.`))
+      .child(label("gascity-window-next-text", m.next.bead !== undefined
+        ? `Bead ${m.next.bead} in city ${m.next.city} needs a decision too.`
+        : `Session ${m.next.session ?? ""} in city ${m.next.city} needs you too.`))
       .child(button("gascity-window-next-show", "Show", (cx) => actions.showNext(cx))));
   }
   return el.child(bar).child(list);

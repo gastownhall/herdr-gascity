@@ -25,12 +25,16 @@ import {
   closeWindow, execGcStatus, hostFetch, logError, missingHostExports, nextCommand, openAttachTab, postNeedsYou, probeIo, readExecLog,
   readFocusTarget, readHerdrVersion, readOwnPins, writeOwnPins, readLastCity, readProbeEnabled, readProps, readSharedSettings, readSupervisorConfig, readTerminalScene,
   readTheme, readVisibility, rememberCity, selectTab, setProbeEnabled, setWindowOpen, storeGcBin,
+  openInboxPane, openNeedsWindow, readStatusColors,
 } from "./host.ts";
+import type { GcError } from "./gc/errors.ts";
+import type { Result } from "./result.ts";
 import { sharedCommandBook } from "./commandBook.ts";
 import { CopyController, type CommandUi } from "./copy.ts";
 import { keyAction } from "./keys.ts";
 import { WINDOW_REFRESH_MS, overlayOf } from "./notify/window.ts";
-import { decodeCopy } from "./discovery/city.ts";
+import { decodeCopy, decodeView } from "./discovery/city.ts";
+import { renderInbox, renderSidebar, type CrossCityActions } from "./view/sidebar.ts";
 import { DiscoveryController, type DiscoveryTask } from "./discovery/controller.ts";
 import { ProbeWriter, sharedProbeWriter } from "./probe.ts";
 import { systemClock } from "./sync/clock.ts";
@@ -61,6 +65,8 @@ type Copy =
     kind: "ready";
     copy: CopyController;
     overlay: string | null;
+    /** The Needs a human pane's own overlay id, when it was opened as a window (its Close button). */
+    paneOverlay: string | null;
     focus: { handle: GpuiFocusHandle | null };
     /** Which session the send box's draft belongs to. */
     box: SendBox;
@@ -95,6 +101,8 @@ function setUp(): Copy {
   const props = readProps();
   const decoded = decodeCopy(props, last.ok ? last.value : null);
   if (!decoded.ok) return { kind: "copy-invalid", error: errorText(decoded.error) };
+  const view = decodeView(props);
+  if (!view.ok) return { kind: "copy-invalid", error: errorText(view.error) };
   const reg = registry();
   const discovery = new DiscoveryController({
     settings: readSharedSettings,
@@ -105,7 +113,9 @@ function setUp(): Copy {
     rememberCity,
   }, decoded.value);
   if (!last.ok) discovery.hostErrors.push(last.error);
-  const overlay = overlayOf(props);
+  // Only a city copy opened as an overlay is the "needs you" window (the pane opens as a window too).
+  const overlay = view.value === "tab" ? overlayOf(props) : null;
+  const paneOverlay = view.value === "inbox" ? overlayOf(props) : null;
   const focus: { handle: GpuiFocusHandle | null } = { handle: null };
   const drafts: Drafts = { any: () => false };
   const copy = new CopyController({
@@ -128,8 +138,9 @@ function setUp(): Copy {
     window: overlay !== null,
     commands: sharedCommandBook(),
     draft: () => drafts.any(),
+    view: view.value,
   });
-  return { kind: "ready", copy, overlay, focus, box: { typedFor: null }, drafts };
+  return { kind: "ready", copy, overlay, paneOverlay, focus, box: { typedFor: null }, drafts };
 }
 
 /** The new-bead form's fields as typed. */
@@ -334,6 +345,44 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
   };
 }
 
+/** The sidebar block's and the Needs a human pane's clicks. */
+function crossActionsFor(state: Extract<Copy, { kind: "ready" }>): CrossCityActions & { closePane(cx: GpuiContext): void } {
+  const { copy } = state;
+  const report = (r: Result<null, GcError>) => {
+    if (!r.ok) copy.noteHostError(r.error);
+  };
+  return {
+    toggleCity: (city, cx) => {
+      copy.toggleCity(city);
+      cx.notify();
+    },
+    openQuestion: (city, session, cx) => {
+      report(openNeedsWindow(city, { session }));
+      cx.notify();
+    },
+    openDecision: (city, bead, cx) => {
+      report(openNeedsWindow(city, { bead }));
+      cx.notify();
+    },
+    openInbox: (cx) => {
+      report(openInboxPane());
+      cx.notify();
+    },
+    setFilter: (filter, cx) => {
+      copy.setInboxFilter(filter);
+      cx.notify();
+    },
+    setInboxCity: (city, cx) => {
+      copy.setInboxCity(city);
+      cx.notify();
+    },
+    closePane: (cx) => {
+      if (state.paneOverlay !== null) closeWindow(state.paneOverlay);
+      cx.notify();
+    },
+  };
+}
+
 export default class GasCity extends View {
   private state: Copy = { kind: "copy-invalid", error: "init has not run" };
   private inputs: PanelInputs | null = null;
@@ -411,6 +460,14 @@ export default class GasCity extends View {
     if (state.kind === "host-incompatible") return renderPanel({ kind: "host-incompatible", missing: state.missing });
     const theme = readTheme();
     if (state.kind === "copy-invalid") return renderPanel({ kind: "copy-invalid", theme, error: state.error });
+    const cross = state.copy.crossView(systemClock.now());
+    if (cross !== null) {
+      const colors = readStatusColors();
+      const actions = crossActionsFor(state);
+      return cross.kind === "sidebar"
+        ? renderSidebar(cross.model, theme, colors, actions)
+        : renderInbox(cross.model, theme, colors, actions, state.paneOverlay !== null ? actions.closePane : null);
+    }
     const view = state.copy.view(systemClock.now());
     return renderPanel({
       kind: "city", theme, view, actions: actionsFor(state, this.inputs), inputs: this.inputs, keyboard: this.keyboard(state), size: this.size(),

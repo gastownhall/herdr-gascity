@@ -15,6 +15,30 @@ interface GpuiElement {
   children(children: readonly (GpuiElement | string)[]): GpuiElement;
   when(condition: boolean, apply: (el: GpuiElement) => GpuiElement): GpuiElement;
   size_full(): GpuiElement;
+  /** Width and height, in logical px. */
+  size(px: number): GpuiElement;
+  w(px: number): GpuiElement;
+  h(px: number): GpuiElement;
+  /** In a row or column: never grows or shrinks. */
+  flex_none(): GpuiElement;
+  items_center(): GpuiElement;
+  rounded(px: number): GpuiElement;
+  rounded_full(): GpuiElement;
+  border_1(): GpuiElement;
+  border_t_1(): GpuiElement;
+  border_color(color: GpuiColor): GpuiElement;
+  px(px: number): GpuiElement;
+  py(px: number): GpuiElement;
+  pl(px: number): GpuiElement;
+  pr(px: number): GpuiElement;
+  pt(px: number): GpuiElement;
+  pb(px: number): GpuiElement;
+  overflow_hidden(): GpuiElement;
+  whitespace_nowrap(): GpuiElement;
+  /** With overflow_hidden and whitespace_nowrap: a line too long ends in "…". */
+  text_ellipsis(): GpuiElement;
+  /** The style while the pointer is over the element. */
+  hover(style: (el: GpuiElement) => GpuiElement): GpuiElement;
   flex_1(): GpuiElement;
   /** Lets a flex item shrink below its content's width (so its text wraps). */
   min_w_0(): GpuiElement;

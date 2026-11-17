@@ -81,7 +81,7 @@ function unreadableText(what: string, u: Unreadable): string {
 }
 
 /** "5 min", "3 h", "4 d". */
-function since(createdAt: string | undefined, now: number): string | null {
+export function since(createdAt: string | undefined, now: number): string | null {
   if (createdAt === undefined) return null;
   const t = Date.parse(createdAt);
   if (!Number.isFinite(t)) return null;

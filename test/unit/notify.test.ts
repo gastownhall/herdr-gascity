@@ -113,6 +113,13 @@ describe("the focus target", () => {
     }
   });
 
+  test("a target names a session or a bead, never both", () => {
+    expect(decodeFocus({ city: "c", bead: "ga-1", seq: 2, at: 10 })).toEqual({ city: "c", bead: "ga-1", seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", session: "s", bead: "ga-1", seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", seq: 2, at: 10 })).toBeNull();
+    expect(nextFocus({ city: "c", session: "s", seq: 4, at: 1 }, "d", { bead: "ga-2" }, 50)).toEqual({ city: "d", bead: "ga-2", seq: 5, at: 50 });
+  });
+
   test("each new target is newer than the shared one", () => {
     const first = nextFocus(null, "c", "s1", 100);
     expect(first).toEqual({ city: "c", session: "s1", seq: 1, at: 100 });

@@ -6,7 +6,7 @@ import { h_flex, v_flex, type InputState } from "gpui-base";
 import type { CopyView } from "../copy.ts";
 import type { ThemeRead } from "../host.ts";
 import { renderAgents, type AgentsActions } from "./agents.ts";
-import { renderBoard, type BoardActions } from "./board.ts";
+import { beadDetail, renderBoard, type BoardActions } from "./board.ts";
 import { renderDetail, type DetailActions } from "./detail.ts";
 import { renderActivity, renderDialog, renderNotice, type DialogActions, type DialogInputs } from "./dialogs.ts";
 import { renderHeader, type HeaderActions } from "./header.ts";
@@ -97,6 +97,9 @@ export function renderPanel(model: PanelModel): GpuiElement {
   // The "needs you" window: its own rows, then the session's detail; no agents or board.
   if (view.window !== null) {
     root = root.child(renderWindowHead(view.window, theme, actions));
+    // A bead from the sidebar or the Needs a human pane: its detail, with Close… and Sling….
+    const bead = beadDetail(view.beadDetail, theme, actions, view.activity);
+    if (bead !== null) root = root.child(bead);
     const d = renderDetail(view.detail, theme, actions, { activity: view.activity, message: inputs?.message ?? null });
     if (d !== null) root = root.child(d);
     const log = renderActivity(view.activity, theme, actions);

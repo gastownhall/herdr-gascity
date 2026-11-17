@@ -1,0 +1,30 @@
+{
+  "provenance": "synthesized: shaped after a running gc's answer to GET /status (names, paths and counts replaced, agent_details cut to two); the recorder's scenario does not read status",
+  "request": {
+    "method": "GET",
+    "path": "/v0/city/scratch/status",
+    "query": ""
+  },
+  "status": 200,
+  "body": {
+    "name": "scratch",
+    "path": "/scratch/city",
+    "version": "dev",
+    "uptime_sec": 292153,
+    "suspended": false,
+    "agent_count": 9,
+    "rig_count": 1,
+    "running": 6,
+    "agents": { "total": 9, "running": 6, "suspended": 1, "quarantined": 0 },
+    "rigs": { "total": 1, "suspended": 0 },
+    "work": { "in_progress": 2, "ready": 26, "open": 28 },
+    "mail": { "unread": 7, "total": 9 },
+    "beads": { "beads_store": "NativeDoltStore", "native_store_eligible": true },
+    "agent_details": [
+      { "name": "worker", "qualified_name": "worker", "scope": "city", "running": true, "suspended": false, "session_name": "worker", "group_name": "worker" },
+      { "name": "frontend/builder", "qualified_name": "frontend/builder", "scope": "rig", "running": false, "suspended": true, "session_name": "frontend__builder", "group_name": "frontend/builder" }
+    ],
+    "partial": true,
+    "partial_errors": ["store health: counting retained bead rows: list timed out"]
+  }
+}

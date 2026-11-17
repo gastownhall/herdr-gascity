@@ -276,6 +276,39 @@ export interface ListBodyBead {
   partial_errors: string[];
 }
 
+/** The fields of StatusAgentCounts this mod uses, decoded from gc's StatusAgentCounts. */
+export interface StatusAgentCounts {
+  total: number;
+  running: number;
+  suspended: number;
+  quarantined: number;
+}
+
+/** The fields of StatusRigCounts this mod uses, decoded from gc's StatusRigCounts. */
+export interface StatusRigCounts {
+  total: number;
+  suspended: number;
+}
+
+/** The fields of StatusWorkCounts this mod uses, decoded from gc's StatusWorkCounts. */
+export interface StatusWorkCounts {
+  in_progress: number;
+  ready: number;
+  open: number;
+}
+
+/** The fields of StatusBody this mod uses, decoded from gc's StatusBody. */
+export interface StatusBody {
+  name: string;
+  suspended: boolean;
+  uptime_sec: number;
+  agents: StatusAgentCounts;
+  rigs: StatusRigCounts;
+  work: StatusWorkCounts;
+  partial?: boolean | undefined;
+  partial_errors: string[];
+}
+
 /** The fields of TypedEventStreamEnvelope this mod uses, decoded from gc's TypedEventStreamEnvelope. */
 export interface TypedEventStreamEnvelope {
   seq: number;

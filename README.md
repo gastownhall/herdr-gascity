@@ -459,6 +459,40 @@ it unsubscribes and starts nothing; the other copies keep updating.
   When the probe is turned off the file is emptied (herdr gives mods no way
   to delete a file), compare-and-swap like any write.
 
+## Needs a human: the sidebar block and the pane
+
+What waits on a person, across every city of a gc API: sessions paused on a
+question or tool approval (`/pending`, with the session's name and the
+prompt's first line), and open beads labeled `human`. One shared poll per
+API (`src/sync/needs.ts`) reads, for each running city, `/pending` and
+`/beads?label=human&status=open` every 15 s and `/status` every 30 s,
+never the agent or session lists.
+
+- **Sidebar block** (`props: {view: "sidebar"}`): one row per city with a
+  health dot and its running agents. A city's questions are always listed
+  under it, with up to three decisions; clicking the city lists the rest
+  and its counts. The "N need you" badge opens the pane. Herdr's shipped
+  layouts are read-only, so add the block to a clone:
+
+  ```sh
+  herdr-app do layout.clone '{"name":"main","as":"gascity"}'
+  ```
+
+  then, in `layouts/gascity.json`, add to the `sidebar-lists` column:
+
+  ```json
+  { "type": "block", "id": "gascity-cities", "content": { "mod": "gascity", "props": { "view": "sidebar" } }, "size": { "weight": 1.4 }, "min": 120 }
+  ```
+
+- **Needs a human pane** (`props: {view: "inbox"}`): every city's questions,
+  then decisions, filtered by kind and by city. It opens as a window from
+  the badge; `pane.split {mod: "gascity", props: {view: "inbox"}}` puts it
+  in a tab.
+
+A row opens the "needs you" window on it: a question shows its prompt and
+answer buttons; a decision shows the bead with Close… and Sling…. The tab's
+own "Needs a human" section lists the same for its city.
+
 ## The work board
 
 The work board sits beside the agents panel when the pane is at least

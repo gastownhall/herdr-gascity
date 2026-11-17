@@ -64,12 +64,12 @@ describe("module loader", () => {
   });
 
   test("a named import the host module lacks fails at import, as herdr's module linker does", () => {
-    const source = 'import { openOverlay } from "herdr";\nexport default class M {}';
+    const source = 'import { openTeleporter } from "herdr";\nexport default class M {}';
     expect(() => evaluateModule(source, { ...fakeGpui(), herdr: fakeHerdr().module }))
-      .toThrow('module "herdr" does not provide an export named "openOverlay"');
-    const aliased = 'import { theme as t, openOverlay as o } from "herdr";\nexport default class M {}';
+      .toThrow('module "herdr" does not provide an export named "openTeleporter"');
+    const aliased = 'import { theme as t, openTeleporter as o } from "herdr";\nexport default class M {}';
     expect(() => evaluateModule(aliased, { ...fakeGpui(), herdr: fakeHerdr().module }))
-      .toThrow('does not provide an export named "openOverlay"');
+      .toThrow('does not provide an export named "openTeleporter"');
   });
 
   test("evaluates the module in strict mode, like an ES module", () => {

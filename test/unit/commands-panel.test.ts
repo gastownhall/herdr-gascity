@@ -467,6 +467,19 @@ describe("needs-you toasts and the window, with the Gas City tab hidden", () => 
     expect(mod.toasts.at(-1)?.action).toEqual({ name: "mod.open", args: { name: "gascity" } });
   });
 
+  test("a bead target (the sidebar's or the pane's decision) shows that bead's detail in the window", async () => {
+    const w = world();
+    const mod = await running({ route: w.route, ...HIDDEN });
+    await ticks(mod, 4, 1000);
+    mod.shared.set("gascity.focus", { city: "scratch", bead: "fe-1", seq: 9, at: mod.clock.t });
+    const win = await openWindow(mod);
+    for (let i = 0; i < 6; i++) await win.tick();
+    const root = win.render();
+    expect(text(root, "gascity-window-target")).toBe("Needs a decision: bead fe-1 in city scratch");
+    expect(text(root, "gascity-bead-title")).toMatch(/^Bead fe-1: /);
+    expect(findById(root, "gascity-bead-actions")).toBeDefined();
+  });
+
   test("the hotkey's mod.open with an old target shows the plain window, not a stale session", async () => {
     const mod = await running({ route: world().route, ...HIDDEN, shared: { "gascity.focus": { city: "scratch", session: "sc-6", seq: 4, at: Date.UTC(2026, 10, 9, 10, 0, 0) } } });
     const win = await openWindow(mod);
