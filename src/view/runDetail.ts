@@ -4,12 +4,11 @@
 // session, Open on a live session) and the counts. Render only: clicks call
 // the actions.
 
-import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import type { StatusColors, ThemeRead } from "../host.ts";
 import type { RunStepRow, RunViewModel, StepTone } from "../vm/runDetail.ts";
 import { stageBar } from "./strip.ts";
-import { label, muted } from "./text.ts";
+import { label, muted, pill } from "./text.ts";
 
 export interface RunActions {
   /** Opens the terminal of a session a step names (gc's session name). */
@@ -26,9 +25,8 @@ function toneColor(tone: StepTone, c: StatusColors): GpuiColor | undefined {
   return tone === "ok" ? c.ok : tone === "warn" ? c.warn : tone === "bad" ? c.bad : tone === "dim" ? c.dim : undefined;
 }
 
-function button(id: string, text: string, colors: StatusColors, onClick: (cx: GpuiContext) => void): GpuiElement {
-  const el = div().id(id).flex_none().px(8).py(1).rounded(5).border_1().text_size(12).child(text).on_click((_, cx) => onClick(cx));
-  return colors.dim === undefined ? el : el.border_color(colors.dim);
+function button(id: string, text: string, _colors: StatusColors, onClick: (cx: GpuiContext) => void): GpuiElement {
+  return pill(id, text, onClick);
 }
 
 function stepRow(s: RunStepRow, i: number, theme: ThemeRead, colors: StatusColors, actions: RunActions): GpuiElement {
@@ -39,7 +37,7 @@ function stepRow(s: RunStepRow, i: number, theme: ThemeRead, colors: StatusColor
   let title = label(`${id}-title`, s.title).flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis();
   if (s.tone === "dim") title = muted(title, theme);
   else if (s.tone === "bad" && color !== undefined) title = title.text_color(color);
-  let attempts = label(`${id}-attempts`, s.attempts ?? "").w(36).flex_none().text_size(12);
+  let attempts = label(`${id}-attempts`, s.attempts ?? "").w(60).flex_none().text_size(12);
   attempts = s.exhausted && colors.bad !== undefined ? attempts.text_color(colors.bad) : muted(attempts, theme);
   let row = h_flex().id(id).gap(8).items_center().py(1).pl(s.depth === 1 ? 22 : 0).min_w_0()
     .child(glyph)
@@ -63,7 +61,7 @@ export function renderRun(m: RunViewModel | null, theme: ThemeRead, colors: Stat
   const link = m.link;
   if (link !== null) buttons.push(button("gascity-run-factory", "Open in factory ↗", colors, (cx) => actions.openLink(link, cx)));
   buttons.push(button("gascity-run-refresh", "Refresh", colors, (cx) => actions.refreshRun(cx)));
-  buttons.push(button("gascity-run-close", "Close", colors, (cx) => actions.closeRun(cx)));
+  buttons.push(button("gascity-run-close", "Close run", colors, (cx) => actions.closeRun(cx)));
   const head = h_flex().id("gascity-run-head").gap(8).items_center().min_w_0()
     .child(label("gascity-run-title", heading).flex_1().min_w_0().text_size(15).font_semibold().overflow_hidden().whitespace_nowrap().text_ellipsis())
     .children(buttons);
@@ -85,7 +83,7 @@ export function renderRun(m: RunViewModel | null, theme: ThemeRead, colors: Stat
   if (m.steps.length > 0) {
     const head2 = h_flex().id("gascity-run-steps-head").gap(8).text_size(12)
       .child(muted(label("gascity-run-steps-h", "Steps"), theme).flex_1())
-      .child(muted(label("gascity-run-steps-a", "attempts"), theme).w(36).flex_none())
+      .child(muted(label("gascity-run-steps-a", "tries"), theme).w(60).flex_none())
       .child(muted(label("gascity-run-steps-s", "session"), theme).w(220).flex_none());
     el = el.child(v_flex().id("gascity-run-steps").gap(1).child(head2).children(m.steps.map((s, i) => stepRow(s, i, theme, colors, actions))));
   }

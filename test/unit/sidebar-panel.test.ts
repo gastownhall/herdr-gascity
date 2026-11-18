@@ -209,7 +209,8 @@ describe("a run's steps", () => {
     await mod.settle();
     await mod.tick();
     const root = mod.render();
-    expect(text(root, "gascity-window-target")).toBe("Run PR #102 in city scratch");
+    // The run says what it is in its own heading: the window's target line is left out.
+    expect(findById(root, "gascity-window-target")).toBeUndefined();
     expect(text(root, "gascity-run-title")).toBe("PR #102  feat(ui): dark mode toggle");
     expect(text(root, "gascity-run-sub")).toBe("wf-adopt · demo · demo/operator · city scratch");
     expect(text(root, "gascity-run-stage-2-label")).toBe("Approval");

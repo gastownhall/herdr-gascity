@@ -84,23 +84,26 @@ export function renderPanel(model: PanelModel): GpuiElement {
     const root = v_flex().id("gascity-root").size_full().p(12).gap(8);
     return root.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  let root = themedRoot(model.theme, v_flex().id("gascity-root").size_full().p(12).gap(8)).child(title);
+  let root = themedRoot(model.theme, v_flex().id("gascity-root").size_full().p(12).gap(8));
   if (model.kind === "copy-invalid") {
-    return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
+    return themeIssues(root.child(title).child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
   const { view, theme, actions, inputs, keyboard, size } = model;
+  // The Needs you tab is named for what it shows: no big title, a one-line header.
+  const compact = view.window !== null;
+  if (!compact) root = root.child(title);
   const colors = model.colors ?? {};
   // The panel may be taller than its pane (the board stacked under the agents): it scrolls.
   root = root.overflow_y_scroll().on_size_change((s, cx) => size.resized(s.width, cx));
   if (keyboard !== null) root = root.track_focus(keyboard.handle).on_key_down((e, cx) => keyboard.onKey(e, cx));
-  root = root.children(renderHeader(view.header, theme, actions));
+  root = root.children(renderHeader(view.header, theme, actions, compact));
   const dialog = renderDialog(view.dialog, theme, actions, inputs);
   if (dialog !== null) root = root.child(dialog);
   const notice = renderNotice(view.notice);
   if (notice !== null) root = root.child(notice);
   // The "needs you" window: its own rows, then the session's detail; no agents or board.
   if (view.window !== null) {
-    root = root.child(renderWindowHead(view.window, theme, actions));
+    root = root.child(renderWindowHead(view.window, theme, actions, view.run !== null));
     // A formula run from the sidebar or the Needs a human pane: its stages and steps.
     const run = renderRun(view.run, theme, colors, actions);
     if (run !== null) root = root.child(run);

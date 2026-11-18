@@ -1491,7 +1491,9 @@ export class CopyController {
     const v = this.deps.host.visibility();
     if (v.ok) {
       this.onScreen = mayBeOnScreen(v.value);
-      this.gascityTabs = [...new Set(v.value.panes.filter((p) => p.mod === MOD_NAME).map((p) => p.tab))];
+      // Not the tab in front (this one, when it shows): its button would do nothing.
+      const front = v.value.focus?.tab ?? null;
+      this.gascityTabs = [...new Set(v.value.panes.filter((p) => p.mod === MOD_NAME && p.tab !== front).map((p) => p.tab))];
       return;
     }
     // herdr's data cannot be read: say so, and poll as if on screen (the conservative side).

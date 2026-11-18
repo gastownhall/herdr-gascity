@@ -99,7 +99,7 @@ describe("agents panel", () => {
     const inFrontend = items.filter((a) => a.rig === "frontend").length;
     expect(findById(mod.render(), "gascity-agent-0-19")).toBeDefined();
     expect(findById(mod.render(), "gascity-agent-0-20")).toBeUndefined();
-    expect(text(mod.render(), "gascity-group-0-more")).toBe(`[Show ${Math.min(20, inFrontend - 20)} more · ${inFrontend - 20} not shown]`);
+    expect(text(mod.render(), "gascity-group-0-more")).toBe(`Show ${Math.min(20, inFrontend - 20)} more · ${inFrontend - 20} not shown`);
     mod.click("gascity-group-0-more");
     const root = mod.render();
     expect(findById(root, `gascity-agent-0-${Math.min(40, inFrontend) - 1}`)).toBeDefined();

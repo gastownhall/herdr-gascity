@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:bd0bd5c35cd561302d27d99c6ed3787bb9f6c2bcc5ef87ba5ca3f2628bdc8fe1 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:3c02a69baad4353d6bc6ffeb53a02c1136508d0614226e075d30bc3c615b5c9a over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -8889,7 +8889,8 @@ var CopyController = class {
     const v = this.deps.host.visibility();
     if (v.ok) {
       this.onScreen = mayBeOnScreen(v.value);
-      this.gascityTabs = [...new Set(v.value.panes.filter((p) => p.mod === MOD_NAME).map((p) => p.tab))];
+      const front = v.value.focus?.tab ?? null;
+      this.gascityTabs = [...new Set(v.value.panes.filter((p) => p.mod === MOD_NAME && p.tab !== front).map((p) => p.tab))];
       return;
     }
     this.onScreen = true;
@@ -9074,6 +9075,10 @@ function label(id2, text2) {
 }
 function tinted(el, color, apply) {
   return color === void 0 ? el : apply(el, color);
+}
+var PILL_EDGE = "#8080807f";
+function pill(id2, text2, onClick) {
+  return label(id2, text2).flex_none().px(8).py(1).rounded(5).border_1().border_color(PILL_EDGE).text_size(12).on_click((_, cx) => onClick(cx));
 }
 function muted(el, theme2) {
   return tinted(el, theme2.colors.muted, (e, c) => e.text_color(c));
@@ -10786,7 +10791,7 @@ function panelLayout(width) {
 }
 
 // src/view/panel.ts
-import { div as div10 } from "gpui-kit";
+import { div as div9 } from "gpui-kit";
 import { h_flex as h_flex10, v_flex as v_flex10 } from "gpui-base";
 
 // src/view/agents.ts
@@ -10796,10 +10801,10 @@ import { h_flex as h_flex4, v_flex as v_flex3 } from "gpui-base";
 // src/view/dialogs.ts
 import { Input, h_flex as h_flex3, v_flex as v_flex2 } from "gpui-base";
 function button2(id2, text2, onClick) {
-  return label(id2, `[${text2}]`).on_click((_, cx) => onClick(cx));
+  return pill(id2, text2, onClick);
 }
 function waiting(id2, text2, why, theme2) {
-  return muted(label(id2, `[${text2}: ${why}]`), theme2);
+  return muted(label(id2, `${text2}: ${why}`), theme2).flex_none().px(8).py(1).text_size(12);
 }
 function field(id2, text2, state) {
   return h_flex3().id(id2).gap(4).child(label(`${id2}-label`, text2)).child(Input.new(state));
@@ -11088,26 +11093,27 @@ function renderDetail(m, theme2, actions, ctx) {
 }
 
 // src/view/header.ts
-import { div as div7 } from "gpui-kit";
 import { h_flex as h_flex7, v_flex as v_flex6 } from "gpui-base";
-function renderHeader(h, theme2, actions) {
+function renderHeader(h, theme2, actions, compact = false) {
   const out = [];
-  let status3 = h_flex7().id("gascity-status").gap(8).child(label("gascity-chip", h.chip.text));
+  let status3 = h_flex7().id("gascity-status").gap(8).items_center().text_size(compact ? 12 : 14);
+  if (compact && h.city !== null) status3 = status3.child(label("gascity-city", h.city).font_semibold());
+  status3 = status3.child(compact ? muted(label("gascity-chip", h.chip.text), theme2) : label("gascity-chip", h.chip.text));
   if (h.needsYou !== null) status3 = status3.child(label("gascity-needs-you", h.needsYou));
   if (h.age !== null) status3 = status3.child(muted(label("gascity-age", h.age), theme2));
-  if (h.canRetry) status3 = status3.child(div7().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now"));
+  if (h.canRetry) status3 = status3.child(pill("gascity-retry", "Retry now", (cx) => actions.retry(cx)));
   out.push(status3);
-  if (h.endpoint !== null) out.push(muted(label("gascity-endpoint", h.endpoint), theme2));
-  if (h.city !== null) out.push(label("gascity-city", `City: ${h.city}`));
+  if (!compact && h.endpoint !== null) out.push(muted(label("gascity-endpoint", h.endpoint), theme2));
+  if (!compact && h.city !== null) out.push(label("gascity-city", `City: ${h.city}`));
   h.banners.forEach((text2, i) => out.push(label(`gascity-banner-${i}`, text2)));
-  if (h.others.length > 0) {
+  if (!compact && h.others.length > 0) {
     const others = h.others.map((o) => `${o.name} (${o.label})`).join(", ");
     out.push(muted(label("gascity-others", `Other cities: ${others}`), theme2));
   }
-  if (h.choices !== null && h.choices.length > 0) {
+  if (h.choices !== null && h.choices.length > 0 && (!compact || h.city === null)) {
     const heading = h.city === null ? "Choose a city:" : "Switch to:";
-    const list = v_flex6().id("gascity-choices").gap(4).child(label("gascity-choices-heading", heading));
-    out.push(list.children(h.choices.map((c, i) => label(`gascity-choose-${i}`, `${c.name} (${c.label})`).on_click((_, cx) => actions.select(c.name, cx)))));
+    const list = h_flex7().id("gascity-choices").gap(6).items_center().child(muted(label("gascity-choices-heading", heading), theme2).text_size(12));
+    out.push(list.children(h.choices.map((c, i) => pill(`gascity-choose-${i}`, `${c.name} (${c.label})`, (cx) => actions.select(c.name, cx)))));
   }
   if (h.diagnostics.length > 0) {
     const lines = h.diagnostics.map((line, i) => muted(label(`gascity-diagnostic-${i}`, line), theme2));
@@ -11117,7 +11123,7 @@ function renderHeader(h, theme2, actions) {
 }
 
 // src/view/human.ts
-import { div as div8 } from "gpui-kit";
+import { div as div7 } from "gpui-kit";
 import { v_flex as v_flex7 } from "gpui-base";
 function questionText(r) {
   return `${r.selected ? "▸ " : ""}? ${r.who} asks (${r.what}) · session ${r.session}`;
@@ -11153,33 +11159,42 @@ function renderHuman(m, theme2, actions) {
   m.unreadable.forEach((u, k) => {
     body = body.child(label(`gascity-human-unreadable-${k}`, u));
   });
-  return region.child(greyedIf(div8().id("gascity-human-data").child(body), state.stale, theme2));
+  return region.child(greyedIf(div7().id("gascity-human-data").child(body), state.stale, theme2));
 }
 
 // src/view/needsYou.ts
+import { div as div8 } from "gpui-kit";
 import { h_flex as h_flex8, v_flex as v_flex8 } from "gpui-base";
-function renderWindowHead(m, theme2, actions) {
-  const target = m.target === null ? muted(label("gascity-window-target", "No toast to follow: pick a session below."), theme2) : label("gascity-window-target", m.target.run !== void 0 ? `Run ${m.target.ref ?? m.target.run} in city ${m.target.city}` : m.target.bead !== void 0 ? `Needs a decision: bead ${m.target.bead} in city ${m.target.city}` : `Needs you: session ${m.target.session ?? ""} in city ${m.target.city}`);
-  const tabs = m.tabs.length === 1 ? [button2("gascity-window-tab-0", "Show Gas City tab", (cx) => actions.showTab(m.tabs[0] ?? "", cx))] : m.tabs.map((t, i) => button2(`gascity-window-tab-${i}`, `Show Gas City tab ${t}`, (cx) => actions.showTab(t, cx)));
-  const close = m.closable ? [button2("gascity-window-close", "Close", (cx) => actions.closeWindow(cx))] : [];
-  const bar = h_flex8().id("gascity-window-bar").gap(8).children([...tabs, ...close]);
-  const list = m.pending.length === 0 ? muted(label("gascity-window-none", "No session needs you right now."), theme2) : v_flex8().id("gascity-window-pending").gap(2).children(m.pending.map((p, i) => label(`gascity-window-pending-${i}`, `${p.label} (session ${p.session}): ${p.kind}`).on_click((_, cx) => actions.selectSession(p.session, cx))));
-  let el = v_flex8().id("gascity-window").gap(6).child(target);
+function renderWindowHead(m, theme2, actions, runShown = false) {
+  const t = m.target;
+  const text2 = t === null ? "No toast to follow: pick a session below." : t.run !== void 0 ? `Run ${t.ref ?? t.run} in city ${t.city}` : t.bead !== void 0 ? `Needs a decision: bead ${t.bead} in city ${t.city}` : `Needs you: session ${t.session ?? ""} in city ${t.city}`;
+  const target = muted(label("gascity-window-target", text2), theme2).flex_1().min_w_0().text_size(12).overflow_hidden().whitespace_nowrap().text_ellipsis();
+  const tabs = m.tabs.length === 1 ? [button2("gascity-window-tab-0", "Show Gas City tab", (cx) => actions.showTab(m.tabs[0] ?? "", cx))] : m.tabs.map((t2, i) => button2(`gascity-window-tab-${i}`, `Gas City tab ${i + 1}`, (cx) => actions.showTab(t2, cx)));
+  const close = m.closable ? [button2("gascity-window-close", "Close tab", (cx) => actions.closeWindow(cx))] : [];
+  let bar = h_flex8().id("gascity-window-bar").gap(8).items_center().min_w_0();
+  const quiet = t === null && m.pending.length === 0;
+  bar = runShown && t?.run !== void 0 || quiet ? bar.child(div8().flex_1()) : bar.child(target);
+  bar = bar.children([...tabs, ...close]);
+  let el = v_flex8().id("gascity-window").gap(6).child(bar);
   if (m.next !== null) {
-    el = el.child(h_flex8().id("gascity-window-next").gap(8).child(label("gascity-window-next-text", m.next.run !== void 0 ? `Run ${m.next.ref ?? m.next.run} in city ${m.next.city} was opened.` : m.next.bead !== void 0 ? `Bead ${m.next.bead} in city ${m.next.city} needs a decision too.` : `Session ${m.next.session ?? ""} in city ${m.next.city} needs you too.`)).child(button2("gascity-window-next-show", "Show", (cx) => actions.showNext(cx))));
+    el = el.child(h_flex8().id("gascity-window-next").gap(8).items_center().child(label("gascity-window-next-text", m.next.run !== void 0 ? `Run ${m.next.ref ?? m.next.run} in city ${m.next.city} was opened.` : m.next.bead !== void 0 ? `Bead ${m.next.bead} in city ${m.next.city} needs a decision too.` : `Session ${m.next.session ?? ""} in city ${m.next.city} needs you too.`)).child(button2("gascity-window-next-show", "Show", (cx) => actions.showNext(cx))));
   }
-  return el.child(bar).child(list);
+  if (m.pending.length > 0) {
+    const rows = m.pending.map((p, i) => h_flex8().id(`gascity-window-pending-${i}-row`).gap(8).items_center().min_w_0().child(label(`gascity-window-pending-${i}`, `${p.label} (session ${p.session}): ${p.kind}`).flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis()).child(button2(`gascity-window-pending-${i}-open`, "Open", (cx) => actions.selectSession(p.session, cx))));
+    el = el.child(v_flex8().id("gascity-window-pending").gap(2).child(muted(label("gascity-window-pending-h", "Sessions waiting on you"), theme2).text_size(12)).children(rows));
+  } else if (t === null) {
+    el = el.child(muted(label("gascity-window-none", "Nothing needs you right now. Open a question, approval or decision from the sidebar or Needs a human."), theme2));
+  }
+  return el;
 }
 
 // src/view/runDetail.ts
-import { div as div9 } from "gpui-kit";
 import { h_flex as h_flex9, v_flex as v_flex9 } from "gpui-base";
 function toneColor2(tone, c) {
   return tone === "ok" ? c.ok : tone === "warn" ? c.warn : tone === "bad" ? c.bad : tone === "dim" ? c.dim : void 0;
 }
-function button3(id2, text2, colors, onClick) {
-  const el = div9().id(id2).flex_none().px(8).py(1).rounded(5).border_1().text_size(12).child(text2).on_click((_, cx) => onClick(cx));
-  return colors.dim === void 0 ? el : el.border_color(colors.dim);
+function button3(id2, text2, _colors, onClick) {
+  return pill(id2, text2, onClick);
 }
 function stepRow(s, i, theme2, colors, actions) {
   const id2 = `gascity-run-step-${i}`;
@@ -11189,7 +11204,7 @@ function stepRow(s, i, theme2, colors, actions) {
   let title = label(`${id2}-title`, s.title).flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis();
   if (s.tone === "dim") title = muted(title, theme2);
   else if (s.tone === "bad" && color !== void 0) title = title.text_color(color);
-  let attempts = label(`${id2}-attempts`, s.attempts ?? "").w(36).flex_none().text_size(12);
+  let attempts = label(`${id2}-attempts`, s.attempts ?? "").w(60).flex_none().text_size(12);
   attempts = s.exhausted && colors.bad !== void 0 ? attempts.text_color(colors.bad) : muted(attempts, theme2);
   let row2 = h_flex9().id(id2).gap(8).items_center().py(1).pl(s.depth === 1 ? 22 : 0).min_w_0().child(glyph).child(title);
   if (s.rounds !== null) row2 = row2.child(muted(label(`${id2}-rounds`, s.rounds), theme2).flex_none().text_size(12));
@@ -11209,7 +11224,7 @@ function renderRun(m, theme2, colors, actions) {
   const link = m.link;
   if (link !== null) buttons.push(button3("gascity-run-factory", "Open in factory ↗", colors, (cx) => actions.openLink(link, cx)));
   buttons.push(button3("gascity-run-refresh", "Refresh", colors, (cx) => actions.refreshRun(cx)));
-  buttons.push(button3("gascity-run-close", "Close", colors, (cx) => actions.closeRun(cx)));
+  buttons.push(button3("gascity-run-close", "Close run", colors, (cx) => actions.closeRun(cx)));
   const head = h_flex9().id("gascity-run-head").gap(8).items_center().min_w_0().child(label("gascity-run-title", heading).flex_1().min_w_0().text_size(15).font_semibold().overflow_hidden().whitespace_nowrap().text_ellipsis()).children(buttons);
   let el = v_flex9().id("gascity-run").gap(8).pt(4).child(head);
   const sub = [m.sub, `city ${m.city}`].filter((x) => x !== "").join(" · ");
@@ -11224,7 +11239,7 @@ function renderRun(m, theme2, colors, actions) {
     el = el.child(h_flex9().id("gascity-run-stages").gap(6).items_start().children(cells));
   }
   if (m.steps.length > 0) {
-    const head2 = h_flex9().id("gascity-run-steps-head").gap(8).text_size(12).child(muted(label("gascity-run-steps-h", "Steps"), theme2).flex_1()).child(muted(label("gascity-run-steps-a", "attempts"), theme2).w(36).flex_none()).child(muted(label("gascity-run-steps-s", "session"), theme2).w(220).flex_none());
+    const head2 = h_flex9().id("gascity-run-steps-head").gap(8).text_size(12).child(muted(label("gascity-run-steps-h", "Steps"), theme2).flex_1()).child(muted(label("gascity-run-steps-a", "tries"), theme2).w(60).flex_none()).child(muted(label("gascity-run-steps-s", "session"), theme2).w(220).flex_none());
     el = el.child(v_flex9().id("gascity-run-steps").gap(1).child(head2).children(m.steps.map((s, i) => stepRow(s, i, theme2, colors, actions))));
   }
   if (m.moreSteps > 0) el = el.child(muted(label("gascity-run-more", `${m.moreSteps} more steps in factory`), theme2).text_size(12));
@@ -11247,32 +11262,34 @@ function themeIssues(el, theme2) {
 function diagnostics(model) {
   const { view, theme: theme2, actions } = model;
   if (view.diagnostics.length === 0) return null;
-  const toggle = div10().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
+  const toggle = div9().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
   if (!view.diagnosticsOpen) return toggle;
   const lines = view.diagnostics.map((d, i) => muted(label(`gascity-diag-${i}`, `${d.at ?? ""} ${d.source}: ${d.text}`.trim()), theme2));
   return v_flex10().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
 }
 function renderPanel(model) {
-  const title = div10().id("gascity-title").text_size(16).font_semibold().child(TITLE);
+  const title = div9().id("gascity-title").text_size(16).font_semibold().child(TITLE);
   if (model.kind === "host-incompatible") {
     const root2 = v_flex10().id("gascity-root").size_full().p(12).gap(8);
     return root2.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  let root = themedRoot(model.theme, v_flex10().id("gascity-root").size_full().p(12).gap(8)).child(title);
+  let root = themedRoot(model.theme, v_flex10().id("gascity-root").size_full().p(12).gap(8));
   if (model.kind === "copy-invalid") {
-    return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
+    return themeIssues(root.child(title).child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
   const { view, theme: theme2, actions, inputs, keyboard, size } = model;
+  const compact = view.window !== null;
+  if (!compact) root = root.child(title);
   const colors = model.colors ?? {};
   root = root.overflow_y_scroll().on_size_change((s, cx) => size.resized(s.width, cx));
   if (keyboard !== null) root = root.track_focus(keyboard.handle).on_key_down((e, cx) => keyboard.onKey(e, cx));
-  root = root.children(renderHeader(view.header, theme2, actions));
+  root = root.children(renderHeader(view.header, theme2, actions, compact));
   const dialog = renderDialog(view.dialog, theme2, actions, inputs);
   if (dialog !== null) root = root.child(dialog);
   const notice = renderNotice(view.notice);
   if (notice !== null) root = root.child(notice);
   if (view.window !== null) {
-    root = root.child(renderWindowHead(view.window, theme2, actions));
+    root = root.child(renderWindowHead(view.window, theme2, actions, view.run !== null));
     const run2 = renderRun(view.run, theme2, colors, actions);
     if (run2 !== null) root = root.child(run2);
     const bead = beadDetail(view.beadDetail, theme2, actions, view.activity);
@@ -11287,7 +11304,7 @@ function renderPanel(model) {
   if (human !== null) root = root.child(human);
   const beside = size.layout === "side-by-side";
   const regions = [];
-  if (view.agents !== null) regions.push(shrinkIf(div10().id("gascity-agents-region"), beside).child(renderAgents(view.agents, theme2, actions, view.activity)));
+  if (view.agents !== null) regions.push(shrinkIf(div9().id("gascity-agents-region"), beside).child(renderAgents(view.agents, theme2, actions, view.activity)));
   if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions, view.activity, size.layout));
   if (regions.length > 0) root = root.child((beside ? h_flex10().items_start() : v_flex10()).id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme2, actions, { activity: view.activity, message: inputs?.message ?? null });
