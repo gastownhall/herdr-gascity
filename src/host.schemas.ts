@@ -37,7 +37,8 @@ export interface HostSpace {
   id: string;
   machine: string | null;
   active: boolean;
-  tabs: { id: string; active: boolean }[];
+  /** `name` is the tab's title; absent from herdr builds that do not report it. */
+  tabs: { id: string; active: boolean; name?: string | undefined }[];
 }
 
 /** focused(): the window's current space and tab. */
@@ -65,7 +66,7 @@ const SpaceSchema: z.ZodMiniType<HostSpace> = z.object({
   id: z.string(),
   machine: z.nullable(z.string()),
   active: z.boolean(),
-  tabs: z.array(z.object({ id: z.string(), active: z.boolean() })),
+  tabs: z.array(z.object({ id: z.string(), active: z.boolean(), name: z.optional(z.string()) })),
 });
 
 const FocusSchema: z.ZodMiniType<HostFocus | null> = z.nullable(z.object({ space: z.string(), tab: z.string() }));

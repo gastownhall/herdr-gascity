@@ -54,6 +54,8 @@ import { CommandBook, type CommandEntry } from "./commandBook.ts";
 import { isMutating, parseCommand, shownCommand, type Command } from "./commands.ts";
 import { moveIn, type KeyAction } from "./keys.ts";
 import { focusToApply } from "./notify/focus.ts";
+import { projectRunDetail, type RunDetail } from "./sync/runDetail.ts";
+import { runViewModel, type RunViewModel } from "./vm/runDetail.ts";
 import { SLING_MAY_ROUTE_TWICE, beadClose, beadCreate, beadReopen, beadSling } from "./actions/work.ts";
 import type { CityEvent, CityScopedError } from "./discovery/city.ts";
 import { selectedCity } from "./discovery/city.ts";
@@ -66,11 +68,14 @@ import type { Result } from "./result.ts";
 import type { Clock } from "./sync/clock.ts";
 import type { ErrorEntry, SyncError } from "./sync/store.ts";
 import type { CitiesSubscription, Subscription, SyncRegistry } from "./sync/registry.ts";
+import type { NeedsSubscription } from "./sync/registry.ts";
 import { ALL_DOMAINS } from "./sync/invalidate.ts";
 import { MOD_NAME, mayBeOnScreen, type VisibilityInput } from "./sync/visibility.ts";
 import { MOD_VERSION } from "./version.ts";
 import { activityModel, isBusy, type ActivityModel } from "./vm/activity.ts";
-import { agentsModel, type AgentsModel } from "./vm/agents.ts";
+import { AGENT_PAGE, agentsModel, type AgentsModel } from "./vm/agents.ts";
+import { inboxModel, sidebarModel, type InboxFilter, type InboxModel, type SidebarModel } from "./vm/sidebar.ts";
+import { humanModel, type HumanModel } from "./vm/human.ts";
 import { beadDetailModel, boardModel, type BeadDetailModel, type BoardModel } from "./vm/board.ts";
 import { detailModel, type DetailModel } from "./vm/detail.ts";
 import { diagnosticsModel, type DiagnosticLine } from "./vm/diagnostics.ts";
@@ -91,6 +96,10 @@ export interface CopyHost {
   settings(): unknown;
   /** Stores the gc program in the machine-wide settings; refused when it is not gc or the stored value is unreadable. */
   setGcBin(gcBin: string): Result<void, GcError>;
+  /** Stores (null removes) the web dashboard the views link to. */
+  setDashboardUrl?(url: string | null): Result<void, GcError>;
+  /** Stores (null removes) the dashboard formula runs link to. */
+  setRunsUrl?(url: string | null): Result<void, GcError>;
   /** herdr-app's version (null when it reports none), or why it could not be read. */
   herdrVersion(): Result<string | null, GcError>;
   execLog(): readonly ExecRecord[];
@@ -114,7 +123,17 @@ export interface CopyDeps {
   commands?: CommandBook;
   /** Whether any of this copy's text boxes holds text: the window then does not switch sessions on its own. */
   draft?: () => boolean;
+  /** What this copy shows (props().view): a city (default), the cross-city sidebar block, or the Needs a human pane. */
+  view?: CopyKind;
+  /** The window can close itself (an overlay); the Needs you tab cannot (herdr closes tabs). Default true. */
+  windowClosable?: boolean;
 }
+
+/** What a copy shows. */
+export type CopyKind = "tab" | "sidebar" | "inbox" | "follow";
+
+/** A cross-city copy's model (the sidebar block or the Needs a human pane). */
+export type CrossCityView = { kind: "sidebar"; model: SidebarModel } | { kind: "inbox"; model: InboxModel };
 
 /** What only the view around a copy can do for a command (main.ts). */
 export interface CommandUi {
@@ -128,16 +147,39 @@ export interface CommandUi {
   beadTitle(title: string): void;
 }
 
+/** What the window shows: a session, a bead or a formula run in a city. */
+export interface FocusOn {
+  city: string;
+  /** Exactly one of session, bead and run is set. */
+  session?: string;
+  bead?: string;
+  /** A formula run (gc's id), with its PR and title from the run summary when known. */
+  run?: string;
+  ref?: string;
+  title?: string;
+  /** With a session: open its terminal once shown (Answer). */
+  attach?: true;
+}
+
+function cleanFocus(f: FocusOn): FocusOn {
+  if (f.run !== undefined) {
+    return { city: cleanLine(f.city), run: cleanLine(f.run), ...(f.ref !== undefined ? { ref: cleanLine(f.ref) } : {}), ...(f.title !== undefined ? { title: cleanLine(f.title) } : {}) };
+  }
+  return f.bead !== undefined ? { city: cleanLine(f.city), bead: cleanLine(f.bead) } : { city: cleanLine(f.city), session: cleanLine(f.session ?? "") };
+}
+
 /** The "needs you" window's model. */
 export interface WindowModel {
-  /** The session the newest focus target names (cleaned), or null. */
-  target: { city: string; session: string } | null;
+  /** The session or bead the newest focus target names (cleaned), or null. */
+  target: FocusOn | null;
   /** The city's sessions that need you, cleaned. */
   pending: { session: string; label: string; kind: string }[];
   /** Tabs holding a Gas City pane (herdr's ids), for "Show Gas City tab". */
   tabs: string[];
   /** A newer target held back while a draft is typed (cleaned): shown on request. */
-  next: { city: string; session: string } | null;
+  next: FocusOn | null;
+  /** Show Close: the window is an overlay it can close (the Needs you tab is not). */
+  closable: boolean;
 }
 
 /** A question the copy asks before acting, or a form. */
@@ -172,6 +214,8 @@ export interface CopyView {
   agents: AgentsModel | null;
   /** Null until a running city is subscribed. */
   board: BoardModel | null;
+  /** What waits on a person; null until a running city is subscribed. */
+  human: HumanModel | null;
   beadDetail: BeadDetailModel;
   detail: DetailModel;
   /** The city's activity log; null until a running city is subscribed. */
@@ -185,9 +229,14 @@ export interface CopyView {
   onScreen: boolean;
   /** The "needs you" window's part; null for a copy that is not the window. */
   window: WindowModel | null;
+  /** The formula run the window shows (its steps), or null. */
+  run: RunViewModel | null;
   /** Commands this copy ran, newest last. */
   commands: readonly CommandEntry[];
 }
+
+/** How often the run the window shows is read again while it is on screen. */
+export const RUN_DETAIL_MS = 30_000;
 
 /** How long a focus waits for its city to run and list its sessions. */
 export const FOCUS_WAIT_MS = 60_000;
@@ -232,11 +281,24 @@ export class CopyController {
   private selected: string | null = null;
   private selectedBead: string | null = null;
   private readonly collapsed = new Set<string>();
+  /** Agents listed per expanded group, past the first page. */
+  private readonly shown = new Map<string, number>();
   private diagnosticsOpen = false;
   private refreshCount = 0;
   private onScreen = true;
   private cities: CitiesSubscription | null = null;
   private citiesRev = -1;
+  /** The cross-city views' shared poll of what waits on a person. */
+  private needs: NeedsSubscription | null = null;
+  private needsRev = -1;
+  /** Cities unfolded in the sidebar. */
+  private readonly unfolded = new Set<string>();
+  private inboxFilter: InboxFilter = "all";
+  private inboxCity: string | null = null;
+  /** The web dashboard to link to, read from the settings each tick (render reads no host state). */
+  private dashboard: string | null = null;
+  /** The dashboard formula runs link to (settings runsUrl), read each tick. */
+  private runsDashboard: string | null = null;
   private city: Subscription | null = null;
   /** The city the last subscription was to: a bead selected there means nothing in another city. */
   private lastCity: string | null = null;
@@ -263,13 +325,20 @@ export class CopyController {
   /** The discovery's progress count when it last moved, and when (stall detection). */
   private discoveryProgress = { count: 0, at: 0 };
   /** A session to show once its city is subscribed and lists it (focus command, or the window's target). */
-  private focusing: { city: string; session: string; since: number } | null = null;
+  private focusing: (FocusOn & { since: number }) | null = null;
   /** The seq of the last shared focus target the window applied. */
   private focusApplied = 0;
-  private focusShown: { city: string; session: string } | null = null;
+  private focusShown: FocusOn | null = null;
   /** A newer shared target the window holds back while a text box holds a draft. */
-  private focusNext: { city: string; session: string } | null = null;
+  private focusNext: FocusOn | null = null;
   private gascityTabs: string[] = [];
+  /** The formula run the window shows, and its detail as last read. */
+  private run: {
+    city: string; id: string; ref: string | null; title: string | null;
+    detail: RunDetail | null; error: string | null; fetchedAt: number | null; reading: boolean;
+  } | null = null;
+  /** Grows with every read of the run's detail that lands (the redraw signature). */
+  private runRev = 0;
   /** The Idempotency-Key a command's nonce gives the action it sends (only while that command runs). */
   private commandKey: string | null = null;
   private ownBook: CommandBook | null = null;
@@ -310,6 +379,7 @@ export class CopyController {
 
     const before = discovery.machine.state;
     this.followCities("endpoint" in before ? before.endpoint.url : null, before.phase !== "city-running");
+    if (this.crossCity()) return this.stepCrossCity();
     // The city list may just have moved the machine.
     const state = discovery.machine.state;
     const endpoint = "endpoint" in state ? state.endpoint : null;
@@ -318,6 +388,7 @@ export class CopyController {
     this.followFocus();
     this.followDetail();
     this.followBead();
+    this.followRun();
     // Ticked once the copy's watches are placed: a new store (gc restarted, or
     // the city switched away and back) sees the open pane before its first
     // tick, so keep-awake keeps the pane's pin instead of releasing it.
@@ -341,8 +412,9 @@ export class CopyController {
 
     const signature = [
       this.machineVersion(), this.citiesRev, this.city?.snapshot().rev ?? -1, this.city?.activity().rev ?? -1, this.onScreen, this.selected,
-      this.selectedBead, this.notice ?? "", this.gascityTabs.join(","), this.focusShown?.session ?? "", this.focusNext?.session ?? "",
+      this.selectedBead, this.notice ?? "", this.gascityTabs.join(","), JSON.stringify(this.focusShown), JSON.stringify(this.focusNext),
       this.selected !== null ? JSON.stringify(this.city?.keepAwake(this.selected) ?? null) : "",
+      this.run?.id ?? "", this.runRev, this.run?.reading ?? false, this.runsDashboard ?? "",
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -362,15 +434,102 @@ export class CopyController {
     this.city = null;
     this.cities?.unsubscribe();
     this.cities = null;
+    this.needs?.unsubscribe();
+    this.needs = null;
     this.deps.probe.release(this);
+  }
+
+  // ---- the cross-city views (the sidebar block, the Needs a human pane) -------------------
+
+  /** This copy is the sidebar block or the Needs a human pane: no city store, only the shared needs poll. */
+  crossCity(): boolean {
+    return this.deps.view === "sidebar" || this.deps.view === "inbox";
+  }
+
+  private stepCrossCity(): boolean {
+    const state = this.deps.discovery.machine.state;
+    const apiUrl = "endpoint" in state ? state.endpoint.url : null;
+    if (this.needs && this.needs.apiUrl !== apiUrl) {
+      this.needs.unsubscribe();
+      this.needs = null;
+    }
+    if (!this.needs && apiUrl !== null) {
+      const made = this.deps.registry.subscribeNeeds(apiUrl);
+      if (made.ok) {
+        this.needs = made.value;
+        this.needsRev = -1;
+      } else this.hostError(made.error);
+    }
+    const running = (this.cities?.snapshot().value?.items ?? []).filter((c) => c.running).map((c) => c.name);
+    const rev = this.needs?.tick(running) ?? -1;
+    const settings = decodeSettings(this.deps.host.settings());
+    this.dashboard = settings.ok ? settings.value.dashboardUrl : null;
+    this.runsDashboard = settings.ok ? settings.value.runsUrl : null;
+    const signature = [
+      this.dashboard ?? "", this.runsDashboard ?? "",
+      this.machineVersion(), this.citiesRev, rev, [...this.unfolded].join(","), this.inboxFilter, this.inboxCity ?? "", this.notice ?? "",
+    ].join("|");
+    this.needsRev = rev;
+    if (signature === this.signature) return false;
+    this.signature = signature;
+    return true;
+  }
+
+  /** The web dashboard the views link to (settings dashboardUrl, as of the last tick), or null. */
+  dashboardUrl(): string | null {
+    return this.dashboard;
+  }
+
+  /** The dashboard formula runs link to (settings runsUrl, as of the last tick), or null. */
+  runsUrl(): string | null {
+    return this.runsDashboard;
+  }
+
+  /** The cross-city model; null for a city copy. */
+  crossView(now: number): CrossCityView | null {
+    const cities = this.cities?.snapshot() ?? null;
+    const dashboardUrl = this.dashboardUrl();
+    const needs = this.needs?.snapshot() ?? null;
+    const notice = this.notice;
+    if (this.deps.view === "sidebar") {
+      const model = sidebarModel({ cities, needs, expanded: this.unfolded, now, dashboardUrl, runsUrl: this.runsDashboard });
+      return { kind: "sidebar", model: notice !== null && model.note === null ? { ...model, note: notice } : model };
+    }
+    if (this.deps.view === "inbox") {
+      const model = inboxModel({ cities, needs, filter: this.inboxFilter, city: this.inboxCity, now, dashboardUrl, runsUrl: this.runsDashboard });
+      return { kind: "inbox", model: notice !== null && model.note === null ? { ...model, note: notice } : model };
+    }
+    return null;
+  }
+
+  /** A host call made for a click failed: recorded, and said in the view. */
+  noteHostError(error: GcError): void {
+    this.hostError(error);
+    this.notice = `could not open it: ${errorText(error)}`;
+  }
+
+  /** Folds or unfolds a city in the sidebar. */
+  toggleCity(city: string): void {
+    if (!this.unfolded.delete(city)) this.unfolded.add(city);
+  }
+
+  /** Narrows the Needs a human pane to a kind. */
+  setInboxFilter(filter: InboxFilter): void {
+    this.inboxFilter = filter;
+  }
+
+  /** Narrows the Needs a human pane to a city; null for every city. */
+  setInboxCity(city: string | null): void {
+    this.inboxCity = city;
   }
 
   /** The view-models for render (and the probe). */
   view(now: number): CopyView {
     const { discovery } = this.deps;
     const s = this.city?.snapshot() ?? null;
-    const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed }) : null;
+    const agents = s ? agentsModel({ snapshot: s, now, selected: this.selected, collapsed: this.collapsed, shown: this.shown }) : null;
     const board = s ? boardModel({ snapshot: s, now, selected: this.selectedBead }) : null;
+    const human = s ? humanModel({ snapshot: s, now, selectedSession: this.selected, selectedBead: this.selectedBead }) : null;
     const live = s && agents ? { connection: s.connection, now, needsYou: agents.needsYou, age: agents.region.age } : null;
     const citiesError = this.cities?.snapshot().error;
     const header = headerModel(discovery.machine, discovery.hostErrors, live);
@@ -378,6 +537,7 @@ export class CopyController {
       header,
       agents,
       board,
+      human,
       beadDetail: s ? beadDetailModel({ snapshot: s, now, selected: this.selectedBead }) : { kind: "none" },
       detail: s ? detailModel({ snapshot: s, now, selected: this.selected, keepAwake: this.selected !== null ? this.city?.keepAwake(this.selected) ?? null : null }) : { kind: "none" },
       activity: this.city ? activityModel(this.city.activity(), s, now) : null,
@@ -392,12 +552,13 @@ export class CopyController {
           ...this.failures,
         ],
         drift: [...(agents?.drift ?? []), ...(board?.drift ?? [])],
-        unreadable: [...(agents?.unreadable.map((u) => u.text) ?? []), ...(board?.unreadable ?? [])],
+        unreadable: [...(agents?.unreadable.map((u) => u.text) ?? []), ...(board?.unreadable ?? []), ...(human?.unreadable ?? [])],
       }),
       diagnosticsOpen: this.diagnosticsOpen,
       refreshCount: this.refreshCount,
       onScreen: this.onScreen,
       window: this.deps.window ? this.windowModel() : null,
+      run: this.run === null ? null : runViewModel({ ...this.run, runsUrl: this.runsDashboard, now }),
       commands: this.commands().entries(),
     };
   }
@@ -413,6 +574,7 @@ export class CopyController {
     this.refreshCount++;
     this.rediscovery = null;
     this.cities?.refresh();
+    this.needs?.refresh();
     if (this.city) {
       this.city.retryNow();
       this.city.refresh(ALL_DOMAINS);
@@ -429,12 +591,14 @@ export class CopyController {
 
   /** Opens (or, with null, closes) the detail of a session. */
   selectSession(id: string | null): void {
+    if (id !== null) this.run = null;
     this.selected = id;
     this.followDetail();
   }
 
   /** Opens (or, with null, closes) the detail of a bead on the board. */
   selectBead(id: string | null): void {
+    if (id !== null) this.run = null;
     this.selectedBead = id;
     this.followBead();
   }
@@ -442,6 +606,11 @@ export class CopyController {
   /** Collapses or expands a rig group. */
   toggleGroup(key: string): void {
     if (!this.collapsed.delete(key)) this.collapsed.add(key);
+  }
+
+  /** Lists another page of a group's agents. */
+  showMoreAgents(key: string): void {
+    this.shown.set(key, (this.shown.get(key) ?? AGENT_PAGE) + AGENT_PAGE);
   }
 
   toggleDiagnostics(): void {
@@ -801,6 +970,22 @@ export class CopyController {
       case "back":
         this.selectSession(null);
         return "closed";
+      case "set-dashboard-url": {
+        const stored = this.deps.host.setDashboardUrl?.(c.url) ?? { ok: false as const, error: { kind: "host-call" as const, api: "setShared", cause: "unavailable" } };
+        if (!stored.ok) {
+          this.refuse(errorText(stored.error));
+          return "";
+        }
+        return c.url === null ? "no dashboard links" : `dashboard ${c.url}`;
+      }
+      case "set-runs-url": {
+        const stored = this.deps.host.setRunsUrl?.(c.url) ?? { ok: false as const, error: { kind: "host-call" as const, api: "setShared", cause: "unavailable" } };
+        if (!stored.ok) {
+          this.refuse(errorText(stored.error));
+          return "";
+        }
+        return c.url === null ? "no run links" : `runs ${c.url}`;
+      }
       case "set-gc-bin": {
         const stored = this.deps.host.setGcBin(c.gcBin);
         if (!stored.ok) {
@@ -913,18 +1098,108 @@ export class CopyController {
   }
 
   /** Shows `session` of `city` once the city is subscribed and lists it (the focus command, the window's target). */
-  focusSession(city: string, session: string): void {
+  focusSession(city: string, session: string, attach = false): void {
     const pinned = this.deps.discovery.machine.copy.pinned;
     if (pinned !== null && pinned !== city) {
       this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
       return;
     }
     if (!this.checkCity(city)) return;
-    this.focusing = { city, session, since: this.deps.clock.now() };
+    this.focusing = { city, session, ...(attach ? { attach: true as const } : {}), since: this.deps.clock.now() };
     this.followFocus();
   }
 
+  /** Shows a bead's detail in this copy (the window's target from the sidebar or the Needs a human pane). */
+  focusBead(city: string, bead: string, attach = false): void {
+    const pinned = this.deps.discovery.machine.copy.pinned;
+    if (pinned !== null && pinned !== city) {
+      this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
+      return;
+    }
+    if (!this.checkCity(city)) return;
+    this.focusing = { city, bead, ...(attach ? { attach: true as const } : {}), since: this.deps.clock.now() };
+    this.followFocus();
+  }
+
+  /** Shows a formula run's steps in this copy (the window's target from the sidebar or the Needs a human pane). */
+  focusRun(city: string, run: string, hints: { ref?: string; title?: string } = {}): void {
+    const pinned = this.deps.discovery.machine.copy.pinned;
+    if (pinned !== null && pinned !== city) {
+      this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
+      return;
+    }
+    if (!this.checkCity(city)) return;
+    this.focusing = { city, run, ...hints, since: this.deps.clock.now() };
+    this.followFocus();
+  }
+
+  /** Closes the run the window shows. */
+  closeRun(): void {
+    this.run = null;
+    if (this.focusShown?.run !== undefined) this.focusShown = null;
+  }
+
+  /** Reads the shown run's detail again now. */
+  refreshRun(): void {
+    if (this.run !== null) this.run.fetchedAt = null;
+    this.followRun();
+  }
+
+  /** Opens the terminal of a session a run's step names (gc's session name), if gc lists it. */
+  openRunSession(name: string): void {
+    const id = this.resolveSession(name);
+    if (id !== null) this.openTerminal(id);
+  }
+
+  /**
+   * Keeps the shown run's detail fresh: read when it is first shown, then
+   * every RUN_DETAIL_MS while this copy is on screen, one read at a time,
+   * once the copy is subscribed to the run's city (its API).
+   */
+  private followRun(): void {
+    const r = this.run;
+    if (r === null) return;
+    const settings = decodeSettings(this.deps.host.settings());
+    this.runsDashboard = settings.ok ? settings.value.runsUrl : null;
+    const now = this.deps.clock.now();
+    if (r.reading || !this.onScreen || this.city?.key.city !== r.city) return;
+    if (r.fetchedAt !== null && now - r.fetchedAt < RUN_DETAIL_MS) return;
+    r.reading = true;
+    const done = (detail: RunDetail | null, error: string | null) => {
+      r.reading = false;
+      r.fetchedAt = this.deps.clock.now();
+      if (this.run !== r) return;
+      if (detail !== null) r.detail = detail;
+      r.error = error;
+      this.runRev++;
+    };
+    this.deps.registry.readRunDetail(this.city.key.apiUrl, r.city, r.id).then(
+      (raw) => {
+        const detail = projectRunDetail(raw);
+        done(detail, detail === null ? "gc did not return this run's detail (it may have finished, or gc's dashboard API is off)" : null);
+      },
+      (cause: unknown) => done(null, `could not read the run: ${messageOf(cause)}`),
+    );
+  }
+
   /** A session by gc's id, or by its exact alias or session name when exactly one session has it; else says why not. */
+  /**
+   * The session that owns a bead waiting on a decision: its assignee, when
+   * that names exactly one of the city's sessions (by id, alias or session
+   * name) that is not closing. Null otherwise (most such beads are unassigned).
+   */
+  private ownerSession(beadId: string): string | null {
+    const s = this.city?.snapshot();
+    const bead = s?.human.value?.items.find((b) => b.id === beadId) ?? s?.beads.get(beadId)?.value ?? null;
+    const ref = bead?.assignee;
+    if (!ref || !s?.sessions.value) return null;
+    const live = s.sessions.value.items.filter((x) => !["closing", "closed", "archived", "drained", "draining"].includes(x.state));
+    const byId = live.find((x) => x.id === ref);
+    if (byId) return byId.id;
+    const named = live.filter((x) => x.alias === ref || x.session_name === ref);
+    return named.length === 1 && named[0] ? named[0].id : null;
+  }
+
   private resolveSession(ref: string): string | null {
     const items = this.city?.snapshot().sessions.value?.items;
     if (!items) {
@@ -962,7 +1237,7 @@ export class CopyController {
   private sessionOrder(): string[] {
     const s = this.city?.snapshot();
     if (!s) return [];
-    const m = agentsModel({ snapshot: s, now: this.deps.clock.now(), selected: this.selected, collapsed: this.collapsed });
+    const m = agentsModel({ snapshot: s, now: this.deps.clock.now(), selected: this.selected, collapsed: this.collapsed, shown: this.shown });
     return [...m.groups.flatMap((g) => g.agents.flatMap((a) => a.sessions.map((r) => r.id))), ...m.other.map((r) => r.id)];
   }
 
@@ -976,30 +1251,73 @@ export class CopyController {
       const t = focusToApply(this.deps.host.focusTarget(), this.focusApplied, now);
       if (t !== null) {
         this.focusApplied = t.seq;
-        this.focusNext = { city: t.city, session: t.session };
+        const attach = t.attach ? { attach: true as const } : {};
+        this.focusNext = t.run !== undefined
+          ? { city: t.city, run: t.run, ...(t.ref !== undefined ? { ref: t.ref } : {}), ...(t.title !== undefined ? { title: t.title } : {}) }
+          : t.bead !== undefined ? { city: t.city, bead: t.bead, ...attach } : { city: t.city, session: t.session ?? "", ...attach };
       }
       // While a text box holds a draft the window stays where the person is typing: the newer target waits for "Show".
       const n = this.focusNext;
       const shown = this.focusShown;
-      const same = shown !== null && shown.city === n?.city && (shown.session === n.session || this.selected === n.session);
+      const same = shown !== null && n !== null && !n.attach && shown.city === n.city && (n.run !== undefined
+        ? shown.run === n.run
+        : n.bead !== undefined
+        ? shown.bead === n.bead
+        : shown.session === n.session || this.selected === n.session);
       if (n !== null && (same || !(this.deps.draft?.() ?? false))) this.showNext();
     }
     const f = this.focusing;
     if (f === null) return;
     const { discovery } = this.deps;
     if (selectedCity(discovery.machine.state) !== f.city) discovery.select(f.city);
-    if (this.city?.key.city === f.city && this.city.snapshot().sessions.value) {
+    if (f.run !== undefined && this.city?.key.city === f.city) {
+      this.focusing = null;
+      this.selectSession(null);
+      this.selectBead(null);
+      const same = this.run !== null && this.run.city === f.city && this.run.id === f.run;
+      if (!same) {
+        this.run = { city: f.city, id: f.run, ref: f.ref ?? null, title: f.title ?? null, detail: null, error: null, fetchedAt: null, reading: false };
+      } else if (this.run !== null) this.run.fetchedAt = null;
+      this.focusShown = { city: f.city, run: f.run, ...(f.ref !== undefined ? { ref: f.ref } : {}) };
+      this.followRun();
+      return;
+    }
+    if (f.bead !== undefined && this.city?.key.city === f.city) {
+      const s = this.city.snapshot();
+      // Answer on a decision: its assignee's terminal when that is one of the city's sessions, once both lists are in.
+      if (f.attach && (s.sessions.value === null || s.human.value === null)) {
+        if (now - f.since <= FOCUS_WAIT_MS) return;
+      }
+      this.focusing = null;
+      const owner = f.attach ? this.ownerSession(f.bead) : null;
+      if (owner !== null) {
+        this.selectBead(null);
+        this.selectSession(owner);
+        this.focusShown = { city: f.city, session: owner };
+        this.openTerminal(owner);
+        return;
+      }
+      this.selectSession(null);
+      this.selectBead(f.bead);
+      this.focusShown = { city: f.city, bead: f.bead };
+      return;
+    }
+    if (f.session !== undefined && this.city?.key.city === f.city && this.city.snapshot().sessions.value) {
       this.focusing = null;
       const id = this.resolveSession(f.session);
       if (id !== null) {
+        this.selectBead(null);
         this.selectSession(id);
         this.focusShown = { city: f.city, session: id };
+        // Answer: open the session's terminal (the Open terminal action: wake if needed, then `gc session attach`).
+        if (f.attach) this.openTerminal(id);
       }
       return;
     }
     if (now - f.since > FOCUS_WAIT_MS) {
       this.focusing = null;
-      this.refuse(`could not show session ${cleanLine(f.session)}: city ${cleanLine(f.city)} is not running`);
+      const what = f.run !== undefined ? `run ${cleanLine(f.ref ?? f.run)}` : f.bead !== undefined ? `bead ${cleanLine(f.bead)}` : `session ${cleanLine(f.session ?? "")}`;
+      this.refuse(`could not show ${what}: city ${cleanLine(f.city)} is not running`);
     }
   }
 
@@ -1007,7 +1325,10 @@ export class CopyController {
   showNext(): void {
     const n = this.focusNext;
     this.focusNext = null;
-    if (n !== null) this.focusSession(n.city, n.session);
+    if (n === null) return;
+    if (n.run !== undefined) this.focusRun(n.city, n.run, { ...(n.ref !== undefined ? { ref: n.ref } : {}), ...(n.title !== undefined ? { title: n.title } : {}) });
+    else if (n.bead !== undefined) this.focusBead(n.city, n.bead, n.attach === true);
+    else this.focusSession(n.city, n.session ?? "", n.attach === true);
   }
 
   private windowModel(): WindowModel {
@@ -1020,10 +1341,11 @@ export class CopyController {
     const t = this.focusShown;
     const n = this.focusNext;
     return {
-      target: t ? { city: cleanLine(t.city), session: cleanLine(t.session) } : null,
+      target: t ? cleanFocus(t) : null,
       pending,
       tabs: this.gascityTabs,
-      next: n ? { city: cleanLine(n.city), session: cleanLine(n.session) } : null,
+      next: n ? cleanFocus(n) : null,
+      closable: this.deps.windowClosable ?? true,
     };
   }
 
@@ -1169,7 +1491,9 @@ export class CopyController {
     const v = this.deps.host.visibility();
     if (v.ok) {
       this.onScreen = mayBeOnScreen(v.value);
-      this.gascityTabs = [...new Set(v.value.panes.filter((p) => p.mod === MOD_NAME).map((p) => p.tab))];
+      // Not the tab in front (this one, when it shows): its button would do nothing.
+      const front = v.value.focus?.tab ?? null;
+      this.gascityTabs = [...new Set(v.value.panes.filter((p) => p.mod === MOD_NAME && p.tab !== front).map((p) => p.tab))];
       return;
     }
     // herdr's data cannot be read: say so, and poll as if on screen (the conservative side).
@@ -1307,6 +1631,7 @@ export class CopyController {
       keyboard: this.deps.host.keyboard(),
       agents: v.agents,
       board: v.board,
+      human: v.human,
       beadDetail: v.beadDetail,
       detail: v.detail,
       activity: v.activity,

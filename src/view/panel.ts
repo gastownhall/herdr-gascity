@@ -4,18 +4,20 @@
 import { div } from "gpui-kit";
 import { h_flex, v_flex, type InputState } from "gpui-base";
 import type { CopyView } from "../copy.ts";
-import type { ThemeRead } from "../host.ts";
+import type { StatusColors, ThemeRead } from "../host.ts";
 import { renderAgents, type AgentsActions } from "./agents.ts";
-import { renderBoard, type BoardActions } from "./board.ts";
+import { beadDetail, renderBoard, type BoardActions } from "./board.ts";
 import { renderDetail, type DetailActions } from "./detail.ts";
 import { renderActivity, renderDialog, renderNotice, type DialogActions, type DialogInputs } from "./dialogs.ts";
 import { renderHeader, type HeaderActions } from "./header.ts";
+import { renderHuman, type HumanActions } from "./human.ts";
 import { renderWindowHead, type WindowActions } from "./needsYou.ts";
+import { renderRun, type RunActions } from "./runDetail.ts";
 import { label, muted, shrinkIf, themedRoot } from "./text.ts";
 import type { PanelLayout } from "../vm/layout.ts";
 
 /** What a click may do; main.ts supplies them. */
-export interface PanelActions extends HeaderActions, AgentsActions, BoardActions, DetailActions, DialogActions, WindowActions {
+export interface PanelActions extends HeaderActions, AgentsActions, BoardActions, DetailActions, DialogActions, WindowActions, HumanActions, RunActions {
   toggleDiagnostics(cx: GpuiContext): void;
 }
 
@@ -43,6 +45,8 @@ export type PanelModel =
   | {
     kind: "city"; theme: ThemeRead; view: CopyView; actions: PanelActions; inputs: PanelInputs | null; keyboard: PanelKeyboard | null;
     size: PanelSize;
+    /** The theme's status colours (the run view's strip and glyphs). */
+    colors?: StatusColors;
   }
   | { kind: "copy-invalid"; theme: ThemeRead; error: string }
   | { kind: "host-incompatible"; missing: readonly string[] };
@@ -80,28 +84,41 @@ export function renderPanel(model: PanelModel): GpuiElement {
     const root = v_flex().id("gascity-root").size_full().p(12).gap(8);
     return root.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  let root = themedRoot(model.theme, v_flex().id("gascity-root").size_full().p(12).gap(8)).child(title);
+  let root = themedRoot(model.theme, v_flex().id("gascity-root").size_full().p(12).gap(8));
   if (model.kind === "copy-invalid") {
-    return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
+    return themeIssues(root.child(title).child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
   const { view, theme, actions, inputs, keyboard, size } = model;
+  // The Needs you tab is named for what it shows: no big title, a one-line header.
+  const compact = view.window !== null;
+  if (!compact) root = root.child(title);
+  const colors = model.colors ?? {};
   // The panel may be taller than its pane (the board stacked under the agents): it scrolls.
   root = root.overflow_y_scroll().on_size_change((s, cx) => size.resized(s.width, cx));
   if (keyboard !== null) root = root.track_focus(keyboard.handle).on_key_down((e, cx) => keyboard.onKey(e, cx));
-  root = root.children(renderHeader(view.header, theme, actions));
+  root = root.children(renderHeader(view.header, theme, actions, compact));
   const dialog = renderDialog(view.dialog, theme, actions, inputs);
   if (dialog !== null) root = root.child(dialog);
   const notice = renderNotice(view.notice);
   if (notice !== null) root = root.child(notice);
   // The "needs you" window: its own rows, then the session's detail; no agents or board.
   if (view.window !== null) {
-    root = root.child(renderWindowHead(view.window, theme, actions));
+    root = root.child(renderWindowHead(view.window, theme, actions, view.run !== null));
+    // A formula run from the sidebar or the Needs a human pane: its stages and steps.
+    const run = renderRun(view.run, theme, colors, actions);
+    if (run !== null) root = root.child(run);
+    // A bead from the sidebar or the Needs a human pane: its detail, with Close… and Sling….
+    const bead = beadDetail(view.beadDetail, theme, actions, view.activity);
+    if (bead !== null) root = root.child(bead);
     const d = renderDetail(view.detail, theme, actions, { activity: view.activity, message: inputs?.message ?? null });
     if (d !== null) root = root.child(d);
     const log = renderActivity(view.activity, theme, actions);
     if (log !== null) root = root.child(log);
     return themeIssues(root, theme);
   }
+  // What waits on a person first: answering it unblocks the city.
+  const human = view.human === null ? null : renderHuman(view.human, theme, actions);
+  if (human !== null) root = root.child(human);
   // Agents beside the work board when the panel is wide enough, else the board under them; the session detail below both.
   const beside = size.layout === "side-by-side";
   const regions: GpuiElement[] = [];

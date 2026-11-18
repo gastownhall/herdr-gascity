@@ -137,6 +137,15 @@ describe("rules", () => {
     expect(rules("a.ts", 'if (c === "terminal.kill") x();')).toEqual(["terminal-command"]);
   });
 
+  test("the mod tab's tab.new is allowed only as written: adding an argv is a hit", () => {
+    const entry = ALLOWLIST.filter((e) => e.file === "src/host.ts" && e.text === MOD_TAB);
+    const ok = `import * as herdr from "herdr";\n${MOD_TAB};`;
+    expect(lintSource("src/host.ts", ok, entry)).toEqual([]);
+    const withArgv = `import * as herdr from "herdr";\nherdr.run("tab.new", { ...where, name, mod: MOD_NAME, props: { view: modView }, argv: ["sh"] });`;
+    // The entry no longer matches anything (stale-allowlist), and the changed call is a hit.
+    expect(lintSource("src/host.ts", withArgv, entry).map((v) => v.rule)).toContain("run-command");
+  });
+
   test("tab.new and the platform opener run only from their wrappers' exact calls", () => {
     const tabNew = ALLOWLIST.find((e) => e.file === "src/host.ts" && e.rule === "run-command") as AllowEntry;
     const opens = ALLOWLIST.filter((e) => e.file === "src/host.ts" && e.text.includes("open"));
@@ -289,6 +298,8 @@ describe("rules", () => {
   });
 });
 
+const MOD_TAB = 'herdr.run("tab.new", { ...where, name, mod: MOD_NAME, props: { view: modView } })';
+
 describe("the one allowlisted exec: gcBin supervisor status --json", () => {
   const GC_STATUS_CALL = 'herdr.exec(gcBin, ["supervisor", "status", "--json"], { timeout: GC_STATUS_TIMEOUT_MS })';
   /** The gc status entries alone (the other src/host.ts entries would be stale in these snippets). */
@@ -300,8 +311,12 @@ describe("the one allowlisted exec: gcBin supervisor status --json", () => {
       { file: "gascity/main.js", rule: "exec-program", text: GC_STATUS_CALL },
       { file: "src/host.ts", rule: "run-command", text: 'herdr.run("tab.new", { space: tab.space, name, argv })' },
       { file: "gascity/main.js", rule: "run-command", text: 'herdr.run("tab.new", { space: tab.space, name, argv })' },
+      { file: "src/host.ts", rule: "run-command", text: MOD_TAB },
+      { file: "gascity/main.js", rule: "run-command", text: MOD_TAB },
       { file: "src/host.ts", rule: "exec-program", text: 'herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS })' },
       { file: "src/host.ts", rule: "exec-program", text: 'herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS })' },
+      { file: "gascity/main.js", rule: "exec-program", text: 'herdr.exec("open", [url], { timeout: OPEN_TIMEOUT_MS })' },
+      { file: "gascity/main.js", rule: "exec-program", text: 'herdr.exec("xdg-open", [url], { timeout: OPEN_TIMEOUT_MS })' },
       { file: "gascity/main.js", rule: "constructor-read", text: expect.stringMatching(/^const ctor = o\.constructor;/) },
     ]);
     for (const e of ALLOWLIST) expect(e.reason.length).toBeGreaterThan(40);

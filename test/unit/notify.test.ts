@@ -113,6 +113,22 @@ describe("the focus target", () => {
     }
   });
 
+  test("a target names a session or a bead, never both", () => {
+    expect(decodeFocus({ city: "c", bead: "ga-1", seq: 2, at: 10 })).toEqual({ city: "c", bead: "ga-1", seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", session: "s", bead: "ga-1", seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", seq: 2, at: 10 })).toBeNull();
+    // A formula run, with the summary's PR and title as hints; never with a session, bead or attach.
+    expect(decodeFocus({ city: "c", run: "r-1", ref: "PR #1", title: "fix", seq: 2, at: 10 })).toEqual({ city: "c", run: "r-1", ref: "PR #1", title: "fix", seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", run: "r-1", ref: 4, seq: 2, at: 10 })).toEqual({ city: "c", run: "r-1", seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", run: "r-1", session: "s", seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", run: "r-1", attach: true, seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", run: "", session: "s", seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", session: "s", attach: true, seq: 2, at: 10 })).toEqual({ city: "c", session: "s", attach: true, seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", bead: "b", attach: true, seq: 2, at: 10 })).toEqual({ city: "c", bead: "b", attach: true, seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", session: "s", attach: "yes", seq: 2, at: 10 })).toBeNull();
+    expect(nextFocus({ city: "c", session: "s", seq: 4, at: 1 }, "d", { bead: "ga-2" }, 50)).toEqual({ city: "d", bead: "ga-2", seq: 5, at: 50 });
+  });
+
   test("each new target is newer than the shared one", () => {
     const first = nextFocus(null, "c", "s1", 100);
     expect(first).toEqual({ city: "c", session: "s1", seq: 1, at: 100 });

@@ -31,12 +31,14 @@
 import type { ActionSpec, ActivitySnapshot } from "../actions/activity.ts";
 import { ActionLedger, newIdempotencyKey } from "../actions/outcome.ts";
 import type { GcClient, HostFetch } from "../gc/client.ts";
+import { DEFAULT_DECISION_LABEL } from "../gc/ops.ts";
 import type { GcError } from "../gc/errors.ts";
 import { err, ok, type Result } from "../result.ts";
 import { FetchBudget, type BudgetStats } from "./budget.ts";
 import { systemClock, type Clock } from "./clock.ts";
 import { Endpoint, type EndpointListener } from "./endpoint.ts";
 import type { Domain } from "./invalidate.ts";
+import { NeedsPoller, type NeedsSnapshot } from "./needs.ts";
 import { CitiesPoller, type CitiesSnapshot } from "./cities.ts";
 import { NeedsYouNotifier, type NeedsYou, type NeedsYouBatch } from "../notify/needsYou.ts";
 import { KeepAwake, type KeepAwakeState, type PinBook } from "./keepAwake.ts";
@@ -129,6 +131,18 @@ export interface CitiesSubscription {
   unsubscribe(): void;
 }
 
+/** One copy's subscription to an API's shared "needs a human" poll. */
+export interface NeedsSubscription {
+  readonly apiUrl: string;
+  snapshot(): NeedsSnapshot;
+  /** Call from this copy's own periodic timer with the running cities. Returns the snapshot's rev. */
+  tick(cities: readonly string[]): number;
+  /** Polls at the next tick. */
+  refresh(): void;
+  /** Ends the subscription (the copy's close). Starts no work. Idempotent. */
+  unsubscribe(): void;
+}
+
 /** A fetch through the app-wide budget whose queued requests can be dropped together (discovery's requests). */
 export interface ProbeFetch {
   fetch: HostFetch;
@@ -175,6 +189,7 @@ export class SyncRegistry {
   private readonly endpoints = new Map<string, Endpoint>();
   private readonly stores = new Map<string, StoreEntry>();
   private readonly pollers = new Map<string, { poller: CitiesPoller; subs: number }>();
+  private readonly needs = new Map<string, { poller: NeedsPoller; subs: number }>();
   private readonly listeners = new Set<(batch: EventBatch) => void>();
   private onScreen = false;
   private readonly pins: PinBook;
@@ -202,6 +217,7 @@ export class SyncRegistry {
           for (const l of [...this.listeners]) l(batch);
         },
         onError: (k, e) => this.deps.onError?.(k, e),
+        decisionLabel: () => this.needs.get(endpoint.value.baseUrl)?.poller.snapshot().decisionLabel ?? DEFAULT_DECISION_LABEL,
       });
       const ep = endpoint.value;
       const ledger = new ActionLedger({
@@ -270,6 +286,76 @@ export class SyncRegistry {
         }
       },
     });
+  }
+
+  /** Subscribes a copy to a loopback gc API's shared "needs a human" poll; `not-loopback` otherwise. */
+  subscribeNeeds(apiUrl: string): Result<NeedsSubscription, GcError> {
+    const endpoint = this.endpointFor(apiUrl);
+    if (!endpoint.ok) return endpoint;
+    const ep = endpoint.value;
+    let entry = this.needs.get(ep.baseUrl);
+    if (!entry) {
+      entry = {
+        poller: new NeedsPoller(ep, this.clock, (city) => this.readDashboardJson(ep.baseUrl, city, "config"), (city) => this.readDashboardJson(ep.baseUrl, city, "runs/summary")),
+        subs: 0,
+      };
+      this.needs.set(ep.baseUrl, entry);
+    }
+    entry.subs++;
+    const { poller } = entry;
+    const owner = {};
+    let active = true;
+    return ok({
+      apiUrl: ep.baseUrl,
+      snapshot: () => poller.snapshot(),
+      tick: (cities) => {
+        if (active) {
+          this.budget.reclaim();
+          poller.tick(owner, cities);
+        }
+        return poller.snapshot().rev;
+      },
+      refresh: () => {
+        if (active) poller.refresh();
+      },
+      unsubscribe: () => {
+        if (!active) return;
+        active = false;
+        poller.abandonStartedBy(owner);
+        const e = this.needs.get(ep.baseUrl);
+        if (e && --e.subs <= 0) {
+          this.needs.delete(ep.baseUrl);
+          poller.dispose();
+          this.releaseEndpoint(ep, poller);
+        }
+      },
+    });
+  }
+
+  /**
+   * A read of gc's dashboard API for a city (GET {api}/api/city/{city}/<path>:
+   * `config` for the operator's decision label, `runs/summary` for formula
+   * runs), through the app-wide budget like discovery's probes; null when gc
+   * does not answer it with JSON.
+   */
+  private async readDashboardJson(baseUrl: string, city: string, path: string): Promise<unknown> {
+    const r = await this.probeFetch().fetch(`${baseUrl}/api/city/${encodeURIComponent(city)}/${path}`, { method: "GET", headers: { Accept: "application/json" } });
+    if (!r.ok) return null;
+    try {
+      return JSON.parse(await r.text()) as unknown;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * One formula run's detail (GET {api}/api/city/{city}/runs/{run}/detail),
+   * for the Needs you tab's run view; null when gc does not answer it with
+   * JSON or no store or poller uses `apiUrl` (a subscription's key.apiUrl).
+   */
+  readRunDetail(apiUrl: string, city: string, run: string): Promise<unknown> {
+    if (!this.endpoints.has(apiUrl)) return Promise.resolve(null);
+    return this.readDashboardJson(apiUrl, city, `runs/${encodeURIComponent(run)}/detail`);
   }
 
   /**

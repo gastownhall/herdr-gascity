@@ -35,6 +35,10 @@ const EXAMPLES: Command[] = [
   { verb: "back" },
   { verb: "set-gc-bin", gcBin: "/opt/my gc:100%/bin/gc" },
   { verb: "set-gc-bin", gcBin: "gc" },
+  { verb: "set-dashboard-url", url: "https://mdash.example.com" },
+  { verb: "set-dashboard-url", url: null },
+  { verb: "set-runs-url", url: "https://factory.example.com" },
+  { verb: "set-runs-url", url: null },
   { verb: "session-new", city: "scratch", agent: "frontend/builder", alias: null },
   { verb: "session-new", city: "scratch", agent: "worker", alias: "canary-n1" },
   { verb: "wake", city: "scratch", session: "sc-20" },
@@ -84,7 +88,7 @@ describe("round trip", () => {
       if (isMutating(c)) expect(usage(verb)).toStartWith(`${verb}:<city>`);
     }
     expect(Object.entries(GRAMMAR).filter(([, s]) => !s.mutating).map(([v]) => v).sort())
-      .toEqual(["back", "bead", "cancel", "city", "focus", "probe", "refresh", "session", "set-gc-bin"]);
+      .toEqual(["back", "bead", "cancel", "city", "focus", "probe", "refresh", "session", "set-dashboard-url", "set-gc-bin", "set-runs-url"]);
   });
 
   test("the canary's commands read as written", () => {
@@ -164,6 +168,10 @@ describe("refusals", () => {
     expect(refusal("set-gc-bin:bin/gc")).toBe('set-gc-bin: must be "gc" or an absolute path to a program named gc, not "bin/gc"');
     expect(refusal("set-gc-bin:")).toBe("set-gc-bin: <gc-bin> is empty");
     expect(refusal("set-gc-bin")).toBe("set-gc-bin: expected set-gc-bin:<gc-bin>");
+    expect(command("set-dashboard-url:https%3A%2F%2Fmdash.example.com")).toEqual({ verb: "set-dashboard-url", url: "https://mdash.example.com" });
+    expect(command("set-dashboard-url:none")).toEqual({ verb: "set-dashboard-url", url: null });
+    expect(refusal("set-dashboard-url:http%3A%2F%2Fmdash.example.com")).toMatch(/^set-dashboard-url: must be an https URL/);
+    expect(refusal("set-dashboard-url:https%3A%2F%2Fx.com%2F%3Fq%3D1")).toMatch(/^set-dashboard-url: must be an https URL/);
     expect(refusal("set-gc-bin:/a/gc:/b/gc")).toBe("set-gc-bin: expected set-gc-bin:<gc-bin>");
   });
 

@@ -11,11 +11,22 @@
 // still refreshes sessions (gc changes session beads without a session.*
 // event, e.g. metadata). gc emits no rig/agent suspension events, so those
 // show at the sweep.
+//
+// The Needs-a-human list (open beads labeled `human`) refreshes on a board
+// change whose bead carries the label, or is one the list shows (the label
+// came off, or it closed), or whose bead cannot be read: refetching it on
+// every bead event would cost a busy city a request per poll for nothing.
 
+import { eventBead } from "../gc/events.ts";
+import { DECISION_TYPE, DEFAULT_DECISION_LABEL, HUMAN_LABEL } from "../gc/ops.ts";
 import type { TypedEventStreamEnvelope } from "../gc/types.gen.ts";
 
-/** The city data the store keeps, each refetched as a unit. */
-export const ALL_DOMAINS = ["rigs", "agents", "sessions", "pending", "ready", "inProgress"] as const;
+/**
+ * The city data the store keeps, each refetched as a unit, in fetch order: a
+ * step stops at the first failing request, so what waits on a person (pending,
+ * human) is fetched before the board, whose work query is the likeliest to fail.
+ */
+export const ALL_DOMAINS = ["rigs", "agents", "sessions", "pending", "human", "ready", "inProgress"] as const;
 export type Domain = (typeof ALL_DOMAINS)[number];
 
 /** What a batch of events makes stale. */
@@ -28,6 +39,20 @@ export interface Invalidation {
 /** What the store already shows, to decide which subjects matter. */
 export interface KnownIds {
   sessionIds: ReadonlySet<string>;
+  /** The beads the Needs-a-human list shows. */
+  humanIds: ReadonlySet<string>;
+  /** The dashboard's decision label: a bead carrying it is on that list too. Default DEFAULT_DECISION_LABEL. */
+  decisionLabel?: string;
+}
+
+/** Whether a board change can add a bead to the Needs-a-human list or take one off it. */
+function touchesHuman(e: TypedEventStreamEnvelope, known: KnownIds): boolean {
+  if (e.subject !== undefined && known.humanIds.has(e.subject)) return true;
+  const r = eventBead(e);
+  if (!r.ok || r.value === null) return true;
+  const labels = r.value.labels ?? [];
+  return known.humanIds.has(r.value.id) || labels.includes(HUMAN_LABEL) || labels.includes(known.decisionLabel ?? DEFAULT_DECISION_LABEL)
+    || r.value.issue_type === DECISION_TYPE;
 }
 
 const SESSION_REFRESH = new Set(["request.failed", "worker.operation"]);
@@ -66,6 +91,7 @@ export function invalidationFor(events: readonly TypedEventStreamEnvelope[], kno
       if (BOARD_CHANGES.has(t)) {
         inv.domains.add("ready");
         inv.domains.add("inProgress");
+        if (!inv.domains.has("human") && touchesHuman(e, known)) inv.domains.add("human");
       }
     } else if (t.startsWith("city.")) {
       inv.cities = true;

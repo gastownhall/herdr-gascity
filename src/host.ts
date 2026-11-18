@@ -11,8 +11,9 @@ import { GC_STATUS_ARGS } from "./discovery/gcStatus.ts";
 import { SETTINGS_KEY, gcBinIssue, patchSettings } from "./discovery/settings.ts";
 import { decodeFocused, decodePanes, decodeScene, layoutModNames, type HostDecodeError, type HostScene } from "./host.schemas.ts";
 import { openUrlIssue, probeDir, probePathIssue } from "./hostGuards.ts";
-import { FOCUS_KEY, nextFocus } from "./notify/focus.ts";
+import { FOCUS_KEY, nextFocus, type FocusWhat } from "./notify/focus.ts";
 import { summaryText, toastText, type NeedsYou, type NeedsYouBatch } from "./notify/needsYou.ts";
+import { modTabPlan, type ModTabView } from "./notify/modTab.ts";
 import { windowFlag, windowOpenAt } from "./notify/window.ts";
 import type { ProbeIo } from "./probe.ts";
 import { attachArgvIssue } from "./terminal/argv.ts";
@@ -76,6 +77,22 @@ export function readSharedSettings(): unknown {
  */
 export function storeGcBin(gcBin: string): Result<void, GcError> {
   const next = patchSettings(herdr.shared(SETTINGS_KEY), { gcBin });
+  if (!next.ok) return next;
+  herdr.setShared(SETTINGS_KEY, next.value);
+  return ok(undefined);
+}
+
+/** Stores (or, with null, removes) the web dashboard the views link to. */
+export function storeDashboardUrl(dashboardUrl: string | null): Result<void, GcError> {
+  const next = patchSettings(herdr.shared(SETTINGS_KEY), { dashboardUrl });
+  if (!next.ok) return next;
+  herdr.setShared(SETTINGS_KEY, next.value);
+  return ok(undefined);
+}
+
+/** Stores (or, with null, removes) the dashboard formula runs link to. */
+export function storeRunsUrl(runsUrl: string | null): Result<void, GcError> {
+  const next = patchSettings(herdr.shared(SETTINGS_KEY), { runsUrl });
   if (!next.ok) return next;
   herdr.setShared(SETTINGS_KEY, next.value);
   return ok(undefined);
@@ -215,6 +232,41 @@ export function postNeedsYou(batch: NeedsYouBatch): { failed: NeedsYou[]; errors
   return { failed, errors };
 }
 
+/**
+ * Opens (or selects) a tab whose only pane is this mod, showing `view`
+ * (notify/modTab.ts). The mod pane runs no program: herdr starts nothing in
+ * it but this mod. One of the mod's two tab.new calls (openAttachTab's is the other).
+ */
+export function openModTab(view: ModTabView): Result<null, GcError> {
+  const scene = readTerminalScene();
+  if (!scene.ok) return scene;
+  const plan = modTabPlan(scene.value, view, MOD_NAME);
+  if (plan.kind === "select") return selectTab(plan.tab);
+  const { name, view: modView } = plan;
+  const where = plan.space === null ? {} : { space: plan.space };
+  logRecord("run", ["tab.new", MOD_NAME, modView]);
+  try {
+    herdr.run("tab.new", { ...where, name, mod: MOD_NAME, props: { view: modView } });
+    return ok(null);
+  } catch (cause) {
+    return err({ kind: "host-call", api: "run(tab.new)", cause: messageOf(cause) });
+  }
+}
+
+/**
+ * Shows a session's question or a bead in the "Needs you" tab (the
+ * sidebar's and the Needs a human pane's rows): writes the shared focus
+ * target, which that tab follows, and opens or selects the tab.
+ */
+export function openNeedsTab(city: string, what: FocusWhat): Result<null, GcError> {
+  try {
+    herdr.setShared(FOCUS_KEY, nextFocus(herdr.shared(FOCUS_KEY), city, what, Date.now()));
+  } catch (cause) {
+    return err({ kind: "host-call", api: "setShared", cause: messageOf(cause) });
+  }
+  return openModTab("follow");
+}
+
 /** Selects a tab: one holding a Gas City pane (the window's "Show Gas City tab"), or one still running an attach. */
 export function selectTab(id: string): Result<null, GcError> {
   logRecord("run", ["tab.select", id]);
@@ -268,8 +320,8 @@ export const OPEN_TIMEOUT_MS = 10_000;
  * opener; any other argument is refused before anything is spawned (a file
  * would be opened by its default handler, which runs a macOS .command file).
  */
-export async function openUrl(opener: "xdg-open" | "open", url: string): Promise<Result<null, GcError>> {
-  const refused = openUrlIssue(url);
+export async function openUrl(opener: "xdg-open" | "open", url: string, dashboards: string | null | readonly (string | null)[] = null): Promise<Result<null, GcError>> {
+  const refused = openUrlIssue(url, dashboards);
   if (refused !== null) return err({ kind: "exec", argv: [opener, url], code: null, stderr: refused });
   logRecord("exec", [opener, url]);
   const running = opener === "open"
@@ -279,6 +331,16 @@ export async function openUrl(opener: "xdg-open" | "open", url: string): Promise
     (r): Result<null, GcError> => r.code === 0 ? ok(null) : err({ kind: "exec", argv: [opener, url], code: r.code, stderr: r.stderr.trim().slice(0, STDERR_LIMIT) }),
     (cause: unknown): Result<null, GcError> => err({ kind: "exec", argv: [opener, url], code: null, stderr: messageOf(cause) }),
   );
+}
+
+/** The platform's URL opener: macOS's open, else xdg-open. */
+export function urlOpener(): "open" | "xdg-open" {
+  try {
+    const w = typeof herdr.window === "function" ? herdr.window() : null;
+    return w?.platform === "macos" ? "open" : "xdg-open";
+  } catch {
+    return "xdg-open";
+  }
 }
 
 /** Closes this copy's overlay window. */
@@ -395,6 +457,42 @@ const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
 function isColor(value: string): value is GpuiColor {
   return HEX_COLOR.test(value);
+}
+
+/** Colours for the cross-city views' health dots and badges: the first the theme has of each list; none is required. */
+export interface StatusColors {
+  ok?: GpuiColor;
+  warn?: GpuiColor;
+  bad?: GpuiColor;
+  dim?: GpuiColor;
+  hover?: GpuiColor;
+}
+
+const STATUS_COLOR_NAMES: Record<keyof StatusColors, readonly string[]> = {
+  ok: ["green", "success"],
+  warn: ["yellow", "warning"],
+  bad: ["red", "error", "blocked"],
+  dim: ["dim", "muted"],
+  hover: ["hover"],
+};
+
+/** Used when the theme names no such colour: health reads green, amber, red whatever the theme. */
+const STATUS_COLOR_DEFAULTS: StatusColors = { ok: "#3fb950", warn: "#d29922", bad: "#f85149", dim: "#8b949e" };
+
+/** The theme's status colours (sidebar.ts); a theme without one leaves it unset. */
+export function readStatusColors(): StatusColors {
+  const theme = herdr.theme();
+  const out: StatusColors = { ...STATUS_COLOR_DEFAULTS };
+  for (const key of Object.keys(STATUS_COLOR_NAMES) as (keyof StatusColors)[]) {
+    for (const name of STATUS_COLOR_NAMES[key]) {
+      const v = Object.hasOwn(theme, name) ? theme[name] : undefined;
+      if (v !== undefined && isColor(v)) {
+        out[key] = v;
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /** Reads the current theme. Call only after `missingHostExports()` came back empty. */

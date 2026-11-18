@@ -92,7 +92,7 @@ async function play(op: OperationId, status: number, body: unknown) {
  * handler source at the pin. They are validated against the pin like the
  * recorded ones; any other fixture must be recorded.
  */
-const SYNTHESIZED = ["get-v0-city-by-city-name-session-by-id-transcript/conversation", "respond-session/accepted"];
+const SYNTHESIZED = ["get-v0-city-by-city-name-beads/human", "get-v0-city-by-city-name-session-by-id-transcript/conversation", "get-v0-city-by-city-name-status/ok", "respond-session/accepted"];
 
 /** What each recorded error fixture must decode to. */
 const EXPECTED_ERRORS: Record<string, (e: GcError) => void> = {

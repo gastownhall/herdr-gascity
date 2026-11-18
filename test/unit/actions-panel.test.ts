@@ -87,7 +87,7 @@ describe("session actions in the detail pane", () => {
   test("the action bar: one button per action; close and kill ask first", async () => {
     const mod = await running();
     await openDetail(mod);
-    expect(text(mod.render(), "gascity-detail-actions")).toBe("[Open terminal] [Wake] [Suspend] [Stop turn] [Pin] [Unpin] [Close…] [Kill…]");
+    expect(text(mod.render(), "gascity-detail-actions")).toBe("Open terminal Wake Suspend Stop turn Pin Unpin Close… Kill…");
   });
 
   test("Wake: one POST with X-GC-Request and an Idempotency-Key; the log shows it pending, then done", async () => {
@@ -101,7 +101,7 @@ describe("session actions in the detail pane", () => {
     expect(wake?.headers["Idempotency-Key"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(activityText(mod)).toContain("Wake · session sc-6 → pending: sending");
     // While it is under way the button waits instead of sending again.
-    expect(text(mod.render(), "gascity-action-wake")).toBe("[Wake: under way]");
+    expect(text(mod.render(), "gascity-action-wake")).toBe("Wake: under way");
     expect(() => mod.click("gascity-action-wake")).toThrow();
 
     g.post = () => ({ status: 200, body: { status: "ok", id: "sc-6" } });
@@ -142,7 +142,7 @@ describe("session actions in the detail pane", () => {
     await openDetail(mod);
     mod.click("gascity-action-kill");
     const root = mod.render();
-    expect(text(root, "gascity-dialog-buttons")).toBe("[Kill] [Force kill] [Cancel]");
+    expect(text(root, "gascity-dialog-buttons")).toBe("Kill Force kill Cancel");
     mod.click("gascity-dialog-confirm-1");
     expect(posts(mod, "/session/sc-6/kill").map((p) => p.query)).toEqual(["?force=true"]);
   });
@@ -188,7 +188,7 @@ describe("session actions in the detail pane", () => {
     const mod = await running();
     await openDetail(mod);
     // The recorded sc-6 supports interrupt_now.
-    expect(text(mod.render(), "gascity-send-interrupt")).toBe("[Interrupt and send]");
+    expect(text(mod.render(), "gascity-send-interrupt")).toBe("Interrupt and send");
   });
 
   test("a pending prompt: one button per gc option, sending the option and request id as gc listed them", async () => {
@@ -197,7 +197,7 @@ describe("session actions in the detail pane", () => {
       post: () => ({ status: 202, body: fixtureBody("respond-session", "accepted") }),
     });
     await openDetail(mod);
-    expect(text(mod.render(), "gascity-detail-answers")).toBe("[approve] [deny] [select:always]");
+    expect(text(mod.render(), "gascity-detail-answers")).toBe("approve deny select:always");
     mod.click("gascity-answer-2");
     const [respond] = posts(mod, "/session/sc-6/respond");
     expect(JSON.parse(respond?.body ?? "{}")).toEqual({ action: "select:always", request_id: "perm-1" });
@@ -239,14 +239,14 @@ describe("agent and rig actions", () => {
 
   test("agent Suspend… asks first and uses gc's rig-scoped agent route; rig Suspend… asks first", async () => {
     const mod = await running();
-    expect(text(mod.render(), "gascity-agent-0-1-suspend")).toBe("[Suspend agent…]");
+    expect(text(mod.render(), "gascity-agent-0-1-suspend")).toBe("Suspend agent…");
     mod.click("gascity-agent-0-1-suspend");
     expect(text(mod.render(), "gascity-dialog-question")).toBe("Suspend agent frontend/builder?");
     mod.click("gascity-dialog-confirm-0");
     const [agent] = posts(mod, "/agent/frontend/builder/suspend");
     expect(agent?.headers["Idempotency-Key"]).toBeUndefined();
 
-    expect(text(mod.render(), "gascity-group-0-suspend")).toBe("[Suspend rig…]");
+    expect(text(mod.render(), "gascity-group-0-suspend")).toBe("Suspend rig…");
     mod.click("gascity-group-0-suspend");
     expect(text(mod.render(), "gascity-dialog-question")).toBe("Suspend rig frontend?");
     mod.click("gascity-dialog-confirm-0");
@@ -264,9 +264,9 @@ describe("unknown outcomes and the copy that closes", () => {
     const rows = findById(mod.render(), "gascity-activity")!;
     expect(textOf(rows)).toContain("→ outcome unknown:");
     const id = /gascity-activity-(\d+)-retry/.exec(JSON.stringify(rows))?.[1];
-    expect(text(mod.render(), `gascity-activity-${id}-retry`)).toBe("[Retry: refreshing sessions before a retry]");
+    expect(text(mod.render(), `gascity-activity-${id}-retry`)).toBe("Retry: refreshing sessions before a retry");
     for (let i = 0; i < 4; i++) await mod.tick(1000);
-    expect(text(mod.render(), `gascity-activity-${id}-retry`)).toBe("[Retry (same key: gc deduplicates it within 30 min, not across a gc restart)]");
+    expect(text(mod.render(), `gascity-activity-${id}-retry`)).toBe("Retry (same key: gc deduplicates it within 30 min, not across a gc restart)");
     expect(posts(mod, "/wake")).toHaveLength(1);
     g.post = () => ({ status: 200, body: { status: "ok", id: "sc-6" } });
     mod.click(`gascity-activity-${id}-retry`);
@@ -321,7 +321,7 @@ describe("Open terminal in the built bundle", () => {
       argv: ["env", "-u", "HC_SCOPE", "-u", "HC_TERMINAL_ID", "-u", "HC_TERMINAL_SOCKET", "gc", "--city", "/scratch/city", "session", "attach", "sc-6"],
     }]);
     expect(activityText(mod)).toContain("Open terminal · session sc-6 → pending: tab opened");
-    expect(text(mod.render(), "gascity-action-terminal")).toBe("[Open terminal: under way]");
+    expect(text(mod.render(), "gascity-action-terminal")).toBe("Open terminal: under way");
     // herdr lists no terminal for it (this fake): not seen within 5 s.
     for (let i = 0; i < 24; i++) await mod.tick();
     expect(activityText(mod)).toContain("not opened (not-seen-in-terminals)");

@@ -71,6 +71,10 @@ declare module "herdr" {
   /** Runs an app command (the ones keys.json binds). Returns null, not the result. */
   export function run(name: string, args?: Record<string, unknown>): null;
 
+  /** The OS window: which platform the app runs on. */
+  export function window(): { platform: "linux" | "macos" | "windows" };
+
   /** Closes an overlay (a mod closes its own with closeOverlay(props().overlay)). */
   export function closeOverlay(id: string): null;
+
 }

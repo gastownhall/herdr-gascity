@@ -79,7 +79,7 @@ function beadActions(m: Extract<BeadDetailModel, { kind: "bead" }>, activity: Ac
   return h_flex().id("gascity-bead-actions").gap(8).children(buttons);
 }
 
-function beadDetail(m: BeadDetailModel, theme: ThemeRead, actions: BoardActions, activity: ActivityModel | null): GpuiElement | null {
+export function beadDetail(m: BeadDetailModel, theme: ThemeRead, actions: BoardActions, activity: ActivityModel | null): GpuiElement | null {
   if (m.kind === "none") return null;
   const close = div().id("gascity-bead-close").on_click((_, cx) => actions.selectBead(null, cx)).child("Close");
   if (m.kind === "missing") return v_flex().id("gascity-bead-detail").gap(4).child(label("gascity-bead-missing", m.text)).child(close);

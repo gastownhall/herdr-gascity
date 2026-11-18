@@ -95,6 +95,8 @@ export const SESSION_PAGE = 500;
 export const MAX_SESSION_ROWS = 2_000;
 /** Ready and in-progress columns download at most this many beads. */
 export const BOARD_LIMIT = 50;
+/** At most this many beads waiting on a person are listed (gc's total says how many there are). */
+export const HUMAN_LIMIT = 50;
 /** The closed list keeps the newest this many closes, and is seeded with this many. */
 export const MAX_CLOSED_RECENT = 20;
 /** Closed-bead refetches per step. */
@@ -129,6 +131,8 @@ export type RigList = Listed<T.ListBodyRigResponse, T.RigResponse>;
 export type AgentList = Listed<T.ListBodyAgentResponse, T.AgentResponse>;
 export type PendingList = Listed<T.ListBodyCityPendingEntry, T.CityPendingEntry>;
 export type WorkList = Listed<T.WorkReadyBody, T.ReadyBead>;
+/** Open beads labeled `human`: work waiting on a person's decision. */
+export type HumanList = Listed<T.ListBodyBead, T.Bead>;
 
 /** Every session page, joined. */
 export interface SessionList {
@@ -214,6 +218,8 @@ export interface CitySnapshot {
   readonly pending: Slot<PendingList>;
   readonly ready: Slot<WorkList>;
   readonly inProgress: Slot<WorkList>;
+  /** Open beads waiting on a person (label `human`), at most HUMAN_LIMIT. */
+  readonly human: Slot<HumanList>;
   readonly closed: ClosedState;
   /** Watched sessions' conversations (transcript.ts), polled while on screen. */
   readonly transcripts: ReadonlyMap<string, Slot<Transcript>>;
@@ -250,6 +256,8 @@ export interface StoreDeps {
   emit(batch: EventBatch): void;
   /** Every recorded failure, for the app log. */
   onError(key: CityKey, entry: ErrorEntry): void;
+  /** gc's dashboard decision label (the needs poll learns it); default DEFAULT_DECISION_LABEL. */
+  decisionLabel?: () => string;
 }
 
 type DomainValue = {
@@ -259,10 +267,11 @@ type DomainValue = {
   pending: PendingList;
   ready: WorkList;
   inProgress: WorkList;
+  human: HumanList;
 };
 
 const EMPTY_SLOT: Slot<never> = { value: null, fetchedAt: null, error: null, dirty: true, held: false };
-const EVENT_DRIVEN: ReadonlySet<Domain> = new Set(["rigs", "agents", "ready", "inProgress"]);
+const EVENT_DRIVEN: ReadonlySet<Domain> = new Set(["rigs", "agents", "ready", "inProgress", "human"]);
 const PRIORITY_RANK: Record<FetchPriority, number> = { mutation: 0, events: 1, snapshot: 2, peek: 3, sweep: 4 };
 
 interface Due {
@@ -334,7 +343,7 @@ interface Step {
 export class CityStore implements EndpointListener {
   private snap: CitySnapshot;
   private readonly slots: { [D in Domain]: MutableSlot<DomainValue[D]> } = {
-    rigs: freshSlot(), agents: freshSlot(), sessions: freshSlot(), pending: freshSlot(), ready: freshSlot(), inProgress: freshSlot(),
+    rigs: freshSlot(), agents: freshSlot(), sessions: freshSlot(), pending: freshSlot(), ready: freshSlot(), inProgress: freshSlot(), human: freshSlot(),
   };
   private readonly due = new Map<Domain, Due>();
   /** Beads to fetch by id for the closed list: a close (`seq`) whose event carried no readable bead, or a recheck (`seq` null). */
@@ -791,7 +800,8 @@ export class CityStore implements EndpointListener {
 
   private known() {
     const sessionIds = new Set((this.slots.sessions.value?.items ?? []).map((s) => s.id));
-    return { sessionIds };
+    const humanIds = new Set((this.slots.human.value?.items ?? []).map((b) => b.id));
+    return { sessionIds, humanIds, decisionLabel: this.decisionLabel() };
   }
 
   private workQuery(extra: { limit: number; status?: "in_progress" | "closed"; sort?: "newest" }) {
@@ -818,9 +828,50 @@ export class CityStore implements EndpointListener {
         return (await ops.listWork(c, city, this.workQuery({ limit: BOARD_LIMIT }))) as Result<DomainValue[D], GcError>;
       case "inProgress":
         return (await ops.listWork(c, city, this.workQuery({ limit: BOARD_LIMIT, status: "in_progress" }))) as Result<DomainValue[D], GcError>;
+      case "human":
+        return (await this.loadDecisions(step, priority)) as Result<DomainValue[D], GcError>;
       default:
         return (await this.loadSessions(step, priority)) as Result<DomainValue[D], GcError>;
     }
+  }
+
+  /**
+   * Open beads waiting on a decision: labeled human, labeled with the
+   * dashboard's decision label (what mdash lists), or of type decision; each
+   * once. `total` sums gc's counts less the beads listed more than once.
+   */
+  private async loadDecisions(step: Step, priority: FetchPriority): Promise<Result<HumanList, GcError>> {
+    const c = this.deps.endpoint.client(priority, step);
+    const label = this.decisionLabel();
+    const queries: ({ label: string; limit: number } | { type: string; limit: number })[] = [{ label: ops.HUMAN_LABEL, limit: HUMAN_LIMIT }];
+    if (label !== ops.HUMAN_LABEL) queries.push({ label, limit: HUMAN_LIMIT });
+    queries.push({ type: ops.DECISION_TYPE, limit: HUMAN_LIMIT });
+    const out: HumanList = { items: [], unreadable: [], total: 0, partial_errors: [] };
+    const seen = new Set<string>();
+    for (const q of queries) {
+      const r = await ops.listOpenBeads(c, this.key.city, q);
+      this.progress(step);
+      if (!r.ok) return r;
+      out.total += Math.max(r.value.total ?? 0, r.value.items.length);
+      out.partial ||= r.value.partial === true;
+      out.partial_errors.push(...r.value.partial_errors);
+      out.unreadable.push(...r.value.unreadable);
+      for (const b of r.value.items) {
+        if (seen.has(b.id)) {
+          out.total--;
+          continue;
+        }
+        seen.add(b.id);
+        out.items.push(b);
+      }
+      if (!this.current(step)) break;
+    }
+    return { ok: true, value: out };
+  }
+
+  /** The dashboard decision label in use for this city. */
+  decisionLabel(): string {
+    return this.deps.decisionLabel?.() ?? ops.DEFAULT_DECISION_LABEL;
   }
 
   private async loadSessions(step: Step, priority: FetchPriority): Promise<Result<SessionList, GcError>> {
@@ -1172,6 +1223,7 @@ export class CityStore implements EndpointListener {
       pending: this.slotOf(this.slots.pending, dirty("pending")),
       ready: this.slotOf(this.slots.ready, dirty("ready")),
       inProgress: this.slotOf(this.slots.inProgress, dirty("inProgress")),
+      human: this.slotOf(this.slots.human, dirty("human")),
       closed: { seed: this.seedSlot(), recent: this.closed.recent(), incomplete: this.incomplete, hidden: this.closed.hidden() },
       transcripts: new Map([...this.peeks].map(([id, s]) => [id, this.slotOf(s, s.due)])),
       details: new Map([...this.peeks].map(([id, w]) => [id, { wakeReasons: this.slotOf(w.wake, w.wake.due), pending: this.slotOf(w.pending, w.pending.due) }])),

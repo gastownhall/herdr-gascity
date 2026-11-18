@@ -15,6 +15,18 @@ function tinted(el: GpuiElement, color: GpuiColor | undefined, apply: (el: GpuiE
   return color === undefined ? el : apply(el, color);
 }
 
+/** A neutral edge that reads on dark and light themes alike. */
+const PILL_EDGE: GpuiColor = "#8080807f";
+
+/**
+ * A button: a small bordered pill, so what can be clicked looks clickable.
+ * The text is cleaned like every label.
+ */
+export function pill(id: string, text: string, onClick: (cx: GpuiContext) => void): GpuiElement {
+  return label(id, text).flex_none().px(8).py(1).rounded(5).border_1().border_color(PILL_EDGE).text_size(12)
+    .on_click((_, cx) => onClick(cx));
+}
+
 /** Secondary text: the theme's muted colour. */
 export function muted(el: GpuiElement, theme: ThemeRead): GpuiElement {
   return tinted(el, theme.colors.muted, (e, c) => e.text_color(c));

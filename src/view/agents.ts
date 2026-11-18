@@ -2,6 +2,7 @@
 // their agents and sessions (status chip, pending, active bead, attached
 // eye), "Other sessions", unreadable rows. Stale data is greyed, never
 // hidden. Clicking a session opens its detail; clicking a group collapses it.
+// A group with more agents than its page ends in "Show N more".
 // Each agent offers a new session and suspend/resume, each listed rig
 // suspend/resume (suspend asks first); one under way shows as waiting.
 
@@ -12,7 +13,7 @@ import { agentResume, agentSuspend } from "../actions/agent.ts";
 import { rigResume, rigSuspend } from "../actions/rig.ts";
 import type { ThemeRead } from "../host.ts";
 import { isBusy, type ActivityModel } from "../vm/activity.ts";
-import type { AgentRow, AgentsModel, GroupModel, SessionRow } from "../vm/agents.ts";
+import { AGENT_PAGE, type AgentRow, type AgentsModel, type GroupModel, type SessionRow } from "../vm/agents.ts";
 import { button, waiting } from "./dialogs.ts";
 import { greyedIf, label, muted } from "./text.ts";
 
@@ -20,6 +21,8 @@ export interface AgentsActions {
   /** Opens a session's detail; the selected one closes it. */
   selectSession(id: string | null, cx: GpuiContext): void;
   toggleGroup(key: string, cx: GpuiContext): void;
+  /** Lists another page of a group's agents. */
+  showMoreAgents(key: string, cx: GpuiContext): void;
   /** Asks for an action (destructive ones ask first). */
   act(spec: ActionSpec, cx: GpuiContext): void;
   /** Opens the new-session form for an agent. */
@@ -83,8 +86,13 @@ export function renderAgents(m: AgentsModel, theme: ThemeRead, actions: AgentsAc
   m.banners.forEach((b, i) => {
     region = region.child(label(`gascity-agents-banner-${i}`, b));
   });
-  const groups = m.groups.map((g, i) => v_flex().id(`gascity-group-${i}-body`).gap(4).child(groupHead(g, i, theme, actions, activity))
-    .children(g.agents.map((a, j) => agentRow(a, `gascity-agent-${i}-${j}`, theme, actions, activity))));
+  const groups = m.groups.map((g, i) => {
+    const body = v_flex().id(`gascity-group-${i}-body`).gap(4).child(groupHead(g, i, theme, actions, activity))
+      .children(g.agents.map((a, j) => agentRow(a, `gascity-agent-${i}-${j}`, theme, actions, activity)));
+    if (g.hidden === 0) return body;
+    const more = Math.min(g.hidden, AGENT_PAGE);
+    return body.child(button(`gascity-group-${i}-more`, `Show ${more} more · ${g.hidden} not shown`, (cx) => actions.showMoreAgents(g.key, cx)));
+  });
   let body = v_flex().id("gascity-agents-body").gap(6).children(groups);
   if (m.other.length > 0) {
     body = body.child(v_flex().id("gascity-other").gap(2).child(label("gascity-other-title", "Other sessions"))

@@ -6,6 +6,7 @@
 import type { CityMachine } from "../discovery/city.ts";
 import type { ActivityModel } from "./activity.ts";
 import type { AgentsModel, SessionRow } from "./agents.ts";
+import type { HumanModel } from "./human.ts";
 import type { BeadCard, BeadDetailModel, BoardModel, ClosedCard } from "./board.ts";
 import { cleanLine } from "./sanitize.ts";
 import type { DetailModel } from "./detail.ts";
@@ -37,6 +38,8 @@ export interface ProbeInput {
   agents: AgentsModel | null;
   /** Null until a running city is subscribed. */
   board: BoardModel | null;
+  /** Null until a running city is subscribed. */
+  human?: HumanModel | null;
   beadDetail: BeadDetailModel;
   detail: DetailModel;
   /** The city's activity log (null without a running city). */
@@ -123,6 +126,13 @@ export interface ProbeBody {
     /** Each column's error line. */
     errors: string[];
   };
+  /** The Needs-a-human list, questions first. */
+  human?: null | {
+    questions: number;
+    decisions: number;
+    rows: ({ kind: "question"; session: string; who: string; what: string } | { kind: "decision"; bead: string; title: string; priority: string | null })[];
+    error: string | null;
+  };
   bead_detail: null | { id: string; title: string; state: string; close_reason: string | null; description: string | null };
   detail: null | {
     session: string;
@@ -208,6 +218,14 @@ export function probeDocument(input: ProbeInput): ProbeBody {
     data_age: input.agents?.region.age ?? null,
     sessions: sessionsOf(input.agents),
     board: probeBoard(input.board),
+    human: input.human == null ? null : {
+      questions: input.human.questions,
+      decisions: input.human.decisions,
+      rows: input.human.rows.map((r) => r.kind === "question"
+        ? { kind: r.kind, session: r.session, who: r.who, what: r.what }
+        : { kind: r.kind, bead: r.bead, title: r.title, priority: r.priority }),
+      error: input.human.region.error,
+    },
     bead_detail: probeBeadDetail(input.beadDetail),
     detail: detail.kind !== "session" ? null : {
       session: detail.id,

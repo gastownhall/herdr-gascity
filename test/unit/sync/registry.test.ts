@@ -316,6 +316,18 @@ describe("first poll refused (a city not running yet, a read grant, an older gc)
 });
 
 describe("initial load", () => {
+  test("a failing work board does not keep Needs a human from loading (it is fetched first)", async () => {
+    const { gc, open } = setup();
+    gc.override = (req) => (req.path.endsWith("/work/ready")
+      ? { status: 503, body: { title: "Service Unavailable", status: 503, detail: "the controller's city config is not current" } }
+      : undefined);
+    const a = await open();
+    const s = a.sub.snapshot();
+    expect(s.ready.error).not.toBeNull();
+    expect(s.human.value?.items.map((b) => b.id)).toEqual(["sc-90", "sc-91"]);
+    expect(s.pending.value).not.toBeNull();
+  });
+
   test("takes the cursor first, then loads every domain", async () => {
     const { host, gc, open } = setup();
     const a = await open();
@@ -329,6 +341,9 @@ describe("initial load", () => {
       `/v0/city/scratch/work/ready?${WORK}&limit=50`,
       `/v0/city/scratch/work/ready?${WORK}&limit=50&status=in_progress`,
       `/v0/city/scratch/work/ready?${WORK}&limit=20&sort=newest&status=closed`,
+      "/v0/city/scratch/beads?label=human&limit=50&status=open",
+      "/v0/city/scratch/beads?label=needs%2Foperator&limit=50&status=open",
+      "/v0/city/scratch/beads?type=decision&limit=50&status=open",
     ]));
     const s = a.sub.snapshot();
     expect(s.connection).toEqual({ kind: "connected" });
@@ -483,7 +498,8 @@ describe("event watcher → targeted refetches", () => {
     const start = gc.seen.length;
     gc.emit(...Array.from({ length: 12 }, (_, i) => ({ type: "bead.closed", subject: `b-${i}` })));
     await host.advance(1500);
-    expect(gc.count("", start) - 3).toBe(10); // minus the event poll and the two column refetches
+    // minus the event poll, the two column refetches and Needs a human's three queries (the events carry no readable bead)
+    expect(gc.count("", start) - 6).toBe(10);
     const closed = a.sub.snapshot().closed;
     expect(closed.recent.length).toBe(10);
     expect(closed.recent[0]?.bead.id).toBe("b-11");

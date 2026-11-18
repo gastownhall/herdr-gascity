@@ -224,6 +224,8 @@ export class FakeGc {
   maxInFlight = 0;
   /** Per-path override; return undefined to use the default. */
   override: ((req: SeenRequest) => FakeReply | undefined) | null = null;
+  /** Every answer waits this long on the fake clock (needs a clock with sleep, e.g. FakeHost). */
+  delayMs = 0;
   private held: { resolve: (r: HostResponse) => void; reject: (e: unknown) => void; url: string }[] = [];
 
   constructor(readonly clock: Clock, readonly base = "http://127.0.0.1:8372") {}
@@ -245,6 +247,10 @@ export class FakeGc {
       });
     }
     if ("reject" in reply) return Promise.reject(new Error(reply.reject)).catch((e: unknown) => Promise.reject(done(e)));
+    const sleep = (this.clock as Partial<{ sleep(ms: number): Promise<void> }>).sleep;
+    if (this.delayMs > 0 && sleep) {
+      return sleep.call(this.clock, this.delayMs).then(() => done(response(reply.finalUrl ?? url, reply.status, reply.body)));
+    }
     return Promise.resolve(done(response(reply.finalUrl ?? url, reply.status, reply.body)));
   };
 
@@ -321,6 +327,9 @@ export class FakeGc {
       const name = status === "closed" ? "closed-seed" : status === "in_progress" ? "in-progress" : "ready";
       return { status: 200, body: fixtureBody("get-v0-city-by-city-name-work-ready", name) };
     }
+    if (p.endsWith("/runs/summary")) return { status: 200, body: JSON.parse(readFileSync(new URL("../../fixtures/runs/summary.json", import.meta.url), "utf8")) as unknown };
+    if (p.endsWith("/status")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-status", "ok") };
+    if (p.endsWith("/beads")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-beads", "human") };
     const bead = /\/bead\/([^/]+)$/.exec(p);
     if (bead) {
       const body = fixtureBody("get-v0-city-by-city-name-bead-by-id", "ok") as Record<string, unknown>;

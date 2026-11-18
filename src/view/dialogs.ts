@@ -9,7 +9,7 @@ import { Input, h_flex, v_flex, type InputState } from "gpui-base";
 import type { DialogModel } from "../copy.ts";
 import type { ThemeRead } from "../host.ts";
 import type { ActivityModel, ActivityRow } from "../vm/activity.ts";
-import { label, muted } from "./text.ts";
+import { label, muted, pill } from "./text.ts";
 
 export interface DialogActions {
   /** Confirms the dialog with its `choice`-th action (a confirmation's or a pick's). */
@@ -26,14 +26,14 @@ export interface DialogActions {
   refreshAction(id: number, cx: GpuiContext): void;
 }
 
-/** A clickable word; the text is cleaned like every label. */
+/** A button (a bordered pill); the text is cleaned like every label. */
 export function button(id: string, text: string, onClick: (cx: GpuiContext) => void): GpuiElement {
-  return label(id, `[${text}]`).on_click((_, cx) => onClick(cx));
+  return pill(id, text, onClick);
 }
 
-/** A button that cannot be pressed now, with why. */
+/** A button that cannot be pressed now, with why: muted, unbordered, not clickable. */
 export function waiting(id: string, text: string, why: string, theme: ThemeRead): GpuiElement {
-  return muted(label(id, `[${text}: ${why}]`), theme);
+  return muted(label(id, `${text}: ${why}`), theme).flex_none().px(8).py(1).text_size(12);
 }
 
 /** The dialogs' retained text inputs (created in init, never in render); null before init. */

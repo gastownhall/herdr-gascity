@@ -42,10 +42,10 @@ describe("work actions on the board", () => {
   test("the open bead's actions: Sling… and Close… for an open bead, Reopen for a closed one", async () => {
     const mod = await running();
     await openBead(mod, "gascity-card-ready-3");
-    expect(text(mod.render(), "gascity-bead-actions")).toBe("[Sling…] [Close…]");
+    expect(text(mod.render(), "gascity-bead-actions")).toBe("Sling… Close…");
     await openBead(mod, "gascity-card-earlier-0");
-    expect(text(mod.render(), "gascity-bead-actions")).toBe("[Reopen]");
-    expect(text(mod.render(), "gascity-work-new")).toBe("[+ New bead]");
+    expect(text(mod.render(), "gascity-bead-actions")).toBe("Reopen");
+    expect(text(mod.render(), "gascity-work-new")).toBe("+ New bead");
   });
 
   test("Sling…: one button per agent and the may-route-twice warning; a pick sends one POST with no Idempotency-Key", async () => {
@@ -57,7 +57,7 @@ describe("work actions on the board", () => {
     expect(text(root, "gascity-dialog-question")).toBe("Sling bead sc-74 to which agent?");
     expect(text(root, "gascity-dialog-detail")).toContain("a retry may route the bead twice. Check the board first.");
     expect(text(root, "gascity-dialog-buttons")).toBe(
-      "[core.control-dispatcher] [frontend/core.control-dispatcher] [worker] [worker-adhoc-88210e2896] [frontend/builder] [Cancel]",
+      "core.control-dispatcher frontend/core.control-dispatcher worker worker-adhoc-88210e2896 frontend/builder Cancel",
     );
     expect(posts(mod, "/sling")).toEqual([]);
     mod.click("gascity-dialog-pick-2");
@@ -101,7 +101,7 @@ describe("work actions on the board", () => {
     await openBead(mod, "gascity-card-ready-3");
     mod.click("gascity-bead-action-sling");
     mod.click("gascity-dialog-pick-2");
-    expect(text(mod.render(), "gascity-bead-action-sling")).toBe("[Sling: under way]");
+    expect(text(mod.render(), "gascity-bead-action-sling")).toBe("Sling: under way");
     expect(() => mod.click("gascity-bead-action-sling")).toThrow();
   });
 
@@ -112,18 +112,18 @@ describe("work actions on the board", () => {
     let root = mod.render();
     expect(text(root, "gascity-dialog-question")).toBe("New bead");
     expect(text(root, "gascity-dialog-sling")).toBe(
-      "Sling to: ▸ [none] [core.control-dispatcher] [frontend/core.control-dispatcher] [worker] [worker-adhoc-88210e2896] [frontend/builder]",
+      "Sling to: ▸ none core.control-dispatcher frontend/core.control-dispatcher worker worker-adhoc-88210e2896 frontend/builder",
     );
-    expect(text(root, "gascity-dialog-create-bead")).toBe("[Create]");
+    expect(text(root, "gascity-dialog-create-bead")).toBe("Create");
     const [title, description, priority, labels] = [mod.inputs[2]!, mod.inputs[3]!, mod.inputs[4]!, mod.inputs[5]!];
     expect([title.placeholder, description.placeholder, priority.placeholder, labels.placeholder]).toEqual([
       "title (required)", "description (optional)", "priority, e.g. 2 (optional)", "labels, comma-separated (optional)",
     ]);
     mod.click("gascity-dialog-sling-4");
     root = mod.render();
-    expect(text(root, "gascity-dialog-sling")).toContain("▸ [frontend/builder]");
+    expect(text(root, "gascity-dialog-sling")).toContain("▸ frontend/builder");
     expect(text(root, "gascity-dialog-note")).toContain("Two gc calls: create the bead, then sling it to frontend/builder.");
-    expect(text(root, "gascity-dialog-create-bead")).toBe("[Create and sling]");
+    expect(text(root, "gascity-dialog-create-bead")).toBe("Create and sling");
     title.type("fix login");
     priority.type("1");
     labels.type("ui");
@@ -209,6 +209,6 @@ describe("work actions on the board", () => {
     });
     await openBead(mod, "gascity-card-ready-3");
     mod.click("gascity-bead-action-sling");
-    expect(text(mod.render(), "gascity-dialog-buttons")).toBe("[worker] [Cancel]");
+    expect(text(mod.render(), "gascity-dialog-buttons")).toBe("worker Cancel");
   });
 });

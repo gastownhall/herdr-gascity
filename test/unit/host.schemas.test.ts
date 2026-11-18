@@ -66,14 +66,14 @@ describe("panes()", () => {
 });
 
 describe("spaces()", () => {
-  test("id, machine (null = this computer), active and tab ids", () => {
+  test("id, machine (null = this computer), active, and tab ids and names", () => {
     const r = decodeSpaces([
       { id: "s1", index: 1, name: "home", named: false, folder: "", machine: null, branch: null, active: true, status: null,
         tabs: [{ id: "t2", index: 1, name: "1", named: false, active: true, status: null, panes: 1, zoomed: false, settled: false, settled_at: null, changed_at: null }] },
       { id: "box/s3", machine: "box", active: false, tabs: [] },
     ]);
     expect(r.ok && r.value.items).toEqual([
-      { id: "s1", machine: null, active: true, tabs: [{ id: "t2", active: true }] },
+      { id: "s1", machine: null, active: true, tabs: [{ id: "t2", active: true, name: "1" }] },
       { id: "box/s3", machine: "box", active: false, tabs: [] },
     ]);
   });

@@ -459,6 +459,73 @@ it unsubscribes and starts nothing; the other copies keep updating.
   When the probe is turned off the file is emptied (herdr gives mods no way
   to delete a file), compare-and-swap like any write.
 
+## Needs a human: the sidebar block and the pane
+
+What waits on a person, across every city of a gc API: sessions paused on a
+question or tool approval (`/pending`, with the session's name and the
+prompt's first line), and open beads waiting on a decision: labeled `human`,
+labeled with the web dashboard's decision label (mdash's decision queue;
+read from gc's `/api/city/<city>/config`, default `needs/operator`), or of
+type `decision`. Each bead is listed once, with every reason.
+
+**Approvals.** Formula runs waiting at the human-approval gate (a PR waits
+for review before merge) are a third kind, between questions and decisions.
+The shared poll reads each city's dashboard run summary
+(`/api/city/<city>/runs/summary`, ~350 KB for a busy city) every 3 minutes
+and keeps a slim record per run (`src/sync/runs.ts`). A run is at the gate
+when it reports the approval stage, or when its step is not resolved and
+every stage before approval is done (run details confirm these are at
+"Human review before merge"). Only live runs are rows, longest wait first,
+with the run's stage strip (small boxes: done, working, waiting on you,
+next, pending); runs with no write for 72 h are a count. A question on the
+run's own session absorbs its approval, and a decision bead naming the same
+PR folds into it. Answer attaches to the run's session; Review opens the run
+in the runs dashboard (`gascity.settings.runsUrl`, e.g. factory;
+`herdr-app do gascity.set-runs-url:<percent-encoded url>`). Each city in the
+sidebar gets a runs line, e.g. "23 runs · 19 await approval".
+
+With `gascity.settings.dashboardUrl` set (an https URL;
+`herdr-app do gascity.set-dashboard-url:<percent-encoded url>`), beads with
+the decision label (mdash's queue) get an "mdash" link
+(`/city/<city>/beads?bead=<id>`), and cities and the pane an "Open in mdash"
+link; the other decisions are answered here. Links open with the platform
+opener; only URLs under that host are opened. One shared poll per
+API (`src/sync/needs.ts`) reads, for each running city, `/pending` and
+`/beads?label=human&status=open` every 15 s and `/status` every 30 s,
+never the agent or session lists.
+
+- **Sidebar block** (`props: {view: "sidebar"}`): one row per city with a
+  health dot and its running agents. A city's questions are always listed
+  under it, with up to three decisions; clicking the city lists the rest
+  and its counts. The "N need you" badge opens the pane. Herdr's shipped
+  layouts are read-only, so add the block to a clone:
+
+  ```sh
+  herdr-app do layout.clone '{"name":"main","as":"gascity"}'
+  ```
+
+  then, in `layouts/gascity.json`, add to the `sidebar-lists` column:
+
+  ```json
+  { "type": "block", "id": "gascity-cities", "content": { "mod": "gascity", "props": { "view": "sidebar" } }, "size": { "weight": 1.4 }, "min": 120 }
+  ```
+
+- **Needs a human pane** (`props: {view: "inbox"}`): every city's questions,
+  then decisions, filtered by kind and by city. The badge opens it in a
+  "Needs a human" tab (or selects the one open).
+
+A row opens the **Needs you** tab (`props: {view: "follow"}`) on it, or
+selects the open one, which follows the newest row clicked as the "needs
+you" window follows toasts. Answer on a question opens the session's
+terminal (Open terminal: `gc session attach`, waking it first only if gc
+says it is not running). Resolve… on a decision does the same for the
+bead's assignee when that is one of the city's sessions; otherwise it shows
+the bead with Close… and Sling…. A toast still opens the
+window (a toast's action can only be `mod.open`). These tabs hold only the
+mod: their `tab.new` passes no argv, and the authority lint allows that
+call only as written. The city tab's own "Needs a human" section lists the
+same for its city.
+
 ## The work board
 
 The work board sits beside the agents panel when the pane is at least
@@ -646,9 +713,9 @@ arguments separated by `:`; each argument is percent-encoded
   with the same text, keeps it claimed for 10 minutes, and becomes the
   Idempotency-Key where gc declares one. A copy that refuses a delivery gives
   its claim up. Commands that only change what a copy shows (`focus`,
-  `city`, `session`, `bead`, `cancel`, `back`, `refresh`, `probe`) and `set-gc-bin`
-  (which stores the same value whichever copy runs it) run in each copy that
-  gets them.
+  `city`, `session`, `bead`, `cancel`, `back`, `refresh`, `probe`) and `set-gc-bin`,
+  `set-dashboard-url` and `set-runs-url` (which store the same value
+  whichever copy runs them) run in each copy that gets them.
 - **Retrying a scripted command.** Sending the same nonce again within 10
   minutes is the same delivery: the command book logs it as a `duplicate`
   and nothing reaches gc (unless the first delivery was refused, which gives
@@ -699,6 +766,8 @@ arguments separated by `:`; each argument is percent-encoded
 | `cancel` | close the open question or form without acting (Cancel) |
 | `back` | close the open session's detail (as Esc does when no question or form is open) |
 | `set-gc-bin:<gc-bin>` | store the gc program every copy runs: gc, or the absolute path to a program named gc (the installer sends it) |
+| `set-dashboard-url:<url>` | store the web dashboard (mdash) the sidebar and Needs a human link to: an https URL, or none to remove the links |
+| `set-runs-url:<url>` | store the dashboard formula runs link to (factory): an https URL, or none to remove the run links |
 | `session-new:<city>:<agent>[:<alias>]` | start a session of an agent, with an optional alias (New session…, then Start session) |
 | `wake:<city>:<session>` | wake a session (Wake) |
 | `suspend:<city>:<session>` | suspend a session (Suspend) |

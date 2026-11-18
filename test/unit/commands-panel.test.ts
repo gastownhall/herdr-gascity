@@ -247,7 +247,7 @@ describe("destructive commands ask first unless confirmed", () => {
     await mod.command("bead-new:scratch:canary%20n1:worker");
     expect(text(mod.render(), "gascity-dialog-question")).toBe("New bead");
     expect(mod.inputs[2]!.value()).toBe("canary n1");
-    expect(text(mod.render(), "gascity-dialog-sling")).toContain("▸ [worker]");
+    expect(text(mod.render(), "gascity-dialog-sling")).toContain("▸ worker");
     expect(mutations(mod)).toEqual([]);
     expect(text(mod.render(), "gascity-notice")).toBeUndefined();
   });
@@ -435,8 +435,8 @@ describe("needs-you toasts and the window, with the Gas City tab hidden", () => 
     for (let i = 0; i < 4; i++) await win.tick();
     const root = win.render();
     expect(text(root, "gascity-window-target")).toBe("Needs you: session sc-6 in city scratch");
-    expect(text(root, "gascity-window-pending")).toBe("frontend/builder (session sc-6): permission");
-    expect(text(root, "gascity-detail-answers")).toBe("[approve] [deny]");
+    expect(text(root, "gascity-window-pending-0")).toBe("frontend/builder (session sc-6): permission");
+    expect(text(root, "gascity-detail-answers")).toBe("approve deny");
     expect(findById(root, "gascity-agents")).toBeUndefined();
     win.click("gascity-answer-0");
     expect(mutations(mod).map((m) => [m.path, m.body])).toEqual([["/v0/city/scratch/session/sc-6/respond", { action: "approve", request_id: "perm-1" }]]);
@@ -467,10 +467,24 @@ describe("needs-you toasts and the window, with the Gas City tab hidden", () => 
     expect(mod.toasts.at(-1)?.action).toEqual({ name: "mod.open", args: { name: "gascity" } });
   });
 
+  test("a bead target (the sidebar's or the pane's decision) shows that bead's detail in the window", async () => {
+    const w = world();
+    const mod = await running({ route: w.route, ...HIDDEN });
+    await ticks(mod, 4, 1000);
+    mod.shared.set("gascity.focus", { city: "scratch", bead: "fe-1", seq: 9, at: mod.clock.t });
+    const win = await openWindow(mod);
+    for (let i = 0; i < 6; i++) await win.tick();
+    const root = win.render();
+    expect(text(root, "gascity-window-target")).toBe("Needs a decision: bead fe-1 in city scratch");
+    expect(text(root, "gascity-bead-title")).toMatch(/^Bead fe-1: /);
+    expect(findById(root, "gascity-bead-actions")).toBeDefined();
+  });
+
   test("the hotkey's mod.open with an old target shows the plain window, not a stale session", async () => {
     const mod = await running({ route: world().route, ...HIDDEN, shared: { "gascity.focus": { city: "scratch", session: "sc-6", seq: 4, at: Date.UTC(2026, 10, 9, 10, 0, 0) } } });
     const win = await openWindow(mod);
-    expect(text(win.render(), "gascity-window-target")).toBe("No toast to follow: pick a session below.");
+    expect(findById(win.render(), "gascity-window-target")).toBeUndefined();
+    expect(text(win.render(), "gascity-window-none")).toContain("Nothing needs you right now.");
     expect(findById(win.render(), "gascity-detail")).toBeUndefined();
   });
 
@@ -489,7 +503,7 @@ describe("needs-you toasts and the window, with the Gas City tab hidden", () => 
   test("Show Gas City tab selects the tab holding the Gas City pane, logged in the run log", async () => {
     const mod = await running({ route: world().route, ...HIDDEN });
     const win = await openWindow(mod);
-    expect(text(win.render(), "gascity-window-bar")).toBe("[Show Gas City tab] [Close]");
+    expect(text(win.render(), "gascity-window-bar").trim()).toBe("Show Gas City tab Close tab");
     win.click("gascity-window-tab-0");
     expect(mod.herdrCalls.filter((c) => c.name === "run").map((c) => c.args)).toEqual([["tab.select", { id: "t1" }]]);
   });
@@ -757,7 +771,7 @@ describe("a draft belongs to its session", () => {
     }
     expect(mod.shared.get("gascity.focus")).toMatchObject({ session: "sc-20" });
     expect(text(win.render(), "gascity-detail-title")).toBe("Detail: frontend/builder / frontend/builder");
-    expect(text(win.render(), "gascity-window-next")).toBe("Session sc-20 in city scratch needs you too. [Show]");
+    expect(text(win.render(), "gascity-window-next")).toBe("Session sc-20 in city scratch needs you too. Show");
     box(mod, 1).submit(win.cx);
     expect(sends(mod).map((m) => [m.path, m.body])).toEqual([["/v0/city/scratch/session/sc-6/submit", { message: "yes, run them", intent: "default" }]]);
     // The draft is gone: the window may move on, and does when asked.
