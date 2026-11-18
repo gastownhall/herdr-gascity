@@ -117,6 +117,12 @@ describe("the focus target", () => {
     expect(decodeFocus({ city: "c", bead: "ga-1", seq: 2, at: 10 })).toEqual({ city: "c", bead: "ga-1", seq: 2, at: 10 });
     expect(decodeFocus({ city: "c", session: "s", bead: "ga-1", seq: 2, at: 10 })).toBeNull();
     expect(decodeFocus({ city: "c", seq: 2, at: 10 })).toBeNull();
+    // A formula run, with the summary's PR and title as hints; never with a session, bead or attach.
+    expect(decodeFocus({ city: "c", run: "r-1", ref: "PR #1", title: "fix", seq: 2, at: 10 })).toEqual({ city: "c", run: "r-1", ref: "PR #1", title: "fix", seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", run: "r-1", ref: 4, seq: 2, at: 10 })).toEqual({ city: "c", run: "r-1", seq: 2, at: 10 });
+    expect(decodeFocus({ city: "c", run: "r-1", session: "s", seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", run: "r-1", attach: true, seq: 2, at: 10 })).toBeNull();
+    expect(decodeFocus({ city: "c", run: "", session: "s", seq: 2, at: 10 })).toBeNull();
     expect(decodeFocus({ city: "c", session: "s", attach: true, seq: 2, at: 10 })).toEqual({ city: "c", session: "s", attach: true, seq: 2, at: 10 });
     expect(decodeFocus({ city: "c", bead: "b", attach: true, seq: 2, at: 10 })).toEqual({ city: "c", bead: "b", attach: true, seq: 2, at: 10 });
     expect(decodeFocus({ city: "c", session: "s", attach: "yes", seq: 2, at: 10 })).toBeNull();

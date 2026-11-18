@@ -287,6 +287,24 @@ function actionsFor(state: Extract<Copy, { kind: "ready" }>, inputs: PanelInputs
       copy.openTerminal(sessionId);
       cx.notify();
     },
+    openRunSession: (name, cx) => {
+      copy.openRunSession(name);
+      cx.notify();
+    },
+    refreshRun: (cx) => {
+      copy.refreshRun();
+      cx.notify();
+    },
+    closeRun: (cx) => {
+      copy.closeRun();
+      cx.notify();
+    },
+    openLink: (url, cx) => {
+      void openUrl(urlOpener(), url, [copy.dashboardUrl(), copy.runsUrl()]).then((r) => {
+        if (!r.ok) copy.noteHostError(r.error);
+      });
+      cx.notify();
+    },
     send: (sessionId, mode, cx) => {
       if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode, state.box.typedFor)) clearBox(inputs.message, state.box);
       cx.notify();
@@ -367,6 +385,10 @@ function crossActionsFor(state: Extract<Copy, { kind: "ready" }>): CrossCityActi
     },
     openDecision: (city, bead, cx) => {
       report(openNeedsTab(city, { bead, attach: true }));
+      cx.notify();
+    },
+    openRun: (city, run, hints, cx) => {
+      report(openNeedsTab(city, { run, ...hints }));
       cx.notify();
     },
     openInbox: (cx) => {
@@ -480,6 +502,7 @@ export default class GasCity extends View {
     const view = state.copy.view(systemClock.now());
     return renderPanel({
       kind: "city", theme, view, actions: actionsFor(state, this.inputs), inputs: this.inputs, keyboard: this.keyboard(state), size: this.size(),
+      colors: view.run !== null ? readStatusColors() : {},
     });
   }
 

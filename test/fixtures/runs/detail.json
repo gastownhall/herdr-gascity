@@ -1,0 +1,437 @@
+{
+ "runId": "run-101",
+ "scopeRef": "demo",
+ "title": "wf",
+ "formula": {
+  "kind": "known",
+  "name": "wf-adopt"
+ },
+ "formulaDetail": {
+  "kind": "available",
+  "target": "demo/operator"
+ },
+ "executionPath": {
+  "kind": "known",
+  "path": "/srv/demo/.gc/worktrees/w1"
+ },
+ "completeness": {
+  "kind": "complete"
+ },
+ "progress": {
+  "snapshotPartial": false,
+  "terminal": false,
+  "statusCounts": {
+   "completed": 5,
+   "active": 2,
+   "failed": 1,
+   "pending": 2
+  }
+ },
+ "stages": [
+  {
+   "key": "prep",
+   "label": "Prep",
+   "status": "complete"
+  },
+  {
+   "key": "review",
+   "label": "Review",
+   "status": "complete"
+  },
+  {
+   "key": "approval",
+   "label": "Approval",
+   "status": "active"
+  },
+  {
+   "key": "merge",
+   "label": "Merge",
+   "status": "pending"
+  }
+ ],
+ "nodes": [
+  {
+   "id": "run-101",
+   "title": "Adopt PR 101",
+   "kind": "workflow",
+   "constructKind": "run-root",
+   "status": "active",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "single"
+   },
+   "attemptSummary": {
+    "kind": "none"
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "active",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "n1",
+   "title": "Prepare worktree",
+   "kind": "retry",
+   "constructKind": "retry",
+   "status": "completed",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "single"
+   },
+   "attemptSummary": {
+    "kind": "tracked",
+    "badge": {
+     "kind": "bounded",
+     "label": "1/3"
+    }
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "completed",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    },
+    {
+     "id": "x",
+     "status": "completed",
+     "session": {
+      "kind": "attached",
+      "link": {
+       "sessionId": "s-demo/worker-1",
+       "sessionName": "demo/worker-1",
+       "assignee": "s-demo/worker-1"
+      },
+      "streamable": false
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "n2",
+   "title": "Review A",
+   "kind": "retry",
+   "constructKind": "retry",
+   "status": "completed",
+   "visibleInGraph": false,
+   "historicalOnly": true,
+   "iterationSummary": {
+    "kind": "stacked",
+    "visibleIteration": 1,
+    "iterationCount": 1,
+    "control": {
+     "kind": "known",
+     "id": "review"
+    }
+   },
+   "attemptSummary": {
+    "kind": "tracked",
+    "badge": {
+     "kind": "bounded",
+     "label": "1/3"
+    }
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "completed",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    },
+    {
+     "id": "x",
+     "status": "completed",
+     "session": {
+      "kind": "attached",
+      "link": {
+       "sessionId": "s-demo/rev-1",
+       "sessionName": "demo/rev-1",
+       "assignee": "s-demo/rev-1"
+      },
+      "streamable": false
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "n3",
+   "title": "Review A",
+   "kind": "retry",
+   "constructKind": "retry",
+   "status": "completed",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "stacked",
+    "visibleIteration": 2,
+    "iterationCount": 2,
+    "control": {
+     "kind": "known",
+     "id": "review"
+    }
+   },
+   "attemptSummary": {
+    "kind": "tracked",
+    "badge": {
+     "kind": "bounded",
+     "label": "2/3"
+    }
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "completed",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    },
+    {
+     "id": "x",
+     "status": "completed",
+     "session": {
+      "kind": "attached",
+      "link": {
+       "sessionId": "s-demo/rev-2",
+       "sessionName": "demo/rev-2",
+       "assignee": "s-demo/rev-2"
+      },
+      "streamable": false
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "n4",
+   "title": "Apply fixes",
+   "kind": "retry",
+   "constructKind": "retry",
+   "status": "failed",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "stacked",
+    "visibleIteration": 2,
+    "iterationCount": 2,
+    "control": {
+     "kind": "known",
+     "id": "review"
+    }
+   },
+   "attemptSummary": {
+    "kind": "tracked",
+    "badge": {
+     "kind": "bounded",
+     "label": "2/2"
+    }
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "failed",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    },
+    {
+     "id": "x",
+     "status": "failed",
+     "session": {
+      "kind": "attached",
+      "link": {
+       "sessionId": "s-demo/fixer-1",
+       "sessionName": "demo/fixer-1",
+       "assignee": "s-demo/fixer-1"
+      },
+      "streamable": false
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "n5",
+   "title": "Review loop",
+   "kind": "check-loop",
+   "constructKind": "check-loop",
+   "status": "completed",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "stacked",
+    "visibleIteration": 2,
+    "iterationCount": 2,
+    "control": {
+     "kind": "known",
+     "id": "review"
+    }
+   },
+   "attemptSummary": {
+    "kind": "tracked",
+    "badge": {
+     "kind": "bounded",
+     "label": "2/5"
+    }
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "completed",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "n6",
+   "title": "Human review",
+   "kind": "retry",
+   "constructKind": "retry",
+   "status": "active",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "single"
+   },
+   "attemptSummary": {
+    "kind": "tracked",
+    "badge": {
+     "kind": "bounded",
+     "label": "1/3"
+    }
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "active",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    },
+    {
+     "id": "x",
+     "status": "active",
+     "session": {
+      "kind": "attached",
+      "link": {
+       "sessionId": "s-demo/approver-1",
+       "sessionName": "demo/approver-1",
+       "assignee": "s-demo/approver-1"
+      },
+      "streamable": true
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "body",
+   "title": "Body scope",
+   "kind": "scope",
+   "constructKind": "scope",
+   "status": "pending",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "single"
+   },
+   "attemptSummary": {
+    "kind": "none"
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "pending",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "n7",
+   "title": "Merge",
+   "kind": "retry",
+   "constructKind": "retry",
+   "status": "pending",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "single"
+   },
+   "attemptSummary": {
+    "kind": "tracked",
+    "badge": {
+     "kind": "bounded",
+     "label": "1/3"
+    }
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "pending",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    }
+   ]
+  },
+  {
+   "id": "n8",
+   "title": "Finalize",
+   "kind": "workflow-finalize",
+   "constructKind": "step",
+   "status": "ready",
+   "visibleInGraph": true,
+   "historicalOnly": false,
+   "iterationSummary": {
+    "kind": "single"
+   },
+   "attemptSummary": {
+    "kind": "none"
+   },
+   "executionInstances": [
+    {
+     "id": "x",
+     "status": "ready",
+     "session": {
+      "kind": "none",
+      "reason": "not_started"
+     },
+     "historical": false
+    }
+   ]
+  }
+ ],
+ "edges": []
+}

@@ -338,7 +338,7 @@ export class SyncRegistry {
    * runs), through the app-wide budget like discovery's probes; null when gc
    * does not answer it with JSON.
    */
-  private async readDashboardJson(baseUrl: string, city: string, path: "config" | "runs/summary"): Promise<unknown> {
+  private async readDashboardJson(baseUrl: string, city: string, path: string): Promise<unknown> {
     const r = await this.probeFetch().fetch(`${baseUrl}/api/city/${encodeURIComponent(city)}/${path}`, { method: "GET", headers: { Accept: "application/json" } });
     if (!r.ok) return null;
     try {
@@ -346,6 +346,16 @@ export class SyncRegistry {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * One formula run's detail (GET {api}/api/city/{city}/runs/{run}/detail),
+   * for the Needs you tab's run view; null when gc does not answer it with
+   * JSON or no store or poller uses `apiUrl` (a subscription's key.apiUrl).
+   */
+  readRunDetail(apiUrl: string, city: string, run: string): Promise<unknown> {
+    if (!this.endpoints.has(apiUrl)) return Promise.resolve(null);
+    return this.readDashboardJson(apiUrl, city, `runs/${encodeURIComponent(run)}/detail`);
   }
 
   /**

@@ -21,6 +21,8 @@ export interface CrossCityActions {
   openQuestion(city: string, session: string, cx: GpuiContext): void;
   /** Opens the "needs you" window on a bead (its detail, Close… and Sling…). */
   openDecision(city: string, bead: string, cx: GpuiContext): void;
+  /** Opens the Needs you tab on a formula run (its stages and steps); `hints` label it until gc's detail is read. */
+  openRun(city: string, run: string, hints: { ref?: string; title?: string }, cx: GpuiContext): void;
   /** Opens the Needs a human pane. */
   openInbox(cx: GpuiContext): void;
   /** Narrows the pane to a kind. */
@@ -67,14 +69,16 @@ export function rowText(r: NeedRow): { head: string; body: string } {
   return { head, body: r.title };
 }
 
-/** What a row's click does: Answer (attach) a question or an approval's session, else the run in factory, else the bead. */
-function rowClick(r: NeedRow, actions: CrossCityActions): ((cx: GpuiContext) => void) | null {
+/** An approval's run, in the Needs you tab. */
+function openRun(r: Extract<NeedRow, { kind: "approval" }>, actions: CrossCityActions, cx: GpuiContext): void {
+  actions.openRun(r.city, r.run, { ...(r.ref !== null ? { ref: r.ref } : {}), title: r.title }, cx);
+}
+
+/** What a row's click does: Answer (attach) a question, open an approval's run (its steps, Answer inside), or the bead. */
+function rowClick(r: NeedRow, actions: CrossCityActions): (cx: GpuiContext) => void {
   if (r.kind === "question") return (cx) => actions.openQuestion(r.city, r.session, cx);
   if (r.kind === "decision") return (cx) => actions.openDecision(r.city, r.bead, cx);
-  const { session, link } = r;
-  if (session !== null) return (cx) => actions.openQuestion(r.city, session, cx);
-  if (link !== null) return (cx) => actions.openLink(link, cx);
-  return null;
+  return (cx) => openRun(r, actions, cx);
 }
 
 function needRow(r: NeedRow, id: string, theme: ThemeRead, colors: StatusColors, actions: CrossCityActions): GpuiElement {
@@ -89,7 +93,7 @@ function needRow(r: NeedRow, id: string, theme: ThemeRead, colors: StatusColors,
     .child(top)
     .child(label(`${id}-body`, body).text_size(12.5).overflow_hidden().whitespace_nowrap().text_ellipsis());
   const click = rowClick(r, actions);
-  if (click !== null) el = el.on_click((_, cx) => click(cx));
+  el = el.on_click((_, cx) => click(cx));
   return hoverable(el, colors);
 }
 
@@ -178,6 +182,7 @@ function inboxRow(r: NeedRow, id: string, theme: ThemeRead, colors: StatusColors
     buttons = [];
     const { session, link } = r;
     if (session !== null) buttons.push(button(`${id}-answer`, "Answer", colors, (cx) => actions.openQuestion(r.city, session, cx)));
+    buttons.push(button(`${id}-steps`, "Steps", colors, (cx) => openRun(r, actions, cx)));
     if (link !== null) buttons.push(button(`${id}-review`, "Review ↗", colors, (cx) => actions.openLink(link, cx)));
     cells = r.cells;
   } else {

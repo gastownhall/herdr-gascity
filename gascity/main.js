@@ -1,6 +1,6 @@
 // herdr-gascity 0.0.0 - the Gas City mod for herdr-app. Built file: do not edit.
 // Source: https://github.com/gastownhall/herdr-gascity (src/). `bun run build` rebuilds this file
-// byte for byte; source digest sha256:42a74a6d5f649f9fdc592d9699cbe15acba130652fcd80069aa457fa65fc88e9 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
+// byte for byte; source digest sha256:bd0bd5c35cd561302d27d99c6ed3787bb9f6c2bcc5ef87ba5ca3f2628bdc8fe1 over the git-tracked src/, build.ts, package.json, bun.lock and tsconfig.json.
 
 // src/main.ts
 import { View } from "gpui-kit";
@@ -105,8 +105,8 @@ function isPlainObject(o) {
   return true;
 }
 var propertyKeyTypes = /* @__PURE__ */ new Set(["string", "number", "symbol"]);
-function escapeRegex(str2) {
-  return str2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function escapeRegex(str3) {
+  return str3.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function clone(inst, def, params) {
   const cl = new inst._zod.constr(def ?? inst._zod.def);
@@ -2103,22 +2103,22 @@ function rawText(body) {
 var CODE_CITY_NOT_FOUND = "city-not-found";
 var CODE_SESSION_CONFLICT = "session-conflict";
 var CODE_DEMAND_ONLY_SINGLETON = "demand-only-singleton";
-function httpError(operationId, status2, body) {
+function httpError(operationId, status3, body) {
   const problem = parseProblem(body);
   const detail = problem?.detail ?? "";
   const code = problem?.code;
-  if ((status2 === 404 || status2 === 405) && problem === null) {
+  if ((status3 === 404 || status3 === 405) && problem === null) {
     const raw = rawText(body);
     return raw === "" || !raw.startsWith("{") ? { kind: "api-missing", operationId } : { kind: "api-missing", operationId, raw };
   }
-  if (status2 === 404 && (code === CODE_CITY_NOT_FOUND || code === void 0 && detail.startsWith(CITY_NOT_RUNNING_PREFIX))) {
+  if (status3 === 404 && (code === CODE_CITY_NOT_FOUND || code === void 0 && detail.startsWith(CITY_NOT_RUNNING_PREFIX))) {
     return { kind: "city-not-running", city: detail.startsWith(CITY_NOT_RUNNING_PREFIX) ? detail.slice(CITY_NOT_RUNNING_PREFIX.length) : "" };
   }
-  if (status2 === 401 && problem) {
+  if (status3 === 401 && problem) {
     if (detail === "missing X-GC-City-Write grant") return { kind: "write-grant-required", status: 401, detail };
     if (detail === "missing X-GC-City-Read grant") return { kind: "read-grant-required", status: 401, detail };
   }
-  if (status2 === 403 && problem) {
+  if (status3 === 403 && problem) {
     if (detail.startsWith("csrf:")) return { kind: "csrf-rejected" };
     if (detail.startsWith("read_only:")) return { kind: "read-only", detail };
     if (detail === "write grant rejected" || detail.startsWith("workspace-service mutations are disabled")) {
@@ -2126,8 +2126,8 @@ function httpError(operationId, status2, body) {
     }
     if (detail === "read grant rejected") return { kind: "read-grant-required", status: 403, detail };
   }
-  if (problem) return { kind: "http", status: status2, problem };
-  return { kind: "http", status: status2, problem: null, raw: rawText(body) };
+  if (problem) return { kind: "http", status: status3, problem };
+  return { kind: "http", status: status3, problem: null, raw: rawText(body) };
 }
 function isTransport(e) {
   return e.kind === "unreachable" || e.kind === "timeout";
@@ -2162,13 +2162,13 @@ function outcomeFailure(outcome) {
   return { kind: "outcome-failed", requestId: outcome.request_id, operation: outcome.operation, payload: payload.value };
 }
 var CODE_IDEMPOTENCY_IN_FLIGHT = "idempotency-in-flight";
-function uncertainMutationAnswer(operationId, status2, error) {
+function uncertainMutationAnswer(operationId, status3, error) {
   const detail = error.kind === "http" ? error.problem?.detail ?? error.problem?.title ?? error.raw ?? "" : "";
-  const issue2 = detail === "" ? `gc answered ${status2}` : `gc answered ${status2}: ${detail}`;
-  if (status2 === 409 && error.kind === "http" && error.problem?.code === CODE_IDEMPOTENCY_IN_FLIGHT) {
+  const issue2 = detail === "" ? `gc answered ${status3}` : `gc answered ${status3}: ${detail}`;
+  if (status3 === 409 && error.kind === "http" && error.problem?.code === CODE_IDEMPOTENCY_IN_FLIGHT) {
     return { kind: "outcome-unknown", requestId: null, operationId, cause: "idempotency-in-flight", issues: [issue2] };
   }
-  if (status2 >= 500 && status2 !== 501) return { kind: "outcome-unknown", requestId: null, operationId, cause: "server-error", issues: [issue2] };
+  if (status3 >= 500 && status3 !== 501) return { kind: "outcome-unknown", requestId: null, operationId, cause: "server-error", issues: [issue2] };
   return null;
 }
 
@@ -2638,12 +2638,12 @@ async function call(baseUrl, fetch2, now, op, args) {
     init.body = body;
   }
   const started = now();
-  let status2;
+  let status3;
   let text2;
   let finalUrl;
   try {
     const response = await fetch2(url, init);
-    status2 = response.status;
+    status3 = response.status;
     finalUrl = response.url;
     text2 = await response.text();
   } catch (cause) {
@@ -2660,9 +2660,9 @@ async function call(baseUrl, fetch2, now, op, args) {
     }
     return err({ kind: "not-loopback", url: finalUrl });
   }
-  if (status2 < 200 || status2 > 299) {
-    const e = httpError(op, status2, text2);
-    return err((mutation ? uncertainMutationAnswer(op, status2, e) : null) ?? e);
+  if (status3 < 200 || status3 > 299) {
+    const e = httpError(op, status3, text2);
+    return err((mutation ? uncertainMutationAnswer(op, status3, e) : null) ?? e);
   }
   let decoded;
   try {
@@ -2855,8 +2855,14 @@ var isCount = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 function decodeFocus(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const v = value;
-  const { city, session, bead, seq, at: at3, attach } = v;
+  const { city, session, bead, run: run2, seq, at: at3, attach } = v;
   if (!isText(city) || !isCount(seq) || !isCount(at3)) return null;
+  if (isText(run2)) {
+    if (session !== void 0 || bead !== void 0 || attach !== void 0) return null;
+    const { ref, title } = v;
+    return { city, run: run2, ...isText(ref) ? { ref } : {}, ...isText(title) ? { title } : {}, seq, at: at3 };
+  }
+  if (run2 !== void 0) return null;
   if (isText(session) && bead === void 0 && attach === true) return { city, session, attach: true, seq, at: at3 };
   if (isText(session) && bead === void 0 && attach === void 0) return { city, session, seq, at: at3 };
   if (isText(bead) && session === void 0 && attach === true) return { city, bead, attach: true, seq, at: at3 };
@@ -4497,6 +4503,172 @@ function moveIn(order, current, delta) {
   return order[(at3 + delta + order.length) % order.length] ?? null;
 }
 
+// src/sync/runDetail.ts
+function rec(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? v : null;
+}
+function str(v) {
+  return typeof v === "string" && v !== "" ? v : null;
+}
+function known(v, field2) {
+  const r = rec(v);
+  if (r === null || r["kind"] !== "known" && r["kind"] !== "available") return null;
+  return str(r[field2]);
+}
+var STATUSES = ["completed", "active", "failed", "ready", "pending"];
+function status(v) {
+  return STATUSES.find((s) => s === v) ?? "other";
+}
+function controlOf(n) {
+  const it = rec(n["iterationSummary"]);
+  return known(it?.["control"], "id");
+}
+function sessionOf(n) {
+  const instances = Array.isArray(n["executionInstances"]) ? n["executionInstances"] : [];
+  for (let i = instances.length - 1; i >= 0; i--) {
+    const s = rec(rec(instances[i])?.["session"]);
+    if (s?.["kind"] !== "attached") continue;
+    const name = str(rec(s["link"])?.["sessionName"]);
+    if (name !== null) return { session: name, live: s["streamable"] === true };
+  }
+  return { session: null, live: false };
+}
+function step(n, depth, loop) {
+  const badge2 = rec(rec(n["attemptSummary"])?.["badge"]);
+  const attempts = str(badge2?.["label"]);
+  const m = attempts === null ? null : /^(\d+)\/(\d+)$/.exec(attempts);
+  const it = rec(n["iterationSummary"]);
+  const round = it?.["visibleIteration"];
+  return {
+    title: str(n["title"]) ?? str(n["id"]) ?? "step",
+    status: status(n["status"]),
+    attempts,
+    exhausted: m !== null && m[1] === m[2],
+    rounds: loop && typeof round === "number" ? round : null,
+    ...sessionOf(n),
+    depth
+  };
+}
+function stageCell(status3, key) {
+  if (status3 === "complete") return "done";
+  if (status3 === "active") return key === "approval" ? "gate" : "active";
+  return "pending";
+}
+function projectRunDetail(raw) {
+  const d = rec(raw);
+  const id2 = str(d?.["runId"]);
+  if (d === null || id2 === null || !Array.isArray(d["nodes"])) return null;
+  const nodes = d["nodes"].map(rec).filter((n) => n !== null).filter((n) => n["visibleInGraph"] === true && n["historicalOnly"] !== true).filter((n) => n["constructKind"] !== "run-root" && n["kind"] !== "scope");
+  const loops = new Set(nodes.filter((n) => n["constructKind"] === "check-loop").map(controlOf).filter((c) => c !== null));
+  const inside = /* @__PURE__ */ new Map();
+  for (const n of nodes) {
+    const c = controlOf(n);
+    if (c !== null && loops.has(c) && n["constructKind"] !== "check-loop") inside.set(c, [...inside.get(c) ?? [], n]);
+  }
+  const steps = [];
+  for (const n of nodes) {
+    const c = controlOf(n);
+    if (n["constructKind"] === "check-loop") {
+      steps.push(step(n, 0, true));
+      for (const child of c === null ? [] : inside.get(c) ?? []) steps.push(step(child, 1, false));
+    } else if (c === null || !loops.has(c)) steps.push(step(n, 0, false));
+  }
+  const stages = (Array.isArray(d["stages"]) ? d["stages"] : []).map(rec).filter((s) => s !== null).map((s) => ({ label: str(s["label"]) ?? str(s["key"]) ?? "?", cell: stageCell(s["status"], str(s["key"])) }));
+  const progress = rec(d["progress"]);
+  const counts2 = {};
+  for (const [k, v] of Object.entries(rec(progress?.["statusCounts"]) ?? {})) if (typeof v === "number") counts2[k] = v;
+  const root = d["nodes"].map(rec).find((n) => n?.["constructKind"] === "run-root");
+  return {
+    id: id2,
+    title: str(root?.["title"]) ?? str(d["title"]) ?? id2,
+    formula: known(d["formula"], "name"),
+    target: known(d["formulaDetail"], "target"),
+    rig: str(d["scopeRef"]),
+    path: known(d["executionPath"], "path"),
+    stages,
+    steps,
+    counts: counts2,
+    partial: rec(d["completeness"])?.["kind"] !== "complete" || progress?.["snapshotPartial"] === true,
+    terminal: progress?.["terminal"] === true
+  };
+}
+
+// src/vm/dashboardLinks.ts
+var seg = (s) => encodeURIComponent(s);
+function cityLink(dashboardUrl, city) {
+  return dashboardUrl === null ? null : `${dashboardUrl}/city/${seg(city)}/`;
+}
+function runLink(runsUrl, city, runId) {
+  return runsUrl === null ? null : `${runsUrl}/city/${seg(city)}/runs/${seg(runId)}`;
+}
+function beadLink(dashboardUrl, city, bead) {
+  return dashboardUrl === null ? null : `${dashboardUrl}/city/${seg(city)}/beads?bead=${seg(bead)}`;
+}
+
+// src/vm/runDetail.ts
+var RUN_STEPS_SHOWN = 40;
+var GLYPH = {
+  completed: { glyph: "✓", tone: "ok" },
+  active: { glyph: "◆", tone: "warn" },
+  failed: { glyph: "✕", tone: "bad" },
+  ready: { glyph: "○", tone: "plain" },
+  pending: { glyph: "·", tone: "dim" },
+  other: { glyph: "?", tone: "dim" }
+};
+var COUNT_ORDER = ["completed", "active", "failed", "ready", "pending"];
+var COUNT_WORD = { completed: "done" };
+function countsLine(counts2) {
+  const total = Object.values(counts2).reduce((a, b) => a + b, 0);
+  const keys = [...COUNT_ORDER.filter((k) => counts2[k] !== void 0), ...Object.keys(counts2).filter((k) => !COUNT_ORDER.includes(k)).sort()];
+  const parts = keys.filter((k) => (counts2[k] ?? 0) > 0).map((k) => `${counts2[k]} ${cleanLine(COUNT_WORD[k] ?? k)}`);
+  return [`${total} step${total === 1 ? "" : "s"}`, ...parts].join(" · ");
+}
+function runViewModel(i) {
+  const d = i.detail;
+  const steps = (d?.steps ?? []).map((s) => {
+    const started = s.status !== "pending" && s.status !== "ready";
+    return {
+      ...GLYPH[s.status],
+      title: cleanLine(s.title),
+      rounds: s.rounds !== null && s.rounds > 1 ? `${s.rounds} rounds` : null,
+      attempts: started && s.attempts !== null ? cleanLine(s.attempts) : null,
+      exhausted: s.exhausted && s.status === "failed",
+      session: s.session === null ? null : cleanLine(s.session),
+      live: s.live,
+      depth: s.depth
+    };
+  });
+  const answer = d?.steps.find((s) => s.status === "active" && s.live && s.session !== null)?.session ?? null;
+  const title = i.title ?? d?.title ?? i.id;
+  const sub = [d?.formula, d?.rig, d?.target].filter((x) => x !== null && x !== void 0).map(cleanLine).join(" · ");
+  let note = null;
+  let noteWarn = false;
+  if (i.error !== null) {
+    note = cleanLine(i.error);
+    noteWarn = true;
+  } else if (d === null) note = "Reading the run's steps…";
+  else if (d.partial) {
+    note = "gc returned a partial snapshot: some steps may be missing.";
+    noteWarn = true;
+  } else if (d.terminal) note = "This run has finished.";
+  return {
+    city: cleanLine(i.city),
+    id: cleanLine(i.id),
+    ref: i.ref === null ? null : cleanLine(i.ref),
+    title: cleanLine(title),
+    sub,
+    stages: (d?.stages ?? []).map((s) => ({ label: cleanLine(s.label), cell: s.cell })),
+    steps: steps.slice(0, RUN_STEPS_SHOWN),
+    moreSteps: Math.max(0, steps.length - RUN_STEPS_SHOWN),
+    counts: d === null ? null : countsLine(d.counts),
+    path: d?.path === null || d?.path === void 0 ? null : cleanLine(d.path),
+    answer: answer === null ? null : cleanLine(answer),
+    link: runLink(i.runsUrl, i.city, i.id),
+    note,
+    noteWarn
+  };
+}
+
 // src/actions/work.ts
 var SLING_MAY_ROUTE_TWICE = "gc cannot deduplicate a sling: if its outcome is unknown, a retry may route the bead twice. Check the board first.";
 var CREATED = ["ready"];
@@ -4527,8 +4699,8 @@ function slingVerb(agent) {
   return `Sling to ${agent}`;
 }
 function slingDetail(r, bead) {
-  const status2 = isUnrecognized(r.status) ? r.status.raw : r.status;
-  const parts = [`gc: ${status2} bead ${r.bead ?? bead} to ${r.target}`];
+  const status3 = isUnrecognized(r.status) ? r.status.raw : r.status;
+  const parts = [`gc: ${status3} bead ${r.bead ?? bead} to ${r.target}`];
   if (r.workflow_id !== void 0) parts.push(`workflow ${r.workflow_id}`);
   if (r.convoy_id !== void 0) parts.push(`convoy ${r.convoy_id}`);
   if (r.warnings.length > 0) parts.push(`warnings: ${r.warnings.join("; ")}`);
@@ -4690,7 +4862,7 @@ function onPollFailed(state, error) {
   if (endpoint === null || citiesOf(state) === null) return state;
   return { phase: "cities-failed", endpoint, error, selected: selectedCity(state) };
 }
-function step(m, event) {
+function step2(m, event) {
   const { copy, state } = m;
   switch (event.type) {
     case "discover":
@@ -4739,19 +4911,19 @@ function eventBead(e) {
 
 // src/sync/invalidate.ts
 var ALL_DOMAINS = ["rigs", "agents", "sessions", "pending", "human", "ready", "inProgress"];
-function touchesHuman(e, known) {
-  if (e.subject !== void 0 && known.humanIds.has(e.subject)) return true;
+function touchesHuman(e, known2) {
+  if (e.subject !== void 0 && known2.humanIds.has(e.subject)) return true;
   const r = eventBead(e);
   if (!r.ok || r.value === null) return true;
   const labels = r.value.labels ?? [];
-  return known.humanIds.has(r.value.id) || labels.includes(HUMAN_LABEL) || labels.includes(known.decisionLabel ?? DEFAULT_DECISION_LABEL) || r.value.issue_type === DECISION_TYPE;
+  return known2.humanIds.has(r.value.id) || labels.includes(HUMAN_LABEL) || labels.includes(known2.decisionLabel ?? DEFAULT_DECISION_LABEL) || r.value.issue_type === DECISION_TYPE;
 }
 var SESSION_REFRESH = /* @__PURE__ */ new Set(["request.failed", "worker.operation"]);
 var BOARD_CHANGES = /* @__PURE__ */ new Set(["bead.created", "bead.updated", "bead.closed", "bead.deleted", "bead.dead_assignee_reopened"]);
 var PENDING = /* @__PURE__ */ new Set(["session.pending", "session.pending_cleared"]);
 var SESSION_LIFECYCLE = /* @__PURE__ */ new Set(["session.created", "session.closed"]);
 var HANDLED_BY_NAME = [...SESSION_REFRESH, ...BOARD_CHANGES, ...PENDING, ...SESSION_LIFECYCLE];
-function invalidationFor(events, known) {
+function invalidationFor(events, known2) {
   const inv = { domains: /* @__PURE__ */ new Set(), cities: false };
   for (const e of events) {
     const t = e.type;
@@ -4766,11 +4938,11 @@ function invalidationFor(events, known) {
       inv.domains.add("sessions");
       inv.domains.add("agents");
     } else if (t.startsWith("bead.")) {
-      if (subject !== void 0 && known.sessionIds.has(subject)) inv.domains.add("sessions");
+      if (subject !== void 0 && known2.sessionIds.has(subject)) inv.domains.add("sessions");
       if (BOARD_CHANGES.has(t)) {
         inv.domains.add("ready");
         inv.domains.add("inProgress");
-        if (!inv.domains.has("human") && touchesHuman(e, known)) inv.domains.add("human");
+        if (!inv.domains.has("human") && touchesHuman(e, known2)) inv.domains.add("human");
       }
     } else if (t.startsWith("city.")) {
       inv.cities = true;
@@ -5024,7 +5196,7 @@ var ActionLedger = class {
   /** Sends a new action now, in the turn of `owner` (the caller's copy), with `key` or a fresh Idempotency-Key. Returns its id. */
   start(owner, spec2, key) {
     const now = this.deps.clock.now();
-    const rec2 = {
+    const rec3 = {
       id: ++this.seq,
       spec: spec2,
       key: key ?? this.deps.newKey(),
@@ -5037,10 +5209,10 @@ var ActionLedger = class {
       keyPinned: false,
       followUp: spec2.then ? { kind: "waiting" } : null
     };
-    this.records.push(rec2);
+    this.records.push(rec3);
     this.trim();
-    this.send(rec2, owner);
-    return rec2.id;
+    this.send(rec3, owner);
+    return rec3.id;
   }
   /**
    * The person retries an action, in the turn of `owner`. Refused while it is
@@ -5048,20 +5220,20 @@ var ActionLedger = class {
    * has been refetched (retryGate).
    */
   retry(owner, id2, snapshot) {
-    const rec2 = this.records.find((r) => r.id === id2);
-    if (!rec2) return err("the action is no longer in the activity log");
-    const gate = retryGate(this.entry(rec2), snapshot);
+    const rec3 = this.records.find((r) => r.id === id2);
+    if (!rec3) return err("the action is no longer in the activity log");
+    const gate = retryGate(this.entry(rec3), snapshot);
     if (!gate.allowed) return err(gate.reason);
-    if (!(rec2.keyPinned && rec2.spec.idempotent)) rec2.key = this.deps.newKey();
-    rec2.attempt++;
-    rec2.startedAt = this.deps.clock.now();
-    this.send(rec2, owner);
-    return ok(rec2.id);
+    if (!(rec3.keyPinned && rec3.spec.idempotent)) rec3.key = this.deps.newKey();
+    rec3.attempt++;
+    rec3.startedAt = this.deps.clock.now();
+    this.send(rec3, owner);
+    return ok(rec3.id);
   }
   /** Refetches what an action changes now ("refresh before retry"). */
   refreshFor(id2) {
-    const rec2 = this.records.find((r) => r.id === id2);
-    if (rec2) this.refreshAfter(rec2);
+    const rec3 = this.records.find((r) => r.id === id2);
+    if (rec3) this.refreshAfter(rec3);
   }
   /**
    * Called from a copy's own periodic tick: resolves actions past their
@@ -5070,21 +5242,21 @@ var ActionLedger = class {
   tick(owner) {
     if (this.disposed) return;
     const now = this.deps.clock.now();
-    for (const rec2 of [...this.records]) {
-      const s = rec2.state;
+    for (const rec3 of [...this.records]) {
+      const s = rec3.state;
       if (s.kind === "sending" && now - s.since > SEND_DEADLINE_MS) {
         const secs = Math.round(SEND_DEADLINE_MS / 1e3);
-        if (this.deps.dropQueued(rec2.group) > 0) this.resolve(rec2, { kind: "not-sent", at: now, reason: `the fetch queue did not reach it within ${secs} s` });
-        else this.resolve(rec2, { kind: "unknown", at: now, error: unknown2(null, rec2.spec.operationId, "timeout", [`no answer within ${secs} s`]) });
+        if (this.deps.dropQueued(rec3.group) > 0) this.resolve(rec3, { kind: "not-sent", at: now, reason: `the fetch queue did not reach it within ${secs} s` });
+        else this.resolve(rec3, { kind: "unknown", at: now, error: unknown2(null, rec3.spec.operationId, "timeout", [`no answer within ${secs} s`]) });
       } else if (s.kind === "polling" && now - s.acceptedAt >= OUTCOME_POLL_LIMIT_MS) {
-        this.resolve(rec2, { kind: "unknown", at: now, error: unknown2(s.requestId, rec2.spec.operationId, "outcome-poll-expired") });
-      } else if (s.kind === "polling" && (rec2.owner === owner || rec2.owner === null) && !s.inFlight && now >= s.nextAt) {
-        rec2.owner = owner;
-        this.poll(rec2, s);
+        this.resolve(rec3, { kind: "unknown", at: now, error: unknown2(s.requestId, rec3.spec.operationId, "outcome-poll-expired") });
+      } else if (s.kind === "polling" && (rec3.owner === owner || rec3.owner === null) && !s.inFlight && now >= s.nextAt) {
+        rec3.owner = owner;
+        this.poll(rec3, s);
       } else if (s.kind === "watching" && now >= s.watch.deadline) {
-        this.end(rec2, s.watch.expired);
-      } else if (s.kind === "watching" && rec2.owner === owner && !s.inFlight && now >= s.watch.nextAt) {
-        this.step(rec2, s);
+        this.end(rec3, s.watch.expired);
+      } else if (s.kind === "watching" && rec3.owner === owner && !s.inFlight && now >= s.watch.nextAt) {
+        this.step(rec3, s);
       }
     }
   }
@@ -5095,27 +5267,27 @@ var ActionLedger = class {
    */
   ownerGone(owner) {
     const now = this.deps.clock.now();
-    for (const rec2 of this.records) {
-      if (rec2.owner !== owner) continue;
-      const s = rec2.state;
+    for (const rec3 of this.records) {
+      if (rec3.owner !== owner) continue;
+      const s = rec3.state;
       if (s.kind === "polling") {
-        this.deps.dropQueued(rec2.group);
-        rec2.owner = null;
-        rec2.group = {};
-        rec2.token = ++this.tokens;
-        rec2.state = { ...s, inFlight: false, nextAt: now };
+        this.deps.dropQueued(rec3.group);
+        rec3.owner = null;
+        rec3.group = {};
+        rec3.token = ++this.tokens;
+        rec3.state = { ...s, inFlight: false, nextAt: now };
         this.commit();
       } else if (s.kind === "watching") {
-        this.deps.dropQueued(rec2.group);
-        this.end(rec2, s.watch.abandoned);
+        this.deps.dropQueued(rec3.group);
+        this.end(rec3, s.watch.abandoned);
       } else if (s.kind === "sending") {
-        if (this.deps.dropQueued(rec2.group) > 0) {
-          this.resolve(rec2, { kind: "not-sent", at: now, reason: "the Gas City view that started it closed before it was sent" });
+        if (this.deps.dropQueued(rec3.group) > 0) {
+          this.resolve(rec3, { kind: "not-sent", at: now, reason: "the Gas City view that started it closed before it was sent" });
         } else {
-          this.resolve(rec2, {
+          this.resolve(rec3, {
             kind: "unknown",
             at: now,
-            error: unknown2(null, rec2.spec.operationId, "cancelled", ["the Gas City view that started it closed before gc's answer arrived"])
+            error: unknown2(null, rec3.spec.operationId, "cancelled", ["the Gas City view that started it closed before gc's answer arrived"])
           });
         }
       }
@@ -5126,46 +5298,46 @@ var ActionLedger = class {
     this.disposed = true;
   }
   // ---- internals ------------------------------------------------------------------
-  send(rec2, owner) {
-    rec2.owner = owner;
-    rec2.group = {};
+  send(rec3, owner) {
+    rec3.owner = owner;
+    rec3.group = {};
     const token = ++this.tokens;
-    rec2.token = token;
-    rec2.state = { kind: "sending", since: this.deps.clock.now() };
+    rec3.token = token;
+    rec3.state = { kind: "sending", since: this.deps.clock.now() };
     this.commit();
     let answer;
     try {
-      answer = rec2.spec.send(this.deps.client("mutation", rec2.group), this.deps.city, rec2.key);
+      answer = rec3.spec.send(this.deps.client("mutation", rec3.group), this.deps.city, rec3.key);
     } catch (cause) {
       answer = Promise.reject(cause);
     }
     answer.then(
-      (r) => this.sent(rec2, token, r),
-      (cause) => this.sent(rec2, token, err(unknown2(null, rec2.spec.operationId, "unreadable-response", [`the action threw: ${String(cause)}`])))
+      (r) => this.sent(rec3, token, r),
+      (cause) => this.sent(rec3, token, err(unknown2(null, rec3.spec.operationId, "unreadable-response", [`the action threw: ${String(cause)}`])))
     );
   }
-  live(rec2, token) {
-    return !this.disposed && rec2.token === token;
+  live(rec3, token) {
+    return !this.disposed && rec3.token === token;
   }
-  sent(rec2, token, r) {
-    if (!this.live(rec2, token)) return;
+  sent(rec3, token, r) {
+    if (!this.live(rec3, token)) return;
     const now = this.deps.clock.now();
     if (!r.ok) {
-      if (r.error.kind === "outcome-unknown") this.resolve(rec2, { kind: "unknown", at: now, error: r.error });
-      else this.resolve(rec2, { kind: "failed", at: now, error: r.error });
+      if (r.error.kind === "outcome-unknown") this.resolve(rec3, { kind: "unknown", at: now, error: r.error });
+      else this.resolve(rec3, { kind: "failed", at: now, error: r.error });
       return;
     }
     const sent = r.value;
     if (sent.kind === "watch") {
-      this.watch(rec2, sent.watch, sent.wrote);
+      this.watch(rec3, sent.watch, sent.wrote);
       return;
     }
     if (sent.kind === "done") {
-      this.resolve(rec2, { kind: "done", at: now, detail: sent.detail, requestId: null, wrote: true });
-      this.startFollowUp(rec2, sent.created);
+      this.resolve(rec3, { kind: "done", at: now, detail: sent.detail, requestId: null, wrote: true });
+      this.startFollowUp(rec3, sent.created);
       return;
     }
-    rec2.state = {
+    rec3.state = {
       kind: "polling",
       requestId: sent.requestId,
       afterSeq: sent.afterSeq,
@@ -5177,98 +5349,98 @@ var ActionLedger = class {
     };
     this.commit();
   }
-  poll(rec2, s) {
-    const token = rec2.token;
-    rec2.state = { ...s, inFlight: true };
+  poll(rec3, s) {
+    const token = rec3.token;
+    rec3.state = { ...s, inFlight: true };
     this.commit();
-    getRequestOutcome(this.deps.client("events", rec2.group), this.deps.city, s.requestId, s.afterSeq).then(
-      (r) => this.polled(rec2, token, r),
-      (cause) => this.polled(rec2, token, err(unknown2(s.requestId, "get-request-outcome", "unreadable-response", [String(cause)])))
+    getRequestOutcome(this.deps.client("events", rec3.group), this.deps.city, s.requestId, s.afterSeq).then(
+      (r) => this.polled(rec3, token, r),
+      (cause) => this.polled(rec3, token, err(unknown2(s.requestId, "get-request-outcome", "unreadable-response", [String(cause)])))
     );
   }
-  polled(rec2, token, r) {
-    const s = rec2.state;
-    if (!this.live(rec2, token) || s.kind !== "polling") return;
+  polled(rec3, token, r) {
+    const s = rec3.state;
+    if (!this.live(rec3, token) || s.kind !== "polling") return;
     const now = this.deps.clock.now();
     const next = { ...s, inFlight: false, polls: s.polls + 1, nextAt: now + pollDelay(s.polls + 1) };
     if (!r.ok) {
       const e = r.error;
       if (e.kind === "cancelled" || backsOff(e)) {
-        rec2.state = { ...next, lastError: e };
+        rec3.state = { ...next, lastError: e };
         this.commit();
         return;
       }
-      this.resolve(rec2, { kind: "unknown", at: now, error: unknown2(s.requestId, rec2.spec.operationId, "outcome-poll-failed", [describe3(e)]) });
+      this.resolve(rec3, { kind: "unknown", at: now, error: unknown2(s.requestId, rec3.spec.operationId, "outcome-poll-failed", [describe3(e)]) });
       return;
     }
     const outcome = r.value;
     const failure2 = outcomeFailure(outcome);
     if (failure2?.kind === "outcome-failed") {
-      this.resolve(rec2, { kind: "failed", at: now, error: failure2 });
+      this.resolve(rec3, { kind: "failed", at: now, error: failure2 });
     } else if (failure2?.kind === "outcome-unknown") {
-      this.resolve(rec2, { kind: "unknown", at: now, error: { ...failure2, operationId: rec2.spec.operationId } });
+      this.resolve(rec3, { kind: "unknown", at: now, error: { ...failure2, operationId: rec3.spec.operationId } });
     } else if (failure2 !== null) {
-      this.resolve(rec2, { kind: "unknown", at: now, error: unknown2(s.requestId, rec2.spec.operationId, "unreadable-response", [describe3(failure2)]) });
+      this.resolve(rec3, { kind: "unknown", at: now, error: unknown2(s.requestId, rec3.spec.operationId, "unreadable-response", [describe3(failure2)]) });
     } else if (outcome.state === "succeeded") {
-      this.resolve(rec2, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId, wrote: true });
-      this.startFollowUp(rec2, void 0);
+      this.resolve(rec3, { kind: "done", at: now, detail: successDetail(outcome), requestId: s.requestId, wrote: true });
+      this.startFollowUp(rec3, void 0);
     } else {
-      rec2.state = { ...next, lastError: null };
+      rec3.state = { ...next, lastError: null };
       this.commit();
     }
   }
   /** The action goes on as `watch` (from its request's answer, with whether gc accepted a change, or from its previous step). */
-  watch(rec2, watch, wrote) {
-    const s = rec2.state;
+  watch(rec3, watch, wrote) {
+    const s = rec3.state;
     const since2 = s.kind === "watching" ? s.since : this.deps.clock.now();
-    rec2.state = { kind: "watching", since: since2, watch, inFlight: false, wrote: s.kind === "watching" ? s.wrote || wrote : wrote };
+    rec3.state = { kind: "watching", since: since2, watch, inFlight: false, wrote: s.kind === "watching" ? s.wrote || wrote : wrote };
     this.commit();
   }
   /** Runs a watched action's next step, in the turn of the copy that started it. */
-  step(rec2, s) {
-    const token = rec2.token;
-    rec2.state = { ...s, inFlight: true };
+  step(rec3, s) {
+    const token = rec3.token;
+    rec3.state = { ...s, inFlight: true };
     this.commit();
     let next;
     try {
-      next = s.watch.step(this.deps.client("mutation", rec2.group), this.deps.city, () => this.live(rec2, token) && rec2.state.kind === "watching");
+      next = s.watch.step(this.deps.client("mutation", rec3.group), this.deps.city, () => this.live(rec3, token) && rec3.state.kind === "watching");
     } catch (cause) {
       next = Promise.reject(cause);
     }
     next.then(
       (r) => {
-        if (!this.live(rec2, token) || rec2.state.kind !== "watching") return;
-        if ("step" in r) this.watch(rec2, r, false);
-        else this.end(rec2, r);
+        if (!this.live(rec3, token) || rec3.state.kind !== "watching") return;
+        if ("step" in r) this.watch(rec3, r, false);
+        else this.end(rec3, r);
       },
       (cause) => {
-        if (!this.live(rec2, token) || rec2.state.kind !== "watching") return;
-        this.end(rec2, { kind: "failed", error: { kind: "host-call", api: rec2.spec.verb, cause: String(cause) } });
+        if (!this.live(rec3, token) || rec3.state.kind !== "watching") return;
+        this.end(rec3, { kind: "failed", error: { kind: "host-call", api: rec3.spec.verb, cause: String(cause) } });
       }
     );
   }
   /** Ends a watched action as its Watch says; done counts as a change only if gc accepted one before the watch. */
-  end(rec2, e) {
+  end(rec3, e) {
     const at3 = this.deps.clock.now();
-    const wrote = rec2.state.kind === "watching" && rec2.state.wrote;
+    const wrote = rec3.state.kind === "watching" && rec3.state.wrote;
     switch (e.kind) {
       case "done":
-        this.resolve(rec2, { kind: "done", at: at3, detail: e.detail, requestId: null, wrote });
+        this.resolve(rec3, { kind: "done", at: at3, detail: e.detail, requestId: null, wrote });
         return;
       case "failed":
-        this.resolve(rec2, { kind: "failed", at: at3, error: e.error });
+        this.resolve(rec3, { kind: "failed", at: at3, error: e.error });
         return;
       case "not-sent":
-        this.resolve(rec2, { kind: "not-sent", at: at3, reason: e.reason });
+        this.resolve(rec3, { kind: "not-sent", at: at3, reason: e.reason });
         return;
     }
   }
   /** Ends an action and refetches what it changed (a done one too: rig and agent changes are not evented). */
-  resolve(rec2, state) {
-    rec2.token = ++this.tokens;
-    rec2.state = state;
-    if (state.kind === "unknown") rec2.keyPinned = true;
-    this.refreshAfter(rec2);
+  resolve(rec3, state) {
+    rec3.token = ++this.tokens;
+    rec3.state = state;
+    if (state.kind === "unknown") rec3.keyPinned = true;
+    this.refreshAfter(rec3);
     this.trim();
     this.commit();
   }
@@ -5276,25 +5448,25 @@ var ActionLedger = class {
    * The first action is done: sends its follow-up now, in this turn (the
    * owner's), for the id gc gave what it created. Once only.
    */
-  startFollowUp(rec2, created) {
-    const then2 = rec2.spec.then;
-    if (!then2 || rec2.followUp?.kind !== "waiting") return;
-    const owner = rec2.owner;
+  startFollowUp(rec3, created) {
+    const then2 = rec3.spec.then;
+    if (!then2 || rec3.followUp?.kind !== "waiting") return;
+    const owner = rec3.owner;
     if (created === void 0 || owner === null) {
-      rec2.followUp = {
+      rec3.followUp = {
         kind: "not-sent",
         reason: created === void 0 ? "gc's answer did not name what it created" : "no Gas City view was left to send it"
       };
       this.commit();
       return;
     }
-    rec2.followUp = { kind: "started", id: this.start(owner, then2.spec(created)) };
+    rec3.followUp = { kind: "started", id: this.start(owner, then2.spec(created)) };
     this.commit();
   }
-  refreshAfter(rec2) {
-    this.deps.refresh(rec2.spec.refresh);
-    const t = rec2.spec.target;
-    if (t.kind === "session" && rec2.spec.refreshesDetail !== false) this.deps.refreshDetail(t.id);
+  refreshAfter(rec3) {
+    this.deps.refresh(rec3.spec.refresh);
+    const t = rec3.spec.target;
+    if (t.kind === "session" && rec3.spec.refreshesDetail !== false) this.deps.refreshDetail(t.id);
     if (t.kind === "bead") this.deps.refreshBead(t.id);
   }
   /** Drops the oldest finished actions beyond ACTIVITY_LIMIT. */
@@ -5309,16 +5481,16 @@ var ActionLedger = class {
       excess--;
     }
   }
-  entry(rec2) {
+  entry(rec3) {
     return {
-      id: rec2.id,
-      spec: rec2.spec,
-      key: rec2.key,
-      attempt: rec2.attempt,
-      startedAt: rec2.startedAt,
-      state: rec2.state,
-      keyPinned: rec2.keyPinned,
-      followUp: rec2.spec.then && rec2.followUp ? { verb: rec2.spec.then.verb, state: rec2.followUp } : null
+      id: rec3.id,
+      spec: rec3.spec,
+      key: rec3.key,
+      attempt: rec3.attempt,
+      startedAt: rec3.startedAt,
+      state: rec3.state,
+      keyPinned: rec3.keyPinned,
+      followUp: rec3.spec.then && rec3.followUp ? { verb: rec3.spec.then.verb, state: rec3.followUp } : null
     };
   }
   commit() {
@@ -5567,8 +5739,8 @@ function newest(turns, olderHidden) {
 function mergeTranscript(cur, after, r) {
   const format = isUnrecognized(r.format) ? "text" : r.format;
   if (cur !== null && after !== null && format === "conversation" && cur.format === "conversation") {
-    const known = new Set(cur.turns.map((t) => t.id).filter((id2) => id2 !== void 0));
-    const fresh = r.turns.filter((t) => t.id === void 0 || !known.has(t.id));
+    const known2 = new Set(cur.turns.map((t) => t.id).filter((id2) => id2 !== void 0));
+    const fresh = r.turns.filter((t) => t.id === void 0 || !known2.has(t.id));
     if (fresh.length === 0) return cur;
     return { format, ...newest([...cur.turns, ...fresh], cur.olderHidden), bounded: false };
   }
@@ -5699,13 +5871,13 @@ var CityStore = class {
       this.commit();
     }
     if (!this.wantsStep(now)) return;
-    const step2 = { gen: ++this.generation, starter, progressAt: now, probe: null };
-    this.step = step2;
-    this.runStep(step2).then(
-      () => this.endStep(step2),
+    const step3 = { gen: ++this.generation, starter, progressAt: now, probe: null };
+    this.step = step3;
+    this.runStep(step3).then(
+      () => this.endStep(step3),
       (cause) => {
-        if (this.step === step2) this.record("step", { kind: "step-crashed", message: messageOf4(cause) });
-        this.endStep(step2);
+        if (this.step === step3) this.record("step", { kind: "step-crashed", message: messageOf4(cause) });
+        this.endStep(step3);
         this.commit();
       }
     );
@@ -5833,22 +6005,22 @@ var CityStore = class {
   }
   // ---- steps --------------------------------------------------------------------
   abandon() {
-    const step2 = this.step;
-    if (!step2) return;
+    const step3 = this.step;
+    if (!step3) return;
     this.step = null;
     this.generation++;
-    if (step2.probe !== null) this.deps.endpoint.endProbe(step2.probe);
-    this.deps.endpoint.dropQueued(step2);
+    if (step3.probe !== null) this.deps.endpoint.endProbe(step3.probe);
+    this.deps.endpoint.dropQueued(step3);
   }
-  endStep(step2) {
-    if (step2.probe !== null) this.deps.endpoint.endProbe(step2.probe);
-    if (this.step === step2) this.step = null;
+  endStep(step3) {
+    if (step3.probe !== null) this.deps.endpoint.endProbe(step3.probe);
+    if (this.step === step3) this.step = null;
   }
-  current(step2) {
-    return !this.disposed && this.step === step2;
+  current(step3) {
+    return !this.disposed && this.step === step3;
   }
-  progress(step2) {
-    step2.progressAt = this.deps.clock.now();
+  progress(step3) {
+    step3.progressAt = this.deps.clock.now();
   }
   sweepDue(now) {
     return this.last.sweep === null || now >= this.last.sweep + (intervalOf("sweep", this.onScreen) ?? 0);
@@ -5868,14 +6040,14 @@ var CityStore = class {
     }
     return this.onScreen && [...this.peeks.values()].some((q) => q.due && !q.held);
   }
-  async runStep(step2) {
+  async runStep(step3) {
     const now = this.deps.clock.now();
     const gate = this.deps.endpoint.gate(now);
     if (gate.kind === "wait") return;
     if (gate.kind === "probe") {
-      step2.probe = gate.token;
+      step3.probe = gate.token;
       this.last.events = now;
-      await this.pollEvents(step2, this.events.cursor === null ? 1 : EVENT_PAGE_LIMIT);
+      await this.pollEvents(step3, this.events.cursor === null ? 1 : EVENT_PAGE_LIMIT);
       return;
     }
     if (this.events.cursor === null) {
@@ -5885,13 +6057,13 @@ var CityStore = class {
       }
       if (this.events.held) return;
       this.last.events = now;
-      if (!await this.pollEvents(step2, 1)) return;
+      if (!await this.pollEvents(step3, 1)) return;
     }
     const p = plan(this.last, now, { onScreen: this.onScreen, peek: this.peeks.size > 0, extraWakeAt: null });
     for (const task of p.due) {
       if (task === "events") {
         this.last.events = now;
-        if (!this.events.held && !await this.pollEvents(step2, EVENT_PAGE_LIMIT)) return;
+        if (!this.events.held && !await this.pollEvents(step3, EVENT_PAGE_LIMIT)) return;
       } else if (task === "sessions") {
         this.last.sessions = now;
         this.mark("sessions", now, "snapshot");
@@ -5909,43 +6081,43 @@ var CityStore = class {
         for (const q of this.peeks.values()) q.due = true;
       }
     }
-    if (!this.current(step2)) return;
-    await this.fetchDue(step2);
+    if (!this.current(step3)) return;
+    await this.fetchDue(step3);
   }
-  gateOpen(step2) {
-    return this.current(step2) && this.deps.endpoint.peekGate(this.deps.clock.now()).kind === "open";
+  gateOpen(step3) {
+    return this.current(step3) && this.deps.endpoint.peekGate(this.deps.clock.now()).kind === "open";
   }
-  async fetchDue(step2) {
+  async fetchDue(step3) {
     for (const d of ALL_DOMAINS) {
       const due = this.due.get(d);
       if (!due || due.at > this.deps.clock.now()) continue;
-      if (!this.gateOpen(step2)) return;
-      await this.fetchDomain(step2, d, due.priority);
+      if (!this.gateOpen(step3)) return;
+      await this.fetchDomain(step3, d, due.priority);
     }
     if (this.seed.due && !this.seed.held) {
-      if (!this.gateOpen(step2)) return;
-      await this.fetchSeed(step2);
+      if (!this.gateOpen(step3)) return;
+      await this.fetchSeed(step3);
     }
-    await this.fetchClosed(step2);
-    await this.fetchLookups(step2);
+    await this.fetchClosed(step3);
+    await this.fetchLookups(step3);
     for (const [id2, w] of [...this.peeks]) {
       if (w.wake.due && !w.wake.held) {
         if (this.templateOf(id2) === void 0) this.unlisted(w);
         else {
-          if (!this.gateOpen(step2)) return;
-          await this.fetchWake(step2, id2);
+          if (!this.gateOpen(step3)) return;
+          await this.fetchWake(step3, id2);
         }
       }
       if (w.pending.due && !w.pending.held) {
-        if (!this.gateOpen(step2)) return;
-        await this.fetchSessionPending(step2, id2);
+        if (!this.gateOpen(step3)) return;
+        await this.fetchSessionPending(step3, id2);
       }
     }
     if (this.onScreen) {
       for (const [id2, q] of [...this.peeks]) {
         if (!q.due || q.held) continue;
-        if (!this.gateOpen(step2)) return;
-        await this.fetchTranscript(step2, id2);
+        if (!this.gateOpen(step3)) return;
+        await this.fetchTranscript(step3, id2);
       }
     }
   }
@@ -6023,10 +6195,10 @@ var CityStore = class {
     }
   }
   // ---- reads --------------------------------------------------------------------
-  async pollEvents(step2, limit) {
-    const r = await pollEvents(this.deps.endpoint.client("events", step2), this.key.city, { limit });
-    if (!this.current(step2)) return false;
-    this.progress(step2);
+  async pollEvents(step3, limit) {
+    const r = await pollEvents(this.deps.endpoint.client("events", step3), this.key.city, { limit });
+    if (!this.current(step3)) return false;
+    this.progress(step3);
     const now = this.deps.clock.now();
     if (!this.settle(r, "events")) {
       if (!r.ok && !isCancelled(r.error)) {
@@ -6088,8 +6260,8 @@ var CityStore = class {
     if (extra.status) q.status = extra.status;
     return q;
   }
-  async load(step2, d, priority) {
-    const c = this.deps.endpoint.client(priority, step2);
+  async load(step3, d, priority) {
+    const c = this.deps.endpoint.client(priority, step3);
     const city = this.key.city;
     switch (d) {
       case "rigs":
@@ -6103,9 +6275,9 @@ var CityStore = class {
       case "inProgress":
         return await listWork(c, city, this.workQuery({ limit: BOARD_LIMIT, status: "in_progress" }));
       case "human":
-        return await this.loadDecisions(step2, priority);
+        return await this.loadDecisions(step3, priority);
       default:
-        return await this.loadSessions(step2, priority);
+        return await this.loadSessions(step3, priority);
     }
   }
   /**
@@ -6113,8 +6285,8 @@ var CityStore = class {
    * dashboard's decision label (what mdash lists), or of type decision; each
    * once. `total` sums gc's counts less the beads listed more than once.
    */
-  async loadDecisions(step2, priority) {
-    const c = this.deps.endpoint.client(priority, step2);
+  async loadDecisions(step3, priority) {
+    const c = this.deps.endpoint.client(priority, step3);
     const label2 = this.decisionLabel();
     const queries = [{ label: HUMAN_LABEL, limit: HUMAN_LIMIT }];
     if (label2 !== HUMAN_LABEL) queries.push({ label: label2, limit: HUMAN_LIMIT });
@@ -6123,7 +6295,7 @@ var CityStore = class {
     const seen = /* @__PURE__ */ new Set();
     for (const q of queries) {
       const r = await listOpenBeads(c, this.key.city, q);
-      this.progress(step2);
+      this.progress(step3);
       if (!r.ok) return r;
       out.total += Math.max(r.value.total ?? 0, r.value.items.length);
       out.partial ||= r.value.partial === true;
@@ -6137,7 +6309,7 @@ var CityStore = class {
         seen.add(b.id);
         out.items.push(b);
       }
-      if (!this.current(step2)) break;
+      if (!this.current(step3)) break;
     }
     return { ok: true, value: out };
   }
@@ -6145,13 +6317,13 @@ var CityStore = class {
   decisionLabel() {
     return this.deps.decisionLabel?.() ?? DEFAULT_DECISION_LABEL;
   }
-  async loadSessions(step2, priority) {
-    const c = this.deps.endpoint.client(priority, step2);
+  async loadSessions(step3, priority) {
+    const c = this.deps.endpoint.client(priority, step3);
     const out = { items: [], unreadable: [], total: 0, truncated: false, partial: false, partialErrors: [] };
     let cursor;
     for (; ; ) {
       const r = await listSessions(c, this.key.city, cursor === void 0 ? { limit: SESSION_PAGE } : { limit: SESSION_PAGE, cursor });
-      this.progress(step2);
+      this.progress(step3);
       if (!r.ok) return r;
       const offset = out.items.length + out.unreadable.length;
       out.items.push(...r.value.items);
@@ -6165,16 +6337,16 @@ var CityStore = class {
         out.truncated = true;
         break;
       }
-      if (!this.current(step2)) break;
+      if (!this.current(step3)) break;
       cursor = r.value.next_cursor;
     }
     return { ok: true, value: out };
   }
-  async fetchDomain(step2, d, priority) {
+  async fetchDomain(step3, d, priority) {
     const startedAt = this.deps.clock.now();
-    const r = await this.load(step2, d, priority);
-    if (!this.current(step2)) return;
-    this.progress(step2);
+    const r = await this.load(step3, d, priority);
+    if (!this.current(step3)) return;
+    this.progress(step3);
     const slot = this.slots[d];
     if (this.settle(r, d) && r.ok) {
       slot.value = r.value;
@@ -6194,10 +6366,10 @@ var CityStore = class {
     }
     this.commit();
   }
-  async fetchSeed(step2) {
-    const r = await listWork(this.deps.endpoint.client("snapshot", step2), this.key.city, this.workQuery({ limit: MAX_CLOSED_RECENT, status: "closed", sort: "newest" }));
-    if (!this.current(step2)) return;
-    this.progress(step2);
+  async fetchSeed(step3) {
+    const r = await listWork(this.deps.endpoint.client("snapshot", step3), this.key.city, this.workQuery({ limit: MAX_CLOSED_RECENT, status: "closed", sort: "newest" }));
+    if (!this.current(step3)) return;
+    this.progress(step3);
     if (this.settle(r, "closed-seed") && r.ok) {
       this.seed = { value: r.value, fetchedAt: this.deps.clock.now(), error: null, held: false, due: false };
       this.closed.reaffirm(r.value.items.filter((b) => b.status === "closed").map((b) => b.id));
@@ -6243,7 +6415,7 @@ var CityStore = class {
     for (const c of this.closed.recent()) this.queueClosed(c.bead.id, null);
     if (!this.seed.held) this.seed.due = true;
   }
-  async fetchClosed(step2) {
+  async fetchClosed(step3) {
     if (this.closedQueue.length === 0) return;
     const rechecks = this.closedQueue.filter((c) => c.seq === null);
     let closes = this.closedQueue.filter((c) => c.seq !== null).sort((a, b) => (b.seq ?? 0) - (a.seq ?? 0));
@@ -6253,10 +6425,10 @@ var CityStore = class {
     }
     this.closedQueue = [...rechecks, ...closes];
     for (const ref of this.closedQueue.slice(0, BEAD_FETCHES_PER_STEP)) {
-      if (!this.gateOpen(step2)) return;
-      const r = await getBead(this.deps.endpoint.client("snapshot", step2), this.key.city, ref.id);
-      if (!this.current(step2)) return;
-      this.progress(step2);
+      if (!this.gateOpen(step3)) return;
+      const r = await getBead(this.deps.endpoint.client("snapshot", step3), this.key.city, ref.id);
+      if (!this.current(step3)) return;
+      this.progress(step3);
       if (!r.ok && isCancelled(r.error)) {
         this.record(`closed:${ref.id}`, r.error);
         this.commit();
@@ -6275,15 +6447,15 @@ var CityStore = class {
       this.commit();
     }
   }
-  async fetchTranscript(step2, id2) {
+  async fetchTranscript(step3, id2) {
     const q = this.peeks.get(id2);
     if (!q) return;
-    if (q.bounded) return this.fetchBoundedPeek(step2, id2, q);
+    if (q.bounded) return this.fetchBoundedPeek(step3, id2, q);
     const query = q.restart ? { tail: "1" } : transcriptQuery(q.value);
     const after = "after" in query ? query.after : null;
-    const r = await getSessionTranscript(this.deps.endpoint.client("peek", step2), this.key.city, id2, query);
-    if (!this.current(step2)) return;
-    this.progress(step2);
+    const r = await getSessionTranscript(this.deps.endpoint.client("peek", step3), this.key.city, id2, query);
+    if (!this.current(step3)) return;
+    this.progress(step3);
     if (this.peeks.get(id2) !== q) return;
     if (!r.ok && tooLarge(r.error)) {
       this.settle(r, `transcript:${id2}`);
@@ -6310,10 +6482,10 @@ var CityStore = class {
     }
     this.commit();
   }
-  async fetchBoundedPeek(step2, id2, q) {
-    const r = await getSession(this.deps.endpoint.client("peek", step2), this.key.city, id2, { peek: true, peek_lines: PEEK_LINES });
-    if (!this.current(step2)) return;
-    this.progress(step2);
+  async fetchBoundedPeek(step3, id2, q) {
+    const r = await getSession(this.deps.endpoint.client("peek", step3), this.key.city, id2, { peek: true, peek_lines: PEEK_LINES });
+    if (!this.current(step3)) return;
+    this.progress(step3);
     if (this.peeks.get(id2) !== q) return;
     const ok2 = this.settle(r, `peek:${id2}`);
     q.due = false;
@@ -6355,15 +6527,15 @@ var CityStore = class {
     w.wake.error = null;
     this.commit();
   }
-  async fetchWake(step2, id2) {
+  async fetchWake(step3, id2) {
     const template = this.templateOf(id2);
     const w = this.peeks.get(id2);
     if (template === void 0 || !w) return;
     w.wake.due = false;
     const asked = this.deps.clock.now();
-    const r = await listSessions(this.deps.endpoint.client("peek", step2), this.key.city, { limit: SESSION_PAGE, template, wake_reasons: true });
-    if (!this.current(step2)) return;
-    this.progress(step2);
+    const r = await listSessions(this.deps.endpoint.client("peek", step3), this.key.city, { limit: SESSION_PAGE, template, wake_reasons: true });
+    if (!this.current(step3)) return;
+    this.progress(step3);
     const ok2 = this.settle(r, `wake-reasons:${id2}`);
     if (this.peeks.get(id2) !== w) return;
     if (ok2 && r.ok) {
@@ -6376,12 +6548,12 @@ var CityStore = class {
     }
     this.commit();
   }
-  async fetchSessionPending(step2, id2) {
+  async fetchSessionPending(step3, id2) {
     const w = this.peeks.get(id2);
     if (!w) return;
-    const r = await getSessionPending(this.deps.endpoint.client("peek", step2), this.key.city, id2);
-    if (!this.current(step2)) return;
-    this.progress(step2);
+    const r = await getSessionPending(this.deps.endpoint.client("peek", step3), this.key.city, id2);
+    if (!this.current(step3)) return;
+    this.progress(step3);
     const ok2 = this.settle(r, `pending:${id2}`);
     if (this.peeks.get(id2) !== w) return;
     w.pending.due = false;
@@ -6394,13 +6566,13 @@ var CityStore = class {
     }
     this.commit();
   }
-  async fetchLookups(step2) {
+  async fetchLookups(step3) {
     const due = [...this.lookups].filter(([, b]) => b.due && !b.held).slice(0, BEAD_FETCHES_PER_STEP);
     for (const [id2] of due) {
-      if (!this.gateOpen(step2)) return;
-      const r = await getBead(this.deps.endpoint.client("snapshot", step2), this.key.city, id2);
-      if (!this.current(step2)) return;
-      this.progress(step2);
+      if (!this.gateOpen(step3)) return;
+      const r = await getBead(this.deps.endpoint.client("snapshot", step3), this.key.city, id2);
+      if (!this.current(step3)) return;
+      this.progress(step3);
       const ok2 = this.settle(r, `bead:${id2}`);
       const b = this.lookups.get(id2);
       if (!b) continue;
@@ -6535,7 +6707,7 @@ var URGENCY = {
   unknown: 6,
   lifecycle: 7
 };
-function status(kind, label2, source, detail = null, unrecognized = null) {
+function status2(kind, label2, source, detail = null, unrecognized = null) {
   return { kind, label: cleanLine(label2), source, detail: detail === null ? null : cleanLine(detail), unrecognized: unrecognized === null ? null : cleanLine(unrecognized) };
 }
 function drift2(value) {
@@ -6546,33 +6718,33 @@ function fromProgram(p) {
   if (p.progress !== void 0) details.push(`${p.progress}%`);
   if (p.app !== void 0 && p.app !== "") details.push(p.app);
   const detail = details.length > 0 ? details.join(" · ") : null;
-  if (isUnrecognized(p.state)) return status("unknown", `unknown (${p.state.raw})`, "program", detail, `program_status.state ${p.state.raw}`);
+  if (isUnrecognized(p.state)) return status2("unknown", `unknown (${p.state.raw})`, "program", detail, `program_status.state ${p.state.raw}`);
   const kind = p.kind === void 0 ? null : drift2(p.kind);
   const unrecognized = p.kind !== void 0 && isUnrecognized(p.kind) ? `program_status.kind ${p.kind.raw}` : null;
   const label2 = kind === null ? p.state : `${p.state} (${kind})`;
-  return status(p.state, label2, "program", detail, unrecognized);
+  return status2(p.state, label2, "program", detail, unrecognized);
 }
 function fromActivity(activity, detail) {
-  if (activity === "in-turn") return status("working", "working (transcript)", "transcript", detail);
-  if (activity === "idle") return status("idle", "idle (transcript)", "transcript", detail);
-  if (activity !== void 0 && activity !== "") return status("unknown", `unknown (${activity})`, "transcript", detail, `activity ${activity}`);
-  return status("unknown", "unknown", "none", detail);
+  if (activity === "in-turn") return status2("working", "working (transcript)", "transcript", detail);
+  if (activity === "idle") return status2("idle", "idle (transcript)", "transcript", detail);
+  if (activity !== void 0 && activity !== "") return status2("unknown", `unknown (${activity})`, "transcript", detail, `activity ${activity}`);
+  return status2("unknown", "unknown", "none", detail);
 }
 function liveStatus(x, detail = null) {
   if (x.program_status !== void 0) return fromProgram(x.program_status);
   return fromActivity(x.activity, detail);
 }
 function sessionStatus(s, pending) {
-  if (pending !== null) return status("needs-you", `needs you (${pending.kind})`, "pending");
+  if (pending !== null) return status2("needs-you", `needs you (${pending.kind})`, "pending");
   if (s.state !== ACTIVE) {
-    const known = LIFECYCLE3[s.state];
-    return status("lifecycle", known ?? s.state, "lifecycle", s.reason ?? null, known === void 0 ? `state ${s.state}` : null);
+    const known2 = LIFECYCLE3[s.state];
+    return status2("lifecycle", known2 ?? s.state, "lifecycle", s.reason ?? null, known2 === void 0 ? `state ${s.state}` : null);
   }
   return liveStatus(s);
 }
 function agentStatus(a) {
-  if (a.suspended) return status("lifecycle", "suspended", "lifecycle", a.unavailable_reason ?? null);
-  if (!a.running) return status("lifecycle", LIFECYCLE3[a.state] ?? "not running", "lifecycle", a.unavailable_reason ?? null);
+  if (a.suspended) return status2("lifecycle", "suspended", "lifecycle", a.unavailable_reason ?? null);
+  if (!a.running) return status2("lifecycle", LIFECYCLE3[a.state] ?? "not running", "lifecycle", a.unavailable_reason ?? null);
   const unavailable = !a.available ? `unavailable${a.unavailable_reason ? `: ${a.unavailable_reason}` : ""}` : null;
   const live = liveStatus(a, unavailable);
   return unavailable !== null && live.detail === null ? { ...live, detail: cleanLine(unavailable) } : live;
@@ -6638,12 +6810,12 @@ function agentsModel(input) {
   const pending = /* @__PURE__ */ new Map();
   for (const p of s.pending.value?.items ?? []) pending.set(p.session_id, { kind: p.kind, requestId: p.request_id });
   const row2 = (x) => {
-    const status2 = sessionStatus(x, pending.get(x.id) ?? null);
-    if (status2.unrecognized !== null) drift3.add(status2.unrecognized);
+    const status3 = sessionStatus(x, pending.get(x.id) ?? null);
+    if (status3.unrecognized !== null) drift3.add(status3.unrecognized);
     return {
       id: cleanLine(x.id),
       label: cleanLine(nonEmpty(x.alias, x.display_name, x.title, x.session_name) ?? x.id),
-      status: status2,
+      status: status3,
       activeBead: activeBead(x.active_bead, titles, s.beads),
       attached: x.attached,
       transport: x.transport === void 0 ? null : cleanLine(x.transport),
@@ -6745,18 +6917,6 @@ function agentsModel(input) {
     needsYou: pending.size,
     drift: [...drift3]
   };
-}
-
-// src/vm/dashboardLinks.ts
-var seg = (s) => encodeURIComponent(s);
-function cityLink(dashboardUrl, city) {
-  return dashboardUrl === null ? null : `${dashboardUrl}/city/${seg(city)}/`;
-}
-function runLink(runsUrl, city, runId) {
-  return runsUrl === null ? null : `${runsUrl}/city/${seg(city)}/runs/${seg(runId)}`;
-}
-function beadLink(dashboardUrl, city, bead) {
-  return dashboardUrl === null ? null : `${dashboardUrl}/city/${seg(city)}/beads?bead=${seg(bead)}`;
 }
 
 // src/vm/human.ts
@@ -7052,11 +7212,11 @@ function ageRank(r) {
 var EARLIER_DIVIDER = "earlier (by creation time)";
 var INFRASTRUCTURE2 = new Set(INFRASTRUCTURE_BEAD_TYPES);
 var STATES = { open: "open", in_progress: "in progress", blocked: "blocked", closed: "closed" };
-function beadState(status2, isBlocked) {
+function beadState(status3, isBlocked) {
   if (isBlocked === true) return { text: "blocked", unrecognized: null };
-  const known = STATES[status2];
-  if (known !== void 0) return { text: known, unrecognized: null };
-  const raw = cleanLine(status2);
+  const known2 = STATES[status3];
+  if (known2 !== void 0) return { text: known2, unrecognized: null };
+  const raw = cleanLine(status3);
   return { text: raw, unrecognized: `bead status ${raw}` };
 }
 function optional2(v) {
@@ -7443,9 +7603,9 @@ function chipOf(state, live) {
     case "city-unknown":
       return { tone: "error", text: `city "${state.city}" is not registered with gc at ${state.endpoint.url}` };
     case "city-stopped": {
-      const status2 = state.cause === "api" ? "gc answered: not running" : state.city.status ?? "not running";
+      const status3 = state.cause === "api" ? "gc answered: not running" : state.city.status ?? "not running";
       const error = state.city.error ? `: ${state.city.error}` : "";
-      return { tone: "warn", text: `city stopped (${status2})${error}` };
+      return { tone: "warn", text: `city stopped (${status3})${error}` };
     }
     case "city-running":
       return runningChip(state.notices, live);
@@ -7591,8 +7751,12 @@ function probeDocument(input) {
 
 // src/copy.ts
 function cleanFocus(f) {
+  if (f.run !== void 0) {
+    return { city: cleanLine(f.city), run: cleanLine(f.run), ...f.ref !== void 0 ? { ref: cleanLine(f.ref) } : {}, ...f.title !== void 0 ? { title: cleanLine(f.title) } : {} };
+  }
   return f.bead !== void 0 ? { city: cleanLine(f.city), bead: cleanLine(f.bead) } : { city: cleanLine(f.city), session: cleanLine(f.session ?? "") };
 }
+var RUN_DETAIL_MS = 3e4;
 var FOCUS_WAIT_MS = 6e4;
 var CITY_SCOPED = /* @__PURE__ */ new Set(["city-not-running", "write-grant-required", "read-grant-required", "read-only", "api-missing"]);
 function isCityScoped(e) {
@@ -7668,6 +7832,10 @@ var CopyController = class {
   /** A newer shared target the window holds back while a text box holds a draft. */
   focusNext = null;
   gascityTabs = [];
+  /** The formula run the window shows, and its detail as last read. */
+  run = null;
+  /** Grows with every read of the run's detail that lands (the redraw signature). */
+  runRev = 0;
   /** The Idempotency-Key a command's nonce gives the action it sends (only while that command runs). */
   commandKey = null;
   ownBook = null;
@@ -7709,6 +7877,7 @@ var CopyController = class {
     this.followFocus();
     this.followDetail();
     this.followBead();
+    this.followRun();
     this.city?.tick();
     const s = this.city?.snapshot();
     if (s && running !== null) {
@@ -7735,7 +7904,11 @@ var CopyController = class {
       this.gascityTabs.join(","),
       JSON.stringify(this.focusShown),
       JSON.stringify(this.focusNext),
-      this.selected !== null ? JSON.stringify(this.city?.keepAwake(this.selected) ?? null) : ""
+      this.selected !== null ? JSON.stringify(this.city?.keepAwake(this.selected) ?? null) : "",
+      this.run?.id ?? "",
+      this.runRev,
+      this.run?.reading ?? false,
+      this.runsDashboard ?? ""
     ].join("|");
     if (signature === this.signature) return false;
     this.signature = signature;
@@ -7874,6 +8047,7 @@ var CopyController = class {
       refreshCount: this.refreshCount,
       onScreen: this.onScreen,
       window: this.deps.window ? this.windowModel() : null,
+      run: this.run === null ? null : runViewModel({ ...this.run, runsUrl: this.runsDashboard, now }),
       commands: this.commands().entries()
     };
   }
@@ -7902,11 +8076,13 @@ var CopyController = class {
   }
   /** Opens (or, with null, closes) the detail of a session. */
   selectSession(id2) {
+    if (id2 !== null) this.run = null;
     this.selected = id2;
     this.followDetail();
   }
   /** Opens (or, with null, closes) the detail of a bead on the board. */
   selectBead(id2) {
+    if (id2 !== null) this.run = null;
     this.selectedBead = id2;
     this.followBead();
   }
@@ -8385,6 +8561,62 @@ var CopyController = class {
     this.focusing = { city, bead, ...attach ? { attach: true } : {}, since: this.deps.clock.now() };
     this.followFocus();
   }
+  /** Shows a formula run's steps in this copy (the window's target from the sidebar or the Needs a human pane). */
+  focusRun(city, run2, hints = {}) {
+    const pinned = this.deps.discovery.machine.copy.pinned;
+    if (pinned !== null && pinned !== city) {
+      this.refuse(`this copy shows city ${cleanLine(pinned)} only`);
+      return;
+    }
+    if (!this.checkCity(city)) return;
+    this.focusing = { city, run: run2, ...hints, since: this.deps.clock.now() };
+    this.followFocus();
+  }
+  /** Closes the run the window shows. */
+  closeRun() {
+    this.run = null;
+    if (this.focusShown?.run !== void 0) this.focusShown = null;
+  }
+  /** Reads the shown run's detail again now. */
+  refreshRun() {
+    if (this.run !== null) this.run.fetchedAt = null;
+    this.followRun();
+  }
+  /** Opens the terminal of a session a run's step names (gc's session name), if gc lists it. */
+  openRunSession(name) {
+    const id2 = this.resolveSession(name);
+    if (id2 !== null) this.openTerminal(id2);
+  }
+  /**
+   * Keeps the shown run's detail fresh: read when it is first shown, then
+   * every RUN_DETAIL_MS while this copy is on screen, one read at a time,
+   * once the copy is subscribed to the run's city (its API).
+   */
+  followRun() {
+    const r = this.run;
+    if (r === null) return;
+    const settings = decodeSettings(this.deps.host.settings());
+    this.runsDashboard = settings.ok ? settings.value.runsUrl : null;
+    const now = this.deps.clock.now();
+    if (r.reading || !this.onScreen || this.city?.key.city !== r.city) return;
+    if (r.fetchedAt !== null && now - r.fetchedAt < RUN_DETAIL_MS) return;
+    r.reading = true;
+    const done = (detail, error) => {
+      r.reading = false;
+      r.fetchedAt = this.deps.clock.now();
+      if (this.run !== r) return;
+      if (detail !== null) r.detail = detail;
+      r.error = error;
+      this.runRev++;
+    };
+    this.deps.registry.readRunDetail(this.city.key.apiUrl, r.city, r.id).then(
+      (raw) => {
+        const detail = projectRunDetail(raw);
+        done(detail, detail === null ? "gc did not return this run's detail (it may have finished, or gc's dashboard API is off)" : null);
+      },
+      (cause) => done(null, `could not read the run: ${messageOf5(cause)}`)
+    );
+  }
   /** A session by gc's id, or by its exact alias or session name when exactly one session has it; else says why not. */
   /**
    * The session that owns a bead waiting on a decision: its assignee, when
@@ -8447,17 +8679,29 @@ var CopyController = class {
       if (t !== null) {
         this.focusApplied = t.seq;
         const attach = t.attach ? { attach: true } : {};
-        this.focusNext = t.bead !== void 0 ? { city: t.city, bead: t.bead, ...attach } : { city: t.city, session: t.session ?? "", ...attach };
+        this.focusNext = t.run !== void 0 ? { city: t.city, run: t.run, ...t.ref !== void 0 ? { ref: t.ref } : {}, ...t.title !== void 0 ? { title: t.title } : {} } : t.bead !== void 0 ? { city: t.city, bead: t.bead, ...attach } : { city: t.city, session: t.session ?? "", ...attach };
       }
       const n = this.focusNext;
       const shown = this.focusShown;
-      const same = shown !== null && n !== null && !n.attach && shown.city === n.city && (n.bead !== void 0 ? shown.bead === n.bead : shown.session === n.session || this.selected === n.session);
+      const same = shown !== null && n !== null && !n.attach && shown.city === n.city && (n.run !== void 0 ? shown.run === n.run : n.bead !== void 0 ? shown.bead === n.bead : shown.session === n.session || this.selected === n.session);
       if (n !== null && (same || !(this.deps.draft?.() ?? false))) this.showNext();
     }
     const f = this.focusing;
     if (f === null) return;
     const { discovery } = this.deps;
     if (selectedCity(discovery.machine.state) !== f.city) discovery.select(f.city);
+    if (f.run !== void 0 && this.city?.key.city === f.city) {
+      this.focusing = null;
+      this.selectSession(null);
+      this.selectBead(null);
+      const same = this.run !== null && this.run.city === f.city && this.run.id === f.run;
+      if (!same) {
+        this.run = { city: f.city, id: f.run, ref: f.ref ?? null, title: f.title ?? null, detail: null, error: null, fetchedAt: null, reading: false };
+      } else if (this.run !== null) this.run.fetchedAt = null;
+      this.focusShown = { city: f.city, run: f.run, ...f.ref !== void 0 ? { ref: f.ref } : {} };
+      this.followRun();
+      return;
+    }
     if (f.bead !== void 0 && this.city?.key.city === f.city) {
       const s = this.city.snapshot();
       if (f.attach && (s.sessions.value === null || s.human.value === null)) {
@@ -8490,7 +8734,8 @@ var CopyController = class {
     }
     if (now - f.since > FOCUS_WAIT_MS) {
       this.focusing = null;
-      this.refuse(`could not show ${f.bead !== void 0 ? `bead ${cleanLine(f.bead)}` : `session ${cleanLine(f.session ?? "")}`}: city ${cleanLine(f.city)} is not running`);
+      const what = f.run !== void 0 ? `run ${cleanLine(f.ref ?? f.run)}` : f.bead !== void 0 ? `bead ${cleanLine(f.bead)}` : `session ${cleanLine(f.session ?? "")}`;
+      this.refuse(`could not show ${what}: city ${cleanLine(f.city)} is not running`);
     }
   }
   /** The window shows the target it held back ("Show"). */
@@ -8498,7 +8743,8 @@ var CopyController = class {
     const n = this.focusNext;
     this.focusNext = null;
     if (n === null) return;
-    if (n.bead !== void 0) this.focusBead(n.city, n.bead, n.attach === true);
+    if (n.run !== void 0) this.focusRun(n.city, n.run, { ...n.ref !== void 0 ? { ref: n.ref } : {}, ...n.title !== void 0 ? { title: n.title } : {} });
+    else if (n.bead !== void 0) this.focusBead(n.city, n.bead, n.attach === true);
     else this.focusSession(n.city, n.session ?? "", n.attach === true);
   }
   windowModel() {
@@ -8797,7 +9043,7 @@ import { h_flex as h_flex2, v_flex } from "gpui-base";
 import { div } from "gpui-kit";
 import { h_flex } from "gpui-base";
 function cell(id2, c, colors, w, h) {
-  const el = div().id(id2).w(w).h(h).flex_none().rounded(2);
+  const el = w === null ? div().id(id2).h(h).rounded(2) : div().id(id2).w(w).h(h).flex_none().rounded(2);
   const fill = (color, alpha = "") => color === void 0 ? el.border_1() : el.bg(`${color}${alpha}`);
   const outline = (color) => color === void 0 ? el.border_1() : el.border_1().border_color(color);
   switch (c) {
@@ -8816,6 +9062,9 @@ function cell(id2, c, colors, w, h) {
 function stageStrip(id2, cells, colors, small = false) {
   const [w, h] = small ? [5, 5] : [9, 7];
   return h_flex().id(id2).gap(2).items_center().flex_none().children(cells.map((c, i) => cell(`${id2}-${i}`, c, colors, w, h)));
+}
+function stageBar(id2, c, colors) {
+  return cell(id2, c, colors, null, 8);
 }
 
 // src/view/text.ts
@@ -8870,13 +9119,13 @@ function rowText(r) {
   const head = [`◆ ${r.bead}`, r.priority, r.age].filter((x) => x !== null).join(" · ");
   return { head, body: r.title };
 }
+function openRun(r, actions, cx) {
+  actions.openRun(r.city, r.run, { ...r.ref !== null ? { ref: r.ref } : {}, title: r.title }, cx);
+}
 function rowClick(r, actions) {
   if (r.kind === "question") return (cx) => actions.openQuestion(r.city, r.session, cx);
   if (r.kind === "decision") return (cx) => actions.openDecision(r.city, r.bead, cx);
-  const { session, link } = r;
-  if (session !== null) return (cx) => actions.openQuestion(r.city, session, cx);
-  if (link !== null) return (cx) => actions.openLink(link, cx);
-  return null;
+  return (cx) => openRun(r, actions, cx);
 }
 function needRow(r, id2, theme2, colors, actions) {
   const { head, body } = rowText(r);
@@ -8888,7 +9137,7 @@ function needRow(r, id2, theme2, colors, actions) {
   const top = cells === null ? headEl : h_flex2().id(`${id2}-top`).gap(6).items_center().min_w_0().child(stageStrip(`${id2}-strip`, cells, colors, true)).child(headEl);
   let el = v_flex().id(id2).pl(22).pr(6).py(2).rounded(5).min_w_0().child(top).child(label(`${id2}-body`, body).text_size(12.5).overflow_hidden().whitespace_nowrap().text_ellipsis());
   const click = rowClick(r, actions);
-  if (click !== null) el = el.on_click((_, cx) => click(cx));
+  el = el.on_click((_, cx) => click(cx));
   return hoverable(el, colors);
 }
 function cityBlock(c, i, theme2, colors, actions) {
@@ -8957,6 +9206,7 @@ function inboxRow(r, id2, theme2, colors, actions) {
     buttons = [];
     const { session, link } = r;
     if (session !== null) buttons.push(button(`${id2}-answer`, "Answer", colors, (cx) => actions.openQuestion(r.city, session, cx)));
+    buttons.push(button(`${id2}-steps`, "Steps", colors, (cx) => openRun(r, actions, cx)));
     if (link !== null) buttons.push(button(`${id2}-review`, "Review ↗", colors, (cx) => actions.openLink(link, cx)));
     cells = r.cells;
   } else {
@@ -9368,7 +9618,7 @@ var DiscoveryController = class {
   fetches = /* @__PURE__ */ new Set();
   /** Applies one event. */
   apply(event) {
-    this.machine = step(this.machine, event);
+    this.machine = step2(this.machine, event);
   }
   /** Whether a run is under way (and not cancelled or superseded). */
   running() {
@@ -9593,8 +9843,8 @@ var ProbeWriter = class {
     const token = ++this.tokens;
     this.inFlight = { token, startedAt: now };
     const path = this.io.path();
-    const known = this.expected;
-    const current = known === void 0 ? this.io.read(path) : Promise.resolve(ok(known));
+    const known2 = this.expected;
+    const current = known2 === void 0 ? this.io.read(path) : Promise.resolve(ok(known2));
     void current.then(async (r) => {
       if (!r.ok) return r;
       const text2 = next(r.value);
@@ -9831,57 +10081,57 @@ var CitiesPoller = class {
 
 // src/sync/runs.ts
 var GATE = "approval";
-function rec(v) {
+function rec2(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? v : null;
 }
-function str(v) {
+function str2(v) {
   return typeof v === "string" && v !== "" ? v : null;
 }
 function available(v, field2) {
-  const r = rec(v);
+  const r = rec2(v);
   if (r === null) return void 0;
   if (r["status"] !== void 0 && r["status"] !== "available" && r["status"] !== "known") return void 0;
   return r[field2];
 }
 function lane(raw) {
-  const l = rec(raw);
-  const id2 = str(l?.["id"]);
+  const l = rec2(raw);
+  const id2 = str2(l?.["id"]);
   if (l === null || id2 === null) return null;
-  const stages = (Array.isArray(l["stages"]) ? l["stages"] : []).map(rec).filter((s) => s !== null);
-  const progress = rec(l["progress"]);
-  const stage = rec(progress?.["stage"]);
+  const stages = (Array.isArray(l["stages"]) ? l["stages"] : []).map(rec2).filter((s) => s !== null);
+  const progress = rec2(l["progress"]);
+  const stage = rec2(progress?.["stage"]);
   const resolved = stage !== null && stage["status"] === "available";
-  const activeKey = resolved ? str(stage?.["key"]) : null;
+  const activeKey = resolved ? str2(stage?.["key"]) : null;
   const frontierIndex = stages.findIndex((s) => s["status"] !== "complete");
   const frontier = frontierIndex >= 0 ? stages[frontierIndex] ?? null : null;
-  const health = rec(available(l["health"], "data") ?? null);
-  const gate = activeKey === GATE || !resolved && str(frontier?.["key"]) === GATE || health?.["needsOperator"] === true;
+  const health = rec2(available(l["health"], "data") ?? null);
+  const gate = activeKey === GATE || !resolved && str2(frontier?.["key"]) === GATE || health?.["needsOperator"] === true;
   const cells = stages.map((s, i) => {
     if (s["status"] === "complete") return "done";
-    const key = str(s["key"]);
+    const key = str2(s["key"]);
     if (s["status"] === "active" || resolved && key === activeKey) return key === GATE ? "gate" : "active";
     if (!resolved && i === frontierIndex) return key === GATE ? "gate" : "frontier";
     return "pending";
   });
   const current = resolved ? stage : frontier;
-  const label2 = str(current?.["label"]);
+  const label2 = str2(current?.["label"]);
   const assignees = Array.isArray(l["activeAssignees"]) ? l["activeAssignees"] : [];
   return {
     id: id2,
-    ref: str(available(l["external"], "label")),
-    title: str(l["title"]) ?? id2,
-    formula: str(available(l["formula"], "name")),
-    rig: str(available(l["scope"], "ref")),
+    ref: str2(available(l["external"], "label")),
+    title: str2(l["title"]) ?? id2,
+    formula: str2(available(l["formula"], "name")),
+    rig: str2(available(l["scope"], "ref")),
     cells,
     stageLabel: label2 === null ? null : resolved ? label2 : `${label2}${gate ? "" : "?"}`,
     gate,
     dormant: l["stale"] === true,
-    updatedAt: str(available(l["updatedAt"], "at")),
-    session: str(assignees[0])
+    updatedAt: str2(available(l["updatedAt"], "at")),
+    session: str2(assignees[0])
   };
 }
 function projectRuns(raw) {
-  const d = rec(raw);
+  const d = rec2(raw);
   if (d === null || !Array.isArray(d["lanes"])) return null;
   const lanes = [];
   let unreadable2 = 0;
@@ -10078,13 +10328,13 @@ var NeedsPoller = class {
       const repeats = [...why.values()].reduce((n, w) => n + w.length - 1, 0);
       total = Math.max(sum - repeats, beads.length);
     }
-    let status2 = before?.status ?? null;
+    let status3 = before?.status ?? null;
     const now = this.clock.now();
     if (now - (this.statusAt.get(city) ?? -Infinity) >= STATUS_POLL_MS) {
       const s = await getCityStatus(client, city);
       if (!this.settle(poll, s)) return false;
       if (s.ok) {
-        status2 = s.value;
+        status3 = s.value;
         this.statusAt.set(city, now);
       } else error ??= s.error;
     }
@@ -10102,16 +10352,16 @@ var NeedsPoller = class {
       runs = projectRuns(raw) ?? runs;
     }
     const cities = new Map(this.snap.cities);
-    cities.set(city, { city, waiting: waiting2, human: beads, reasons, humanTotal: total, status: status2, runs, fetchedAt: this.clock.now(), error });
+    cities.set(city, { city, waiting: waiting2, human: beads, reasons, humanTotal: total, status: status3, runs, fetchedAt: this.clock.now(), error });
     this.snap = { ...this.snap, rev: this.snap.rev + 1, cities };
     return true;
   }
   /** The city's pending entries with what is known of each, looking up at most LOOKUPS_PER_POLL new ones. */
   async waitingOf(poll, city, entries) {
-    let known = this.sessions.get(city);
-    if (!known) {
-      known = /* @__PURE__ */ new Map();
-      this.sessions.set(city, known);
+    let known2 = this.sessions.get(city);
+    if (!known2) {
+      known2 = /* @__PURE__ */ new Map();
+      this.sessions.set(city, known2);
     }
     let prompts = this.prompts.get(city);
     if (!prompts) {
@@ -10119,18 +10369,18 @@ var NeedsPoller = class {
       this.prompts.set(city, prompts);
     }
     const live = new Set(entries.map((e) => e.session_id));
-    for (const id2 of [...known.keys()]) if (!live.has(id2)) known.delete(id2);
+    for (const id2 of [...known2.keys()]) if (!live.has(id2)) known2.delete(id2);
     const requests = new Set(entries.map((e) => e.request_id));
     for (const id2 of [...prompts.keys()]) if (!requests.has(id2)) prompts.delete(id2);
     let lookups = 0;
     const client = this.endpoint.client("snapshot", poll);
     for (const e of entries) {
       if (lookups >= LOOKUPS_PER_POLL) break;
-      if (!known.has(e.session_id)) {
+      if (!known2.has(e.session_id)) {
         lookups++;
         const s = await getSession(client, city, e.session_id);
         if (!this.settle(poll, s)) return [];
-        known.set(e.session_id, s.ok ? { who: s.value.alias || s.value.template || null, lastActive: s.value.last_active ?? s.value.created_at ?? null } : { who: null, lastActive: null });
+        known2.set(e.session_id, s.ok ? { who: s.value.alias || s.value.template || null, lastActive: s.value.last_active ?? s.value.created_at ?? null } : { who: null, lastActive: null });
       }
       if (!prompts.has(e.request_id)) {
         lookups++;
@@ -10143,8 +10393,8 @@ var NeedsPoller = class {
       sessionId: e.session_id,
       requestId: e.request_id,
       kind: e.kind,
-      who: known.get(e.session_id)?.who ?? null,
-      lastActive: known.get(e.session_id)?.lastActive ?? null,
+      who: known2.get(e.session_id)?.who ?? null,
+      lastActive: known2.get(e.session_id)?.lastActive ?? null,
       prompt: prompts.get(e.request_id) ?? null
     }));
   }
@@ -10328,6 +10578,15 @@ var SyncRegistry = class {
     } catch {
       return null;
     }
+  }
+  /**
+   * One formula run's detail (GET {api}/api/city/{city}/runs/{run}/detail),
+   * for the Needs you tab's run view; null when gc does not answer it with
+   * JSON or no store or poller uses `apiUrl` (a subscription's key.apiUrl).
+   */
+  readRunDetail(apiUrl, city, run2) {
+    if (!this.endpoints.has(apiUrl)) return Promise.resolve(null);
+    return this.readDashboardJson(apiUrl, city, `runs/${encodeURIComponent(run2)}/detail`);
   }
   /**
    * A fetch for discovery's probes (/health, /v0/cities) through the app-wide
@@ -10527,8 +10786,8 @@ function panelLayout(width) {
 }
 
 // src/view/panel.ts
-import { div as div9 } from "gpui-kit";
-import { h_flex as h_flex9, v_flex as v_flex9 } from "gpui-base";
+import { div as div10 } from "gpui-kit";
+import { h_flex as h_flex10, v_flex as v_flex10 } from "gpui-base";
 
 // src/view/agents.ts
 import { div as div4 } from "gpui-kit";
@@ -10833,11 +11092,11 @@ import { div as div7 } from "gpui-kit";
 import { h_flex as h_flex7, v_flex as v_flex6 } from "gpui-base";
 function renderHeader(h, theme2, actions) {
   const out = [];
-  let status2 = h_flex7().id("gascity-status").gap(8).child(label("gascity-chip", h.chip.text));
-  if (h.needsYou !== null) status2 = status2.child(label("gascity-needs-you", h.needsYou));
-  if (h.age !== null) status2 = status2.child(muted(label("gascity-age", h.age), theme2));
-  if (h.canRetry) status2 = status2.child(div7().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now"));
-  out.push(status2);
+  let status3 = h_flex7().id("gascity-status").gap(8).child(label("gascity-chip", h.chip.text));
+  if (h.needsYou !== null) status3 = status3.child(label("gascity-needs-you", h.needsYou));
+  if (h.age !== null) status3 = status3.child(muted(label("gascity-age", h.age), theme2));
+  if (h.canRetry) status3 = status3.child(div7().id("gascity-retry").on_click((_, cx) => actions.retry(cx)).child("Retry now"));
+  out.push(status3);
   if (h.endpoint !== null) out.push(muted(label("gascity-endpoint", h.endpoint), theme2));
   if (h.city !== null) out.push(label("gascity-city", `City: ${h.city}`));
   h.banners.forEach((text2, i) => out.push(label(`gascity-banner-${i}`, text2)));
@@ -10900,16 +11159,78 @@ function renderHuman(m, theme2, actions) {
 // src/view/needsYou.ts
 import { h_flex as h_flex8, v_flex as v_flex8 } from "gpui-base";
 function renderWindowHead(m, theme2, actions) {
-  const target = m.target === null ? muted(label("gascity-window-target", "No toast to follow: pick a session below."), theme2) : label("gascity-window-target", m.target.bead !== void 0 ? `Needs a decision: bead ${m.target.bead} in city ${m.target.city}` : `Needs you: session ${m.target.session ?? ""} in city ${m.target.city}`);
+  const target = m.target === null ? muted(label("gascity-window-target", "No toast to follow: pick a session below."), theme2) : label("gascity-window-target", m.target.run !== void 0 ? `Run ${m.target.ref ?? m.target.run} in city ${m.target.city}` : m.target.bead !== void 0 ? `Needs a decision: bead ${m.target.bead} in city ${m.target.city}` : `Needs you: session ${m.target.session ?? ""} in city ${m.target.city}`);
   const tabs = m.tabs.length === 1 ? [button2("gascity-window-tab-0", "Show Gas City tab", (cx) => actions.showTab(m.tabs[0] ?? "", cx))] : m.tabs.map((t, i) => button2(`gascity-window-tab-${i}`, `Show Gas City tab ${t}`, (cx) => actions.showTab(t, cx)));
   const close = m.closable ? [button2("gascity-window-close", "Close", (cx) => actions.closeWindow(cx))] : [];
   const bar = h_flex8().id("gascity-window-bar").gap(8).children([...tabs, ...close]);
   const list = m.pending.length === 0 ? muted(label("gascity-window-none", "No session needs you right now."), theme2) : v_flex8().id("gascity-window-pending").gap(2).children(m.pending.map((p, i) => label(`gascity-window-pending-${i}`, `${p.label} (session ${p.session}): ${p.kind}`).on_click((_, cx) => actions.selectSession(p.session, cx))));
   let el = v_flex8().id("gascity-window").gap(6).child(target);
   if (m.next !== null) {
-    el = el.child(h_flex8().id("gascity-window-next").gap(8).child(label("gascity-window-next-text", m.next.bead !== void 0 ? `Bead ${m.next.bead} in city ${m.next.city} needs a decision too.` : `Session ${m.next.session ?? ""} in city ${m.next.city} needs you too.`)).child(button2("gascity-window-next-show", "Show", (cx) => actions.showNext(cx))));
+    el = el.child(h_flex8().id("gascity-window-next").gap(8).child(label("gascity-window-next-text", m.next.run !== void 0 ? `Run ${m.next.ref ?? m.next.run} in city ${m.next.city} was opened.` : m.next.bead !== void 0 ? `Bead ${m.next.bead} in city ${m.next.city} needs a decision too.` : `Session ${m.next.session ?? ""} in city ${m.next.city} needs you too.`)).child(button2("gascity-window-next-show", "Show", (cx) => actions.showNext(cx))));
   }
   return el.child(bar).child(list);
+}
+
+// src/view/runDetail.ts
+import { div as div9 } from "gpui-kit";
+import { h_flex as h_flex9, v_flex as v_flex9 } from "gpui-base";
+function toneColor2(tone, c) {
+  return tone === "ok" ? c.ok : tone === "warn" ? c.warn : tone === "bad" ? c.bad : tone === "dim" ? c.dim : void 0;
+}
+function button3(id2, text2, colors, onClick) {
+  const el = div9().id(id2).flex_none().px(8).py(1).rounded(5).border_1().text_size(12).child(text2).on_click((_, cx) => onClick(cx));
+  return colors.dim === void 0 ? el : el.border_color(colors.dim);
+}
+function stepRow(s, i, theme2, colors, actions) {
+  const id2 = `gascity-run-step-${i}`;
+  const color = toneColor2(s.tone, colors);
+  let glyph = label(`${id2}-glyph`, s.glyph).w(14).flex_none();
+  if (color !== void 0) glyph = glyph.text_color(color);
+  let title = label(`${id2}-title`, s.title).flex_1().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis();
+  if (s.tone === "dim") title = muted(title, theme2);
+  else if (s.tone === "bad" && color !== void 0) title = title.text_color(color);
+  let attempts = label(`${id2}-attempts`, s.attempts ?? "").w(36).flex_none().text_size(12);
+  attempts = s.exhausted && colors.bad !== void 0 ? attempts.text_color(colors.bad) : muted(attempts, theme2);
+  let row2 = h_flex9().id(id2).gap(8).items_center().py(1).pl(s.depth === 1 ? 22 : 0).min_w_0().child(glyph).child(title);
+  if (s.rounds !== null) row2 = row2.child(muted(label(`${id2}-rounds`, s.rounds), theme2).flex_none().text_size(12));
+  row2 = row2.child(attempts);
+  const session = label(`${id2}-session`, s.session ?? "").w(220).flex_none().text_size(12).overflow_hidden().whitespace_nowrap().text_ellipsis();
+  row2 = row2.child(s.live ? session : muted(session, theme2));
+  const name = s.session;
+  if (s.live && name !== null) row2 = row2.child(button3(`${id2}-open`, "Open", colors, (cx) => actions.openRunSession(name, cx)));
+  return row2;
+}
+function renderRun(m, theme2, colors, actions) {
+  if (m === null) return null;
+  const heading = m.ref !== null ? `${m.ref}  ${m.title}` : m.title;
+  const buttons = [];
+  const answer = m.answer;
+  if (answer !== null) buttons.push(button3("gascity-run-answer", "Answer", colors, (cx) => actions.openRunSession(answer, cx)));
+  const link = m.link;
+  if (link !== null) buttons.push(button3("gascity-run-factory", "Open in factory ↗", colors, (cx) => actions.openLink(link, cx)));
+  buttons.push(button3("gascity-run-refresh", "Refresh", colors, (cx) => actions.refreshRun(cx)));
+  buttons.push(button3("gascity-run-close", "Close", colors, (cx) => actions.closeRun(cx)));
+  const head = h_flex9().id("gascity-run-head").gap(8).items_center().min_w_0().child(label("gascity-run-title", heading).flex_1().min_w_0().text_size(15).font_semibold().overflow_hidden().whitespace_nowrap().text_ellipsis()).children(buttons);
+  let el = v_flex9().id("gascity-run").gap(8).pt(4).child(head);
+  const sub = [m.sub, `city ${m.city}`].filter((x) => x !== "").join(" · ");
+  el = el.child(muted(label("gascity-run-sub", sub), theme2).text_size(12));
+  if (m.note !== null) {
+    let note = label("gascity-run-note", m.note).text_size(12);
+    note = m.noteWarn && colors.warn !== void 0 ? note.text_color(colors.warn) : muted(note, theme2);
+    el = el.child(note);
+  }
+  if (m.stages.length > 0) {
+    const cells = m.stages.map((s, i) => v_flex9().id(`gascity-run-stage-${i}`).flex_1().min_w_0().gap(3).child(stageBar(`gascity-run-stage-${i}-cell`, s.cell, colors)).child(muted(label(`gascity-run-stage-${i}-label`, s.label), theme2).text_size(11).overflow_hidden().whitespace_nowrap().text_ellipsis()));
+    el = el.child(h_flex9().id("gascity-run-stages").gap(6).items_start().children(cells));
+  }
+  if (m.steps.length > 0) {
+    const head2 = h_flex9().id("gascity-run-steps-head").gap(8).text_size(12).child(muted(label("gascity-run-steps-h", "Steps"), theme2).flex_1()).child(muted(label("gascity-run-steps-a", "attempts"), theme2).w(36).flex_none()).child(muted(label("gascity-run-steps-s", "session"), theme2).w(220).flex_none());
+    el = el.child(v_flex9().id("gascity-run-steps").gap(1).child(head2).children(m.steps.map((s, i) => stepRow(s, i, theme2, colors, actions))));
+  }
+  if (m.moreSteps > 0) el = el.child(muted(label("gascity-run-more", `${m.moreSteps} more steps in factory`), theme2).text_size(12));
+  const foot = [m.counts, m.path !== null ? `worktree ${m.path}` : null].filter((x) => x !== null).join("    ");
+  if (foot !== "") el = el.child(muted(label("gascity-run-foot", foot), theme2).text_size(12));
+  return el;
 }
 
 // src/view/panel.ts
@@ -10926,22 +11247,23 @@ function themeIssues(el, theme2) {
 function diagnostics(model) {
   const { view, theme: theme2, actions } = model;
   if (view.diagnostics.length === 0) return null;
-  const toggle = div9().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
+  const toggle = div10().id("gascity-diagnostics-toggle").on_click((_, cx) => actions.toggleDiagnostics(cx)).child(`${view.diagnosticsOpen ? "Hide" : "Show"} diagnostics (${view.diagnostics.length})`);
   if (!view.diagnosticsOpen) return toggle;
   const lines = view.diagnostics.map((d, i) => muted(label(`gascity-diag-${i}`, `${d.at ?? ""} ${d.source}: ${d.text}`.trim()), theme2));
-  return v_flex9().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
+  return v_flex10().id("gascity-diagnostics-drawer").gap(2).child(toggle).children(lines);
 }
 function renderPanel(model) {
-  const title = div9().id("gascity-title").text_size(16).font_semibold().child(TITLE);
+  const title = div10().id("gascity-title").text_size(16).font_semibold().child(TITLE);
   if (model.kind === "host-incompatible") {
-    const root2 = v_flex9().id("gascity-root").size_full().p(12).gap(8);
+    const root2 = v_flex10().id("gascity-root").size_full().p(12).gap(8);
     return root2.child(title).child(label("gascity-host-incompatible", hostIncompatibleText(model.missing)));
   }
-  let root = themedRoot(model.theme, v_flex9().id("gascity-root").size_full().p(12).gap(8)).child(title);
+  let root = themedRoot(model.theme, v_flex10().id("gascity-root").size_full().p(12).gap(8)).child(title);
   if (model.kind === "copy-invalid") {
     return themeIssues(root.child(label("gascity-copy-invalid", copyInvalidText(model.error))), model.theme);
   }
   const { view, theme: theme2, actions, inputs, keyboard, size } = model;
+  const colors = model.colors ?? {};
   root = root.overflow_y_scroll().on_size_change((s, cx) => size.resized(s.width, cx));
   if (keyboard !== null) root = root.track_focus(keyboard.handle).on_key_down((e, cx) => keyboard.onKey(e, cx));
   root = root.children(renderHeader(view.header, theme2, actions));
@@ -10951,6 +11273,8 @@ function renderPanel(model) {
   if (notice !== null) root = root.child(notice);
   if (view.window !== null) {
     root = root.child(renderWindowHead(view.window, theme2, actions));
+    const run2 = renderRun(view.run, theme2, colors, actions);
+    if (run2 !== null) root = root.child(run2);
     const bead = beadDetail(view.beadDetail, theme2, actions, view.activity);
     if (bead !== null) root = root.child(bead);
     const d = renderDetail(view.detail, theme2, actions, { activity: view.activity, message: inputs?.message ?? null });
@@ -10963,9 +11287,9 @@ function renderPanel(model) {
   if (human !== null) root = root.child(human);
   const beside = size.layout === "side-by-side";
   const regions = [];
-  if (view.agents !== null) regions.push(shrinkIf(div9().id("gascity-agents-region"), beside).child(renderAgents(view.agents, theme2, actions, view.activity)));
+  if (view.agents !== null) regions.push(shrinkIf(div10().id("gascity-agents-region"), beside).child(renderAgents(view.agents, theme2, actions, view.activity)));
   if (view.board !== null) regions.push(renderBoard(view.board, view.beadDetail, theme2, actions, view.activity, size.layout));
-  if (regions.length > 0) root = root.child((beside ? h_flex9().items_start() : v_flex9()).id("gascity-main").gap(12).children(regions));
+  if (regions.length > 0) root = root.child((beside ? h_flex10().items_start() : v_flex10()).id("gascity-main").gap(12).children(regions));
   const detail = renderDetail(view.detail, theme2, actions, { activity: view.activity, message: inputs?.message ?? null });
   if (detail !== null) root = root.child(detail);
   const activity = renderActivity(view.activity, theme2, actions);
@@ -11164,6 +11488,24 @@ function actionsFor(state, inputs) {
       copy.openTerminal(sessionId);
       cx.notify();
     },
+    openRunSession: (name, cx) => {
+      copy.openRunSession(name);
+      cx.notify();
+    },
+    refreshRun: (cx) => {
+      copy.refreshRun();
+      cx.notify();
+    },
+    closeRun: (cx) => {
+      copy.closeRun();
+      cx.notify();
+    },
+    openLink: (url, cx) => {
+      void openUrl(urlOpener(), url, [copy.dashboardUrl(), copy.runsUrl()]).then((r) => {
+        if (!r.ok) copy.noteHostError(r.error);
+      });
+      cx.notify();
+    },
     send: (sessionId, mode, cx) => {
       if (inputs !== null && copy.sendInputTo(sessionId, inputs.message.value(), mode, state.box.typedFor)) clearBox(inputs.message, state.box);
       cx.notify();
@@ -11242,6 +11584,10 @@ function crossActionsFor(state) {
     },
     openDecision: (city, bead, cx) => {
       report(openNeedsTab(city, { bead, attach: true }));
+      cx.notify();
+    },
+    openRun: (city, run2, hints, cx) => {
+      report(openNeedsTab(city, { run: run2, ...hints }));
       cx.notify();
     },
     openInbox: (cx) => {
@@ -11347,7 +11693,8 @@ var GasCity = class extends View {
       actions: actionsFor(state, this.inputs),
       inputs: this.inputs,
       keyboard: this.keyboard(state),
-      size: this.size()
+      size: this.size(),
+      colors: view.run !== null ? readStatusColors() : {}
     });
   }
   /** The layout for the root's width; a new width redraws only when it changes the layout. */

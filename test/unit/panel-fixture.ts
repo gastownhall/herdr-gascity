@@ -43,6 +43,7 @@ export function gc(overrides: Record<string, FakeReply> = {}) {
     const bead = /\/bead\/([^/]+)$/.exec(p);
     if (bead) return { status: 200, body: recordedBead(decodeURIComponent(bead[1] ?? "")) };
     if (p.endsWith("/pending")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-pending", "ok") };
+    if (/\/runs\/[^/]+\/detail$/.test(p)) return { status: 200, body: JSON.parse(readFileSync(new URL("../fixtures/runs/detail.json", import.meta.url), "utf8")) as unknown };
     if (p.endsWith("/runs/summary")) return { status: 200, body: JSON.parse(readFileSync(new URL("../fixtures/runs/summary.json", import.meta.url), "utf8")) as unknown };
     if (p.endsWith("/status")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-status", "ok") };
     if (p.endsWith("/beads")) return { status: 200, body: fixtureBody("get-v0-city-by-city-name-beads", "human") };
